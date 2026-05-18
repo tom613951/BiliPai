@@ -247,8 +247,8 @@ class BottomBarIndicatorPolicyTest {
     }
 
     @Test
-    fun `transparent glass preset disables indicator lens while tuned preset keeps it`() {
-        assertFalse(
+    fun `transparent glass preset keeps indicator lens like tuned preset`() {
+        assertTrue(
             shouldUseBottomBarIndicatorLens(
                 preset = BottomBarLiquidGlassPreset.BACKDROP_NATIVE
             )
@@ -278,7 +278,7 @@ class BottomBarIndicatorPolicyTest {
     }
 
     @Test
-    fun `transparent glass unselected content adapts readability with vertical scroll`() {
+    fun `transparent glass unselected content ignores vertical scroll color adjustment`() {
         val unselected = Color(0xFF4A4A4A)
         val theme = Color(0xFF00A88F)
         val top = resolveBottomBarTransparentGlassContentColor(
@@ -296,8 +296,12 @@ class BottomBarIndicatorPolicyTest {
             darkTheme = false
         )
 
-        assertTrue(top.luminance() > 0.72f)
-        assertTrue(scrolled.luminance() < 0.18f)
+        assertEquals(top.red, scrolled.red, 0.001f)
+        assertEquals(top.green, scrolled.green, 0.001f)
+        assertEquals(top.blue, scrolled.blue, 0.001f)
+        assertEquals(unselected.red, scrolled.red, 0.001f)
+        assertEquals(unselected.green, scrolled.green, 0.001f)
+        assertEquals(unselected.blue, scrolled.blue, 0.001f)
     }
 
     @Test
@@ -452,7 +456,7 @@ class BottomBarIndicatorPolicyTest {
     }
 
     @Test
-    fun `transparent glass preset removes bilipai panel drift for aligned sliding`() {
+    fun `transparent glass preset reuses bilipai horizontal refraction motion`() {
         val profile = resolveBottomBarRefractionMotionProfile(
             position = 1.32f,
             velocity = 860f,
@@ -464,20 +468,20 @@ class BottomBarIndicatorPolicyTest {
         )
 
         assertEquals(profile.progress, effectiveProfile.progress, 0.001f)
-        assertEquals(0f, effectiveProfile.exportPanelOffsetFraction, 0.001f)
-        assertEquals(0f, effectiveProfile.indicatorPanelOffsetFraction, 0.001f)
-        assertEquals(0f, effectiveProfile.visiblePanelOffsetFraction, 0.001f)
-        assertTrue(effectiveProfile.visibleSelectionEmphasis > profile.visibleSelectionEmphasis)
-        assertTrue(effectiveProfile.exportSelectionEmphasis > profile.exportSelectionEmphasis)
-        assertEquals(1f, effectiveProfile.exportCaptureWidthScale, 0.001f)
-        assertFalse(effectiveProfile.forceChromaticAberration)
-        assertEquals(1f, effectiveProfile.indicatorLensAmountScale, 0.001f)
-        assertEquals(1f, effectiveProfile.indicatorLensHeightScale, 0.001f)
-        assertEquals(1f, effectiveProfile.chromaticBoostScale, 0.001f)
+        assertEquals(profile.exportPanelOffsetFraction, effectiveProfile.exportPanelOffsetFraction, 0.001f)
+        assertEquals(profile.indicatorPanelOffsetFraction, effectiveProfile.indicatorPanelOffsetFraction, 0.001f)
+        assertEquals(profile.visiblePanelOffsetFraction, effectiveProfile.visiblePanelOffsetFraction, 0.001f)
+        assertEquals(profile.visibleSelectionEmphasis, effectiveProfile.visibleSelectionEmphasis, 0.001f)
+        assertEquals(profile.exportSelectionEmphasis, effectiveProfile.exportSelectionEmphasis, 0.001f)
+        assertEquals(profile.exportCaptureWidthScale, effectiveProfile.exportCaptureWidthScale, 0.001f)
+        assertEquals(profile.forceChromaticAberration, effectiveProfile.forceChromaticAberration)
+        assertEquals(profile.indicatorLensAmountScale, effectiveProfile.indicatorLensAmountScale, 0.001f)
+        assertEquals(profile.indicatorLensHeightScale, effectiveProfile.indicatorLensHeightScale, 0.001f)
+        assertEquals(profile.chromaticBoostScale, effectiveProfile.chromaticBoostScale, 0.001f)
     }
 
     @Test
-    fun `transparent glass preset keeps content layers stationary while tuned preset keeps drift`() {
+    fun `transparent glass preset reuses bilipai panel drift`() {
         val tuned = resolveBottomBarPresetPanelOffsets(
             preset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
             rawPanelOffsetPx = 12f
@@ -490,9 +494,9 @@ class BottomBarIndicatorPolicyTest {
         assertEquals(12f, tuned.visiblePanelOffsetPx, 0.001f)
         assertEquals(12f, tuned.exportPanelOffsetPx, 0.001f)
         assertEquals(12f, tuned.indicatorPanelOffsetPx, 0.001f)
-        assertEquals(0f, transparent.visiblePanelOffsetPx, 0.001f)
-        assertEquals(0f, transparent.exportPanelOffsetPx, 0.001f)
-        assertEquals(0f, transparent.indicatorPanelOffsetPx, 0.001f)
+        assertEquals(tuned.visiblePanelOffsetPx, transparent.visiblePanelOffsetPx, 0.001f)
+        assertEquals(tuned.exportPanelOffsetPx, transparent.exportPanelOffsetPx, 0.001f)
+        assertEquals(tuned.indicatorPanelOffsetPx, transparent.indicatorPanelOffsetPx, 0.001f)
     }
 
     @Test
