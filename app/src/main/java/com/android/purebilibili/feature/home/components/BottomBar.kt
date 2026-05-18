@@ -595,13 +595,16 @@ internal fun shouldRenderBottomBarHeavyInteractiveEffects(
 internal fun shouldUseBottomBarCombinedIndicatorBackdrop(
     preset: BottomBarLiquidGlassPreset
 ): Boolean {
-    return preset == BottomBarLiquidGlassPreset.BILIPAI_TUNED
+    return when (preset) {
+        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+        BottomBarLiquidGlassPreset.BACKDROP_NATIVE -> true
+    }
 }
 
 internal fun shouldRenderBottomBarForegroundAboveIndicator(
     preset: BottomBarLiquidGlassPreset
 ): Boolean {
-    return preset == BottomBarLiquidGlassPreset.BACKDROP_NATIVE
+    return false
 }
 
 internal fun shouldUseBottomBarIndicatorLens(
@@ -2799,36 +2802,19 @@ private fun KernelSuAlignedBottomBar(
                 verticalProgress = verticalGlassProfile.progress,
                 pressProgress = dampedDragState.pressProgress
             )
-            val effectiveCaptureProgress = if (transparentGlassPreset && glassEnabled) {
-                1f
-            } else {
-                backdropPresetProgress.captureProgress
-            }
-            val effectiveIndicatorProgress = if (transparentGlassPreset && glassEnabled) {
-                1f
-            } else {
-                backdropPresetProgress.indicatorProgress
-            }
-            val effectiveIndicatorLensProgress = if (transparentGlassPreset) {
-                backdropPresetProgress.indicatorProgress
-            } else {
-                effectiveIndicatorProgress
-            }
+            val effectiveCaptureProgress = backdropPresetProgress.captureProgress
+            val effectiveIndicatorProgress = backdropPresetProgress.indicatorProgress
             val captureLensSpec = resolveBottomBarBackdropPresetCaptureLens(
                 progress = effectiveCaptureProgress
             )
             val indicatorLensSpec = resolveBottomBarBackdropPresetIndicatorLens(
-                progress = effectiveIndicatorLensProgress
+                progress = effectiveIndicatorProgress
             )
             val captureHighlightAlpha = resolveBottomBarLiquidGlassHighlightAlpha(
                 effectiveCaptureProgress
             )
             val indicatorHighlightAlpha = resolveBottomBarLiquidGlassHighlightAlpha(
                 effectiveIndicatorProgress
-            )
-            val nativeIndicatorSpec = resolveBottomBarBackdropNativeSurfaceSpec(
-                blurRadiusDp = tuning.shellBlurRadiusDp,
-                verticalProgress = verticalGlassProfile.progress
             )
             val indicatorGlowAlpha = resolveBottomBarIndicatorGlowAlpha(
                 glassEnabled = glassEnabled,
@@ -2851,10 +2837,9 @@ private fun KernelSuAlignedBottomBar(
                 hasContentBackdrop = backdrop != null,
                 indicatorProgress = effectiveIndicatorProgress,
                 isTransitionRunning = isTransitionRunning,
-                isBottomBarInteractionActive = isBottomBarInteractionActive,
-                allowIdleGlassEffect = transparentGlassPreset
+                isBottomBarInteractionActive = isBottomBarInteractionActive
             )
-            val contentBackdrop = if (!transparentGlassPreset && shouldRenderIndicatorBackdrop && backdrop != null) {
+            val contentBackdrop = if (shouldRenderIndicatorBackdrop && backdrop != null) {
                 rememberCombinedBackdrop(backdrop, tabsBackdrop)
             } else {
                 null
@@ -3058,54 +3043,26 @@ private fun KernelSuAlignedBottomBar(
                                     captureHorizontalOverscan.toPx()
                             }
                             .run {
-                                when (liquidGlassPreset) {
-                                    BottomBarLiquidGlassPreset.BACKDROP_NATIVE -> {
-                                        val nativeCaptureSpec = resolveBottomBarBackdropNativeSurfaceSpec(
-                                            blurRadiusDp = tuning.shellBlurRadiusDp,
-                                            verticalProgress = verticalGlassProfile.progress
+                                drawBackdrop(
+                                    backdrop = backdrop,
+                                    shape = { shellShape },
+                                    effects = {
+                                        vibrancy()
+                                        blur(tuning.shellBlurRadiusDp.dp.toPx())
+                                        lens(
+                                            refractionHeight = captureLensSpec.refractionHeightDp.dp.toPx(),
+                                            refractionAmount = captureLensSpec.refractionAmountDp.dp.toPx(),
+                                            depthEffect = true,
+                                            chromaticAberration = true
                                         )
-                                        drawBackdrop(
-                                            backdrop = backdrop,
-                                            shape = { shellShape },
-                                            effects = {
-                                                lens(
-                                                    refractionHeight = nativeCaptureSpec.refractionHeightDp.dp.toPx(),
-                                                    refractionAmount = nativeCaptureSpec.refractionAmountDp.dp.toPx(),
-                                                    depthEffect = true,
-                                                    chromaticAberration = nativeCaptureSpec.chromaticAberration
-                                                )
-                                            },
-                                            onDrawSurface = {
-                                                drawRect(
-                                                    containerColor.copy(
-                                                        alpha = containerColor.alpha *
-                                                            nativeCaptureSpec.surfaceAlphaMultiplier
-                                                    )
-                                                )
-                                            }
-                                        )
+                                    },
+                                    highlight = {
+                                        Highlight.Default.copy(alpha = captureHighlightAlpha)
+                                    },
+                                    onDrawSurface = {
+                                        drawRect(containerColor)
                                     }
-                                    BottomBarLiquidGlassPreset.BILIPAI_TUNED -> drawBackdrop(
-                                        backdrop = backdrop,
-                                        shape = { shellShape },
-                                        effects = {
-                                            vibrancy()
-                                            blur(tuning.shellBlurRadiusDp.dp.toPx())
-                                            lens(
-                                                refractionHeight = captureLensSpec.refractionHeightDp.dp.toPx(),
-                                                refractionAmount = captureLensSpec.refractionAmountDp.dp.toPx(),
-                                                depthEffect = true,
-                                                chromaticAberration = true
-                                            )
-                                        },
-                                        highlight = {
-                                            Highlight.Default.copy(alpha = captureHighlightAlpha)
-                                        },
-                                        onDrawSurface = {
-                                            drawRect(containerColor)
-                                        }
-                                    )
-                                }
+                                )
                             }
                     ) {
                         Box(
@@ -3266,31 +3223,20 @@ private fun KernelSuAlignedBottomBar(
                                         },
                                         highlight = {
                                             Highlight.Default.copy(
-                                                alpha = if (transparentGlassPreset) {
-                                                    maxOf(
-                                                        nativeIndicatorSpec.highlightAlpha,
-                                                        indicatorGlowAlpha * 0.14f
-                                                    )
-                                                } else {
-                                                    maxOf(indicatorHighlightAlpha, indicatorGlowAlpha)
-                                                }
+                                                alpha = maxOf(indicatorHighlightAlpha, indicatorGlowAlpha)
                                             )
                                         },
                                         onDrawSurface = {
                                         },
                                         shadow = {
                                             Shadow(
-                                                alpha = if (transparentGlassPreset) {
-                                                    maxOf(nativeIndicatorSpec.shadowAlpha, indicatorGlowAlpha * 0.12f)
-                                                } else {
-                                                    indicatorGlowAlpha
-                                                }
+                                                alpha = indicatorGlowAlpha
                                             )
                                         },
                                         innerShadow = {
                                             InnerShadow(
                                                 radius = 8.dp * indicatorGlowAlpha,
-                                                alpha = if (transparentGlassPreset) 0f else indicatorGlowAlpha
+                                                alpha = indicatorGlowAlpha
                                             )
                                         },
                                         layerBlock = {

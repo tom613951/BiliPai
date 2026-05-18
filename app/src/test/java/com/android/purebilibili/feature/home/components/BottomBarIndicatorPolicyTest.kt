@@ -219,8 +219,8 @@ class BottomBarIndicatorPolicyTest {
     }
 
     @Test
-    fun `transparent glass preset reads page backdrop instead of captured bottom bar content`() {
-        assertFalse(
+    fun `transparent glass preset reads captured bottom bar content like tuned preset`() {
+        assertTrue(
             shouldUseBottomBarCombinedIndicatorBackdrop(
                 preset = BottomBarLiquidGlassPreset.BACKDROP_NATIVE
             )
@@ -233,8 +233,8 @@ class BottomBarIndicatorPolicyTest {
     }
 
     @Test
-    fun `transparent glass preset keeps foreground content above indicator glass`() {
-        assertTrue(
+    fun `transparent glass preset keeps foreground below indicator like tuned preset`() {
+        assertFalse(
             shouldRenderBottomBarForegroundAboveIndicator(
                 preset = BottomBarLiquidGlassPreset.BACKDROP_NATIVE
             )
