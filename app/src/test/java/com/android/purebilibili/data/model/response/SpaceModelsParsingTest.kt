@@ -121,6 +121,74 @@ class SpaceModelsParsingTest {
     }
 
     @Test
+    fun decodeSeasonsSeriesListResponse_keepsEmbeddedArchivesForSpaceCollections() {
+        val payload = """
+            {
+              "code": 0,
+              "message": "0",
+              "data": {
+                "items_lists": {
+                  "seasons_list": [
+                    {
+                      "archives": [
+                        {
+                          "aid": 1001,
+                          "bvid": "BV1season",
+                          "title": "合集单集",
+                          "pic": "https://i0.hdslb.com/bfs/archive/season.jpg",
+                          "duration": 180,
+                          "pubdate": 1715427472,
+                          "stat": {
+                            "view": 123,
+                            "danmaku": 4
+                          }
+                        }
+                      ],
+                      "meta": {
+                        "season_id": 725909,
+                        "name": "合集·瓦棚市",
+                        "cover": "https://i0.hdslb.com/bfs/archive/cover.jpg",
+                        "total": 58,
+                        "mid": 2766964
+                      },
+                      "recent_aids": [1001]
+                    }
+                  ],
+                  "series_list": [
+                    {
+                      "archives": [
+                        {
+                          "aid": 2001,
+                          "bvid": "BV1series",
+                          "title": "系列单集"
+                        }
+                      ],
+                      "meta": {
+                        "series_id": 12,
+                        "name": "系列",
+                        "total": 1,
+                        "mid": 2766964
+                      },
+                      "recent_aids": [2001]
+                    }
+                  ]
+                }
+              }
+            }
+        """.trimIndent()
+
+        val response = json.decodeFromString<SeasonsSeriesListResponse>(payload)
+        val season = response.data?.items_lists?.seasons_list?.single()
+        val series = response.data?.items_lists?.series_list?.single()
+
+        assertEquals(725909L, season?.meta?.season_id)
+        assertEquals("BV1season", season?.archives?.single()?.bvid)
+        assertEquals(123L, season?.archives?.single()?.stat?.view)
+        assertEquals(12L, series?.meta?.series_id)
+        assertEquals("BV1series", series?.archives?.single()?.bvid)
+    }
+
+    @Test
     fun decodeSpaceDynamicResponse_acceptsArticleMajorFromSpaceDynamic() {
         val payload = """
             {

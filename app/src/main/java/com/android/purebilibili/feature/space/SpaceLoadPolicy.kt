@@ -77,8 +77,8 @@ internal fun applySpaceSupplementalData(
         series = series,
         createdFavoriteFolders = createdFavoriteFolders,
         collectedFavoriteFolders = collectedFavoriteFolders,
-        seasonArchives = seasonArchives,
-        seriesArchives = seriesArchives,
+        seasonArchives = mergeArchiveMapsByLargestList(state.seasonArchives, seasonArchives),
+        seriesArchives = mergeArchiveMapsByLargestList(state.seriesArchives, seriesArchives),
         contributionTabs = mergedContributionTabs,
         headerState = state.headerState.copy(
             createdFavorites = createdFavoriteFolders,
@@ -96,6 +96,50 @@ internal fun applySpaceSupplementalData(
             it.copy(hasLoaded = hasCollectionsLoaded)
         }
     )
+}
+
+private fun <T> mergeArchiveMapsByLargestList(
+    existing: Map<Long, List<T>>,
+    incoming: Map<Long, List<T>>
+): Map<Long, List<T>> {
+    return (existing.keys + incoming.keys).mapNotNull { id ->
+        val existingItems = existing[id].orEmpty()
+        val incomingItems = incoming[id].orEmpty()
+        val selectedItems = if (incomingItems.size >= existingItems.size) {
+            incomingItems
+        } else {
+            existingItems
+        }
+        if (selectedItems.isNotEmpty()) id to selectedItems else null
+    }.toMap()
+}
+
+internal fun resolveEmbeddedSeasonArchives(
+    seasons: List<SeasonItem>
+): Map<Long, List<SeasonArchiveItem>> {
+    return seasons.mapNotNull { season ->
+        val seasonId = season.meta.season_id
+        val archives = season.archives
+        if (seasonId > 0L && archives.isNotEmpty()) {
+            seasonId to archives
+        } else {
+            null
+        }
+    }.toMap()
+}
+
+internal fun resolveEmbeddedSeriesArchives(
+    series: List<SeriesItem>
+): Map<Long, List<SeriesArchiveItem>> {
+    return series.mapNotNull { seriesItem ->
+        val seriesId = seriesItem.meta.series_id
+        val archives = seriesItem.archives
+        if (seriesId > 0L && archives.isNotEmpty()) {
+            seriesId to archives
+        } else {
+            null
+        }
+    }.toMap()
 }
 
 internal fun mapSeasonArchiveToVideoItem(

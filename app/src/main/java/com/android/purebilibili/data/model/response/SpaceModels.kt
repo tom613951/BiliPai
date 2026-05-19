@@ -372,6 +372,7 @@ data class SeasonsSeriesItems(
 @kotlinx.serialization.Serializable
 data class SeasonItem(
     val meta: SeasonMeta = SeasonMeta(),
+    val archives: List<SeasonArchiveItem> = emptyList(),
     val recent_aids: List<Long> = emptyList()
 )
 
@@ -388,6 +389,7 @@ data class SeasonMeta(
 @kotlinx.serialization.Serializable
 data class SeriesItem(
     val meta: SeriesMeta = SeriesMeta(),
+    val archives: List<SeriesArchiveItem> = emptyList(),
     val recent_aids: List<Long> = emptyList()
 )
 

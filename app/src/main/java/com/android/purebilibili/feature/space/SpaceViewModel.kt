@@ -486,19 +486,27 @@ class SpaceViewModel(
                 val series = seasonsSeriesResult?.items_lists?.series_list ?: emptyList()
                 val createdFavoriteFolders = createdFavoriteFoldersDeferred.await()
                 val collectedFavoriteFolders = collectedFavoriteFoldersDeferred.await()
+                val embeddedSeasonArchives = resolveEmbeddedSeasonArchives(seasons)
+                val embeddedSeriesArchives = resolveEmbeddedSeriesArchives(series)
 
                 com.android.purebilibili.core.util.Logger.d("SpaceVM", " Seasons: ${seasons.size}, Series: ${series.size}")
 
-                val seasonArchiveDeferreds = seasons.take(collectionPreviewLimit).associate { season ->
-                    season.meta.season_id to async { fetchSeasonArchives(mid, season.meta.season_id).orEmpty() }
-                }
-                val seriesArchiveDeferreds = series.take(collectionPreviewLimit).associate { seriesItem ->
-                    seriesItem.meta.series_id to async { fetchSeriesArchives(mid, seriesItem.meta.series_id).orEmpty() }
-                }
+                val seasonArchiveDeferreds = seasons
+                    .take(collectionPreviewLimit)
+                    .filter { it.meta.season_id !in embeddedSeasonArchives }
+                    .associate { season ->
+                        season.meta.season_id to async { fetchSeasonArchives(mid, season.meta.season_id).orEmpty() }
+                    }
+                val seriesArchiveDeferreds = series
+                    .take(collectionPreviewLimit)
+                    .filter { it.meta.series_id !in embeddedSeriesArchives }
+                    .associate { seriesItem ->
+                        seriesItem.meta.series_id to async { fetchSeriesArchives(mid, seriesItem.meta.series_id).orEmpty() }
+                    }
 
-                val seasonArchives = seasonArchiveDeferreds.mapValues { (_, deferred) -> deferred.await() }
+                val seasonArchives = embeddedSeasonArchives + seasonArchiveDeferreds.mapValues { (_, deferred) -> deferred.await() }
                     .filterValues { it.isNotEmpty() }
-                val seriesArchives = seriesArchiveDeferreds.mapValues { (_, deferred) -> deferred.await() }
+                val seriesArchives = embeddedSeriesArchives + seriesArchiveDeferreds.mapValues { (_, deferred) -> deferred.await() }
                     .filterValues { it.isNotEmpty() }
 
                 if (!shouldApplySpaceLoadResult(mid, currentMid, requestGeneration, activeSpaceLoadGeneration)) {
@@ -1337,7 +1345,49 @@ class SpaceViewModel(
                     loadSpaceArticles(refresh = true)
                 }
             }
+            SpaceSubTab.SEASON_VIDEO -> {
+                val seasonId = selectedContributionTab.seasonId
+                val season = current.seasons.firstOrNull { it.meta.season_id == seasonId }
+                val currentArchives = current.seasonArchives[seasonId].orEmpty()
+                val expectedCount = (season?.meta?.total ?: 1).coerceAtLeast(1)
+                if (seasonId > 0L && currentArchives.size < expectedCount) {
+                    loadSelectedSeasonArchives(seasonId)
+                }
+            }
+            SpaceSubTab.SERIES -> {
+                val seriesId = selectedContributionTab.seriesId
+                val series = current.series.firstOrNull { it.meta.series_id == seriesId }
+                val currentArchives = current.seriesArchives[seriesId].orEmpty()
+                val expectedCount = (series?.meta?.total ?: 1).coerceAtLeast(1)
+                if (seriesId > 0L && currentArchives.size < expectedCount) {
+                    loadSelectedSeriesArchives(seriesId)
+                }
+            }
             else -> Unit
+        }
+    }
+
+    private fun loadSelectedSeasonArchives(seasonId: Long) {
+        viewModelScope.launch {
+            val requestMid = currentMid
+            val archives = fetchSeasonArchives(requestMid, seasonId).orEmpty()
+            if (archives.isEmpty() || requestMid != currentMid) return@launch
+            val latest = _uiState.value as? SpaceUiState.Success ?: return@launch
+            _uiState.value = latest.copy(
+                seasonArchives = latest.seasonArchives + (seasonId to archives)
+            )
+        }
+    }
+
+    private fun loadSelectedSeriesArchives(seriesId: Long) {
+        viewModelScope.launch {
+            val requestMid = currentMid
+            val archives = fetchSeriesArchives(requestMid, seriesId).orEmpty()
+            if (archives.isEmpty() || requestMid != currentMid) return@launch
+            val latest = _uiState.value as? SpaceUiState.Success ?: return@launch
+            _uiState.value = latest.copy(
+                seriesArchives = latest.seriesArchives + (seriesId to archives)
+            )
         }
     }
 

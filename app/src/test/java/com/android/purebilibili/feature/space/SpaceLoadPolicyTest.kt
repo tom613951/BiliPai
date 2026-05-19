@@ -210,6 +210,70 @@ class SpaceLoadPolicyTest {
     }
 
     @Test
+    fun resolveEmbeddedCollectionArchives_usesArchivesFromSeasonsSeriesList() {
+        val seasons = listOf(
+            SeasonItem(
+                meta = SeasonMeta(season_id = 11L, name = "合集", total = 2),
+                archives = listOf(
+                    SeasonArchiveItem(bvid = "BVSEASON", title = "合集单集")
+                )
+            ),
+            SeasonItem(meta = SeasonMeta(season_id = 12L, name = "空合集", total = 0))
+        )
+        val series = listOf(
+            SeriesItem(
+                meta = SeriesMeta(series_id = 21L, name = "系列", total = 1),
+                archives = listOf(
+                    SeriesArchiveItem(bvid = "BVSERIES", title = "系列单集")
+                )
+            )
+        )
+
+        val seasonArchives = resolveEmbeddedSeasonArchives(seasons)
+        val seriesArchives = resolveEmbeddedSeriesArchives(series)
+
+        assertEquals(setOf(11L), seasonArchives.keys)
+        assertEquals("BVSEASON", seasonArchives.getValue(11L).single().bvid)
+        assertEquals(setOf(21L), seriesArchives.keys)
+        assertEquals("BVSERIES", seriesArchives.getValue(21L).single().bvid)
+    }
+
+    @Test
+    fun applySpaceSupplementalData_keepsLongerAlreadyLoadedCollectionArchives() {
+        val initial = SpaceUiState.Success(
+            userInfo = SpaceUserInfo(mid = 42L, name = "UP"),
+            seasonArchives = mapOf(
+                11L to listOf(
+                    SeasonArchiveItem(bvid = "BVFULL1"),
+                    SeasonArchiveItem(bvid = "BVFULL2")
+                )
+            ),
+            seriesArchives = mapOf(
+                21L to listOf(
+                    SeriesArchiveItem(bvid = "BVSERIES_FULL1"),
+                    SeriesArchiveItem(bvid = "BVSERIES_FULL2")
+                )
+            )
+        )
+
+        val updated = applySpaceSupplementalData(
+            state = initial,
+            seasons = listOf(SeasonItem(meta = SeasonMeta(season_id = 11L, name = "合集"))),
+            series = listOf(SeriesItem(meta = SeriesMeta(series_id = 21L, name = "系列"))),
+            createdFavoriteFolders = emptyList(),
+            collectedFavoriteFolders = emptyList(),
+            seasonArchives = mapOf(11L to listOf(SeasonArchiveItem(bvid = "BVPREVIEW"))),
+            seriesArchives = mapOf(21L to listOf(SeriesArchiveItem(bvid = "BVSERIES_PREVIEW")))
+        )
+
+        assertEquals(listOf("BVFULL1", "BVFULL2"), updated.seasonArchives.getValue(11L).map { it.bvid })
+        assertEquals(
+            listOf("BVSERIES_FULL1", "BVSERIES_FULL2"),
+            updated.seriesArchives.getValue(21L).map { it.bvid }
+        )
+    }
+
+    @Test
     fun `mapSeasonArchiveToVideoItem preserves danmaku count`() {
         val item = mapSeasonArchiveToVideoItem(
             item = SeasonArchiveItem(
