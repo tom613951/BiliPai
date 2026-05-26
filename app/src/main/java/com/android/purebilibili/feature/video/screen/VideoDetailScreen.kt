@@ -1991,36 +1991,36 @@ fun VideoDetailScreen(
             player.removeListener(listener)
         }
     }
-    val hasCurrentVideoEnded by produceState(
-        initialValue = playerState.player.playbackState == Player.STATE_ENDED,
+    val isPlaybackPaused by produceState(
+        initialValue = resolveIsPlaybackPausedForCollapse(
+            playWhenReady = playerState.player.playWhenReady,
+            playbackState = playerState.player.playbackState
+        ),
         key1 = playerState.player,
         key2 = currentBvid,
         key3 = currentBvidCid
     ) {
         val player = playerState.player
 
-        fun updateEndedState(playbackState: Int = player.playbackState) {
-            value = playbackState == Player.STATE_ENDED
+        fun updatePausedState() {
+            value = resolveIsPlaybackPausedForCollapse(
+                playWhenReady = player.playWhenReady,
+                playbackState = player.playbackState
+            )
         }
 
-        updateEndedState()
+        updatePausedState()
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                updateEndedState(playbackState)
+                updatePausedState()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) {
-                    value = false
-                } else {
-                    updateEndedState()
-                }
+                updatePausedState()
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (playWhenReady && player.playbackState != Player.STATE_ENDED) {
-                    value = false
-                }
+                updatePausedState()
             }
         }
         player.addListener(listener)
@@ -2896,7 +2896,7 @@ fun VideoDetailScreen(
                         collapseMode = portraitPlayerCollapseMode,
                         selectedTabIndex = selectedVideoContentTabIndex,
                         isVerticalVideo = isVerticalVideo,
-                        hasCurrentVideoEnded = hasCurrentVideoEnded
+                        isPlaybackPaused = isPlaybackPaused
                     )
                     var introFirstVisibleItemIndex by remember { mutableIntStateOf(0) }
                     var introFirstVisibleItemScrollOffset by remember { mutableIntStateOf(0) }
@@ -2908,7 +2908,7 @@ fun VideoDetailScreen(
                             isCommentThreadVisible = subReplyState.visible,
                             collapseMode = portraitPlayerCollapseMode,
                             isVerticalVideo = isVerticalVideo,
-                            hasCurrentVideoEnded = hasCurrentVideoEnded
+                            isPlaybackPaused = isPlaybackPaused
                         )
                     val compactInlinePlayerForIntroScroll =
                         shouldUseCompactInlinePortraitPlayerForIntroScroll(
@@ -2919,7 +2919,7 @@ fun VideoDetailScreen(
                             firstVisibleItemScrollOffset = introFirstVisibleItemScrollOffset,
                             collapseMode = portraitPlayerCollapseMode,
                             isVerticalVideo = isVerticalVideo,
-                            hasCurrentVideoEnded = hasCurrentVideoEnded
+                            isPlaybackPaused = isPlaybackPaused
                         )
                     
                     // 📏 [Collapsing Player] 上滑隐藏播放器逻辑
@@ -5082,6 +5082,14 @@ internal fun resolveIsPlayerCollapsed(
 ): Boolean {
     if (!swipeHidePlayerEnabled) return false
     return playerHeightOffsetPx <= (-videoHeightPx + collapseTolerancePx)
+}
+
+internal fun resolveIsPlaybackPausedForCollapse(
+    playWhenReady: Boolean,
+    playbackState: Int
+): Boolean {
+    // 这里按用户暂停意图判断，而不是按 isPlaying，避免缓冲态误判为“暂停时可缩小”。
+    return !playWhenReady && playbackState != Player.STATE_ENDED
 }
 
 internal fun shouldUseTabletVideoLayout(

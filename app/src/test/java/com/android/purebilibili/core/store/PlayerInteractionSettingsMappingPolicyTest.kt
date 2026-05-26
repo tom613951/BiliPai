@@ -129,17 +129,17 @@ class PlayerInteractionSettingsMappingPolicyTest {
     }
 
     @Test
-    fun endedOnlyPortraitCollapseModePreference_keepsSavedUserChoice() {
+    fun pausedOnlyPortraitCollapseModePreference_keepsSavedUserChoice() {
         assertEquals(
-            PortraitPlayerCollapseMode.ENDED_ONLY,
+            PortraitPlayerCollapseMode.PAUSED_ONLY,
             SettingsManager.resolvePortraitPlayerCollapseModePreference(
-                rawMode = PortraitPlayerCollapseMode.ENDED_ONLY.value,
+                rawMode = PortraitPlayerCollapseMode.PAUSED_ONLY.value,
                 legacySwipeHide = false
             )
         )
         assertTrue(
             SettingsManager.resolveSwipeHidePlayerEnabledPreference(
-                rawMode = PortraitPlayerCollapseMode.ENDED_ONLY.value,
+                rawMode = PortraitPlayerCollapseMode.PAUSED_ONLY.value,
                 legacySwipeHide = false
             )
         )

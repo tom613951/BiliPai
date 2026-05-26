@@ -292,12 +292,12 @@ class PlaybackSettingsSelectionPolicyTest {
                 PortraitPlayerCollapseMode.INTRO_ONLY,
                 PortraitPlayerCollapseMode.COMMENT_ONLY,
                 PortraitPlayerCollapseMode.BOTH,
-                PortraitPlayerCollapseMode.ENDED_ONLY
+                PortraitPlayerCollapseMode.PAUSED_ONLY
             ),
             modes
         )
         assertEquals(
-            listOf("关闭", "竖屏", "横屏", "全部", "播完后"),
+            listOf("关闭", "竖屏", "横屏", "全部", "暂停时"),
             resolvePortraitPlayerCollapseModeSegmentOptions().map { it.label }
         )
     }

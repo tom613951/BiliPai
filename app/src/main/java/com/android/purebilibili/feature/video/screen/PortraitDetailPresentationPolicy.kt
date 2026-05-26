@@ -66,13 +66,13 @@ internal fun shouldEnableInlinePortraitScrollTransform(
     collapseMode: PortraitPlayerCollapseMode,
     selectedTabIndex: Int,
     isVerticalVideo: Boolean = true,
-    hasCurrentVideoEnded: Boolean = false
+    isPlaybackPaused: Boolean = false
 ): Boolean {
     if (!collapseMode.enablesVideoOrientation(isVerticalVideo)) return false
+    if (collapseMode == PortraitPlayerCollapseMode.PAUSED_ONLY && !isPlaybackPaused) return false
     return when (selectedTabIndex) {
         0 -> collapseMode.enablesIntro
-        1 -> collapseMode.enablesComment &&
-            (collapseMode != PortraitPlayerCollapseMode.ENDED_ONLY || hasCurrentVideoEnded)
+        1 -> collapseMode.enablesComment
         else -> true
     }
 }
@@ -94,12 +94,12 @@ internal fun shouldUseCompactInlinePortraitPlayerForCommentTab(
     isCommentThreadVisible: Boolean = false,
     collapseMode: PortraitPlayerCollapseMode = PortraitPlayerCollapseMode.BOTH,
     isVerticalVideo: Boolean = true,
-    hasCurrentVideoEnded: Boolean = false
+    isPlaybackPaused: Boolean = false
 ): Boolean {
     if (!useOfficialInlinePortraitDetailExperience || isPortraitFullscreen) return false
     if (!collapseMode.enablesVideoOrientation(isVerticalVideo)) return false
     if (!collapseMode.enablesComment) return false
-    if (collapseMode == PortraitPlayerCollapseMode.ENDED_ONLY) return false
+    if (collapseMode == PortraitPlayerCollapseMode.PAUSED_ONLY) return false
     if (isCommentThreadVisible) return true
     return selectedTabIndex == 1
 }
@@ -112,11 +112,12 @@ internal fun shouldUseCompactInlinePortraitPlayerForIntroScroll(
     firstVisibleItemScrollOffset: Int,
     collapseMode: PortraitPlayerCollapseMode = PortraitPlayerCollapseMode.BOTH,
     isVerticalVideo: Boolean = true,
-    hasCurrentVideoEnded: Boolean = false,
+    isPlaybackPaused: Boolean = false,
     introScrollThresholdPx: Int = 56
 ): Boolean {
     if (!useOfficialInlinePortraitDetailExperience || isPortraitFullscreen) return false
     if (!collapseMode.enablesVideoOrientation(isVerticalVideo)) return false
+    if (collapseMode == PortraitPlayerCollapseMode.PAUSED_ONLY && !isPlaybackPaused) return false
     if (!collapseMode.enablesIntro) return false
     if (selectedTabIndex != 0) return false
     if (firstVisibleItemIndex > 0) return true

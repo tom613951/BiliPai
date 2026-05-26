@@ -207,13 +207,13 @@ class PortraitDetailPresentationPolicyTest {
     }
 
     @Test
-    fun inlinePortraitPlayer_endedOnlyKeepsCommentTabExpandedWhilePlaying() {
+    fun inlinePortraitPlayer_pausedOnlyKeepsCommentTabExpandedWhilePlaying() {
         assertFalse(
             shouldEnableInlinePortraitScrollTransform(
-                collapseMode = PortraitPlayerCollapseMode.ENDED_ONLY,
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
                 selectedTabIndex = 1,
                 isVerticalVideo = false,
-                hasCurrentVideoEnded = false
+                isPlaybackPaused = false
             )
         )
         assertFalse(
@@ -221,21 +221,29 @@ class PortraitDetailPresentationPolicyTest {
                 useOfficialInlinePortraitDetailExperience = true,
                 selectedTabIndex = 1,
                 isPortraitFullscreen = false,
-                collapseMode = PortraitPlayerCollapseMode.ENDED_ONLY,
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
                 isVerticalVideo = false,
-                hasCurrentVideoEnded = false
+                isPlaybackPaused = false
             )
         )
     }
 
     @Test
-    fun inlinePortraitPlayer_endedOnlyAllowsCommentScrollCollapseAfterPlaybackEnded() {
+    fun inlinePortraitPlayer_pausedOnlyAllowsCommentScrollCollapseWhenPausedInAnyOrientation() {
         assertTrue(
             shouldEnableInlinePortraitScrollTransform(
-                collapseMode = PortraitPlayerCollapseMode.ENDED_ONLY,
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
                 selectedTabIndex = 1,
                 isVerticalVideo = false,
-                hasCurrentVideoEnded = true
+                isPlaybackPaused = true
+            )
+        )
+        assertTrue(
+            shouldEnableInlinePortraitScrollTransform(
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
+                selectedTabIndex = 1,
+                isVerticalVideo = true,
+                isPlaybackPaused = true
             )
         )
         assertFalse(
@@ -243,15 +251,15 @@ class PortraitDetailPresentationPolicyTest {
                 useOfficialInlinePortraitDetailExperience = true,
                 selectedTabIndex = 1,
                 isPortraitFullscreen = false,
-                collapseMode = PortraitPlayerCollapseMode.ENDED_ONLY,
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
                 isVerticalVideo = false,
-                hasCurrentVideoEnded = true
+                isPlaybackPaused = true
             )
         )
     }
 
     @Test
-    fun inlinePortraitPlayer_endedOnlyKeepsIntroScrollCollapseAvailable() {
+    fun inlinePortraitPlayer_pausedOnlyKeepsIntroScrollCollapseAvailableWhenPaused() {
         assertTrue(
             shouldUseCompactInlinePortraitPlayerForIntroScroll(
                 useOfficialInlinePortraitDetailExperience = true,
@@ -259,9 +267,9 @@ class PortraitDetailPresentationPolicyTest {
                 isPortraitFullscreen = false,
                 firstVisibleItemIndex = 1,
                 firstVisibleItemScrollOffset = 0,
-                collapseMode = PortraitPlayerCollapseMode.ENDED_ONLY,
+                collapseMode = PortraitPlayerCollapseMode.PAUSED_ONLY,
                 isVerticalVideo = false,
-                hasCurrentVideoEnded = false
+                isPlaybackPaused = true
             )
         )
     }

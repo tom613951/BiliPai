@@ -115,7 +115,7 @@ internal fun resolvePortraitPlayerCollapseModeSegmentOptions(): List<PlaybackSeg
         PlaybackSegmentOption(PortraitPlayerCollapseMode.INTRO_ONLY, "竖屏"),
         PlaybackSegmentOption(PortraitPlayerCollapseMode.COMMENT_ONLY, "横屏"),
         PlaybackSegmentOption(PortraitPlayerCollapseMode.BOTH, "全部"),
-        PlaybackSegmentOption(PortraitPlayerCollapseMode.ENDED_ONLY, "播完后")
+        PlaybackSegmentOption(PortraitPlayerCollapseMode.PAUSED_ONLY, "暂停时")
     )
 }
 

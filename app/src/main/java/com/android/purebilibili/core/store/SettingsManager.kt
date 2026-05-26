@@ -236,13 +236,13 @@ enum class PortraitPlayerCollapseMode(val value: Int, val label: String, val des
     INTRO_ONLY(1, "竖屏", "竖屏视频评论区或简介上滑时缩小播放器"),
     COMMENT_ONLY(2, "横屏", "仅横屏视频详情页滚动时缩小播放器"),
     BOTH(3, "全部", "横竖屏视频都使用播放器缩小策略"),
-    ENDED_ONLY(4, "播完后", "播放中看评论保持大播放器，播完后上滑评论可缩小");
+    PAUSED_ONLY(4, "暂停时", "横竖屏视频暂停后，下滑评论或简介可缩小播放器");
 
     val enablesPortraitVideo: Boolean
-        get() = this == INTRO_ONLY || this == BOTH || this == ENDED_ONLY
+        get() = this == INTRO_ONLY || this == BOTH || this == PAUSED_ONLY
 
     val enablesLandscapeVideo: Boolean
-        get() = this == COMMENT_ONLY || this == BOTH || this == ENDED_ONLY
+        get() = this == COMMENT_ONLY || this == BOTH || this == PAUSED_ONLY
 
     fun enablesVideoOrientation(isVerticalVideo: Boolean): Boolean {
         return if (isVerticalVideo) enablesPortraitVideo else enablesLandscapeVideo
