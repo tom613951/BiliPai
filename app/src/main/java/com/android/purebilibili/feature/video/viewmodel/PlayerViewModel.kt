@@ -48,6 +48,7 @@ import com.android.purebilibili.feature.video.note.VideoNotePublicPreview
 import com.android.purebilibili.feature.video.note.VideoNoteUiState
 import com.android.purebilibili.feature.video.note.buildVideoNoteDraftFromAiSummary
 import com.android.purebilibili.feature.video.note.resolveVideoNoteConflictMessage
+import com.android.purebilibili.feature.video.note.resolveVideoNoteEditableDocument
 import com.android.purebilibili.feature.video.note.resolveVideoNoteSaveFeedback
 import com.android.purebilibili.feature.video.playback.policy.shouldRefreshPremiumAudioForPlaybackSpeedChange
 import com.android.purebilibili.feature.video.usecase.*
@@ -5220,9 +5221,10 @@ class PlayerViewModel : ViewModel() {
     fun openVideoNoteEditor() {
         val current = _uiState.value as? PlayerUiState.Success ?: return
         if (current.videoNoteState.forbidNoteEntrance) return
-        val document = current.videoNoteState.privateNoteDocument ?: VideoNoteEditorDocument(
-            title = current.info.title,
-            blocks = listOf(VideoNoteBlock.Text(""))
+        val noteState = current.videoNoteState
+        val document = resolveVideoNoteEditableDocument(
+            noteState = noteState,
+            defaultTitle = current.info.title
         )
         _uiState.update { state ->
             val success = state as? PlayerUiState.Success ?: return@update state
@@ -5230,7 +5232,7 @@ class PlayerViewModel : ViewModel() {
                 videoNoteState = success.videoNoteState.copy(
                     editorVisible = true,
                     editorDocument = document,
-                    editorFromAiSummary = false,
+                    editorFromAiSummary = noteState.editorFromAiSummary && noteState.privateNoteDocument != document,
                     errorMessage = null,
                     feedbackMessage = null
                 )

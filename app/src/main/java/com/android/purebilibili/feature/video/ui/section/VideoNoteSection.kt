@@ -57,6 +57,8 @@ import com.android.purebilibili.feature.video.note.VideoNoteBlock
 import com.android.purebilibili.feature.video.note.VideoNoteEditorDocument
 import com.android.purebilibili.feature.video.note.VideoNoteLoadStatus
 import com.android.purebilibili.feature.video.note.VideoNoteUiState
+import com.android.purebilibili.feature.video.note.hasUnsavedVideoNoteDraft
+import com.android.purebilibili.feature.video.note.resolveVideoNotePrimaryActionLabel
 import com.android.purebilibili.feature.video.note.resolveVideoNoteEmptyMessage
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
@@ -72,6 +74,8 @@ fun VideoNoteCard(
     onPublicNoteClick: (Long, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val hasUnsavedDraft = hasUnsavedVideoNoteDraft(noteState)
+    val primaryActionLabel = resolveVideoNotePrimaryActionLabel(noteState)
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -125,15 +129,17 @@ fun VideoNoteCard(
             ) {
                 Button(
                     onClick = onCreateOrEditClick,
-                    enabled = isLoggedIn && !noteState.forbidNoteEntrance && !noteState.saving
+                    enabled = (isLoggedIn || hasUnsavedDraft) &&
+                        !noteState.forbidNoteEntrance &&
+                        !noteState.saving
                 ) {
                     Icon(
-                        imageVector = if (noteState.privateNoteDocument == null) Icons.Outlined.Add else Icons.Outlined.Edit,
+                        imageVector = if (primaryActionLabel == "新建") Icons.Outlined.Add else Icons.Outlined.Edit,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (noteState.privateNoteDocument == null) "新建" else "编辑")
+                    Text(primaryActionLabel)
                 }
                 noteState.privateNoteDocument?.let { privateDocument ->
                     OutlinedButton(
@@ -425,6 +431,7 @@ private fun resolveNoteSubtitle(noteState: VideoNoteUiState, isLoggedIn: Boolean
         noteState.privateNoteDocument != null -> noteState.privateNoteSummary.ifBlank {
             "这条视频已有私有笔记。"
         }
+        hasUnsavedVideoNoteDraft(noteState) -> "草稿还在，点继续编辑可以把这一段认真留下来。"
         else -> resolveVideoNoteEmptyMessage(isLoggedIn, noteState.forbidNoteEntrance)
     }
 }

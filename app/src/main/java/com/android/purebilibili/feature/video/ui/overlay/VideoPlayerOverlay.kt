@@ -1357,10 +1357,6 @@ fun VideoPlayerOverlay(
                         top = overlayVisualPolicy.statsTopPaddingDp.dp,
                         end = overlayVisualPolicy.statsEndPaddingDp.dp
                     )
-                    .background(
-                        Color.Black.copy(0.6f),
-                        RoundedCornerShape(overlayVisualPolicy.statsCornerRadiusDp.dp)
-                    )
                     .padding(
                         horizontal = overlayVisualPolicy.statsHorizontalPaddingDp.dp,
                         vertical = overlayVisualPolicy.statsVerticalPaddingDp.dp
