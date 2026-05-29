@@ -107,15 +107,15 @@ class BottomBarGlassMaterialPolicyTest {
         assertFalse(light.shellChromaticAberration)
         val shader = light.shellShader
         assertNotNull(shader)
-        assertEquals(11f, shader!!.thicknessDp)
+        assertEquals(11f, shader.thicknessDp)
         assertEquals(1.5f, shader.refractIndex)
         assertEquals(0.70f, shader.refractIntensity, 0.001f)
         assertEquals(7f, light.blurRadiusDp)
         assertEquals(1.2f, light.highlightWidthScale)
         assertEquals(0.72f, light.shadowAlphaScale)
         assertEquals(BottomBarInnerRimGlowSpec(radiusDp = 5f, alpha = 0.09f), light.innerRimGlow)
-        assertEquals(0f, light.foregroundTint.alpha, 0.001f)
-        assertEquals(0f, dark.foregroundTint.alpha, 0.001f)
+        assertEquals(0.035f, light.foregroundTint.alpha, 0.001f)
+        assertEquals(0.035f, dark.foregroundTint.alpha, 0.001f)
         assertEquals(
             null,
             resolveBottomBarGlassMaterialSpec(
@@ -127,20 +127,24 @@ class BottomBarGlassMaterialPolicyTest {
     }
 
     @Test
-    fun `ios26 scroll raises readability floor not indicator policy`() {
+    fun `ios26 scroll applies visible accent tint not indicator policy`() {
+        val accent = Color(0xFFFF2D55)
         val idle = resolveBottomBarGlassMaterialSpec(
             preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
             isDarkTheme = false, isScrolling = false, glassEnabled = true,
-            motionProgress = 0.5f, pressProgress = 0.2f
+            motionProgress = 0.5f, pressProgress = 0.2f,
+            accentColor = accent
         )
         val scrolling = resolveBottomBarGlassMaterialSpec(
             preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
             isDarkTheme = false, isScrolling = true, glassEnabled = true,
-            motionProgress = 0.5f, pressProgress = 0.2f
+            motionProgress = 0.5f, pressProgress = 0.2f,
+            accentColor = accent
         )
 
         assertTrue(scrolling.foregroundTint.alpha > idle.foregroundTint.alpha)
-        assertEquals(0.07f, scrolling.foregroundTint.alpha, 0.001f)
+        assertEquals(0.18f, scrolling.foregroundTint.alpha, 0.001f)
+        assertTrue(scrolling.foregroundTint.red > scrolling.foregroundTint.blue)
         assertEquals(idle.shellShader!!.thicknessDp, scrolling.shellShader!!.thicknessDp)
         assertEquals(
             resolveBottomBarEffectiveBackdropPresetProgress(
@@ -155,24 +159,26 @@ class BottomBarGlassMaterialPolicyTest {
     }
 
     @Test
-    fun `ios26 scroll tint brightens dark theme instead of dimming it`() {
+    fun `ios26 scroll tint keeps accent in dark theme instead of dimming it`() {
+        val accent = Color(0xFFFF2D55)
         val darkScrolling = resolveBottomBarGlassMaterialSpec(
             preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
             isDarkTheme = true,
             isScrolling = true,
             glassEnabled = true,
             motionProgress = 0f,
-            pressProgress = 0f
+            pressProgress = 0f,
+            accentColor = accent
         )
 
-        assertEquals(Color.White.red, darkScrolling.foregroundTint.red, 0.001f)
-        assertEquals(Color.White.green, darkScrolling.foregroundTint.green, 0.001f)
-        assertEquals(Color.White.blue, darkScrolling.foregroundTint.blue, 0.001f)
-        assertEquals(0.07f, darkScrolling.foregroundTint.alpha, 0.001f)
+        assertTrue(darkScrolling.foregroundTint.red > darkScrolling.foregroundTint.blue)
+        assertTrue(darkScrolling.foregroundTint.green < Color.White.green)
+        assertEquals(0.20f, darkScrolling.foregroundTint.alpha, 0.001f)
     }
 
     @Test
     fun `ios26 scroll material accepts fractional progress to avoid stop flash`() {
+        val accent = Color(0xFFFF2D55)
         val settling = resolveBottomBarGlassMaterialSpec(
             preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
             isDarkTheme = false,
@@ -180,12 +186,19 @@ class BottomBarGlassMaterialPolicyTest {
             scrollProgress = 0.5f,
             glassEnabled = true,
             motionProgress = 0f,
-            pressProgress = 0f
+            pressProgress = 0f,
+            accentColor = accent
         )
 
         assertEquals(6.5f, settling.blurRadiusDp!!, 0.001f)
-        assertEquals(0.035f, settling.foregroundTint.alpha, 0.002f)
+        assertEquals(0.1075f, settling.foregroundTint.alpha, 0.002f)
         assertEquals(1.25f, settling.highlightWidthScale, 0.001f)
+    }
+
+    @Test
+    fun `ios26 scroll material exits slower than it enters`() {
+        assertEquals(140, resolveBottomBarMaterialScrollAnimationDurationMillis(isScrolling = true))
+        assertEquals(420, resolveBottomBarMaterialScrollAnimationDurationMillis(isScrolling = false))
     }
 
     @Test
