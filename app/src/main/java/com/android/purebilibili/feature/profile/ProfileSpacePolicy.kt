@@ -152,6 +152,17 @@ private fun mapProfileAggregateFavoriteFolder(item: SpaceAggregateFavoriteItem):
         fid = item.fid,
         mid = item.mid,
         title = item.title,
+        cover = item.cover,
         media_count = item.media_count.takeIf { it > 0 } ?: item.count
     )
+}
+
+fun resolveProfileDynamicCover(item: SpaceDynamicItem): String {
+    val major = item.modules.module_dynamic?.major
+    return major?.archive?.cover
+        ?.takeIf { it.isNotBlank() }
+        ?: major?.draw?.items?.firstOrNull { it.src.isNotBlank() }?.src
+        ?: major?.opus?.pics?.firstOrNull { it.src.isNotBlank() }?.src
+        ?: major?.article?.covers?.firstOrNull { it.isNotBlank() }
+        ?: ""
 }

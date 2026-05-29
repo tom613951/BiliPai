@@ -1272,7 +1272,7 @@ private fun ProfileSpaceTabs(selectedTab: ProfileSpaceMainTab, onTabSelected: (P
                 Text(
                     text = item.title,
                     style = MaterialTheme.typography.titleSmall,
-                    color = if (selected) com.android.purebilibili.core.theme.iOSPink else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1281,7 +1281,7 @@ private fun ProfileSpaceTabs(selectedTab: ProfileSpaceMainTab, onTabSelected: (P
                         .width(28.dp)
                         .height(3.dp)
                         .clip(RoundedCornerShape(999.dp))
-                        .background(if (selected) com.android.purebilibili.core.theme.iOSPink else Color.Transparent)
+                        .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
                 )
             }
         }
@@ -1418,6 +1418,7 @@ private fun ProfileSpaceServices(
             onFavoriteClick = onFavoriteClick,
             favoriteFolderShortcuts = favoriteFolderShortcuts,
             onFavoriteFolderClick = onFavoriteFolderClick,
+            showFavoriteService = false,
             onDownloadClick = onDownloadClick,
             onWatchLaterClick = onWatchLaterClick,
             onInboxClick = onInboxClick,
@@ -1443,7 +1444,7 @@ private fun ProfileFavoriteFolderStrip(
             ProfileSpacePosterCard(
                 title = folder.title,
                 subtitle = "${folder.media_count} 个内容",
-                imageUrl = "",
+                imageUrl = folder.cover,
                 width = 168.dp,
                 height = 152.dp,
                 onClick = { onFolderClick(folder.id, ownerMid, folder.title) }
@@ -1610,7 +1611,7 @@ private fun ProfileFavoriteFolderList(ownerMid: Long, folders: List<FavFolder>, 
             ProfileSpaceListRow(
                 title = folder.title,
                 subtitle = "${folder.media_count} 个内容",
-                imageUrl = "",
+                imageUrl = folder.cover,
                 onClick = { onFolderClick(folder.id, ownerMid, folder.title) }
             )
         }
@@ -1669,7 +1670,7 @@ private fun ProfileDynamicList(items: List<SpaceDynamicItem>, onVideoClick: (Str
             ProfileSpaceListRow(
                 title = title,
                 subtitle = item.modules.module_author?.pub_time.orEmpty(),
-                imageUrl = archive?.cover.orEmpty(),
+                imageUrl = resolveProfileDynamicCover(item),
                 onClick = { archive?.bvid?.takeIf { it.isNotBlank() }?.let(onVideoClick) }
             )
         }
@@ -2727,6 +2728,7 @@ fun ServicesSection(
     onFavoriteClick: () -> Unit,
     favoriteFolderShortcuts: List<ProfileFavoriteFolderShortcut> = emptyList(),
     onFavoriteFolderClick: (Long, Long, String) -> Unit = { _, _, _ -> },
+    showFavoriteService: Boolean = true,
     onDownloadClick: () -> Unit = {},
     onWatchLaterClick: () -> Unit = {},
     onInboxClick: () -> Unit = {},  //  [新增] 私信入口
@@ -2750,7 +2752,7 @@ fun ServicesSection(
         val items = buildList {
             add(Triple("离线缓存", downloadIcon, onDownloadClick))
             if (showHistoryService) add(Triple("历史记录", historyIcon, onHistoryClick))
-            add(Triple("我的收藏", bookmarkIcon, onFavoriteClick))
+            if (showFavoriteService) add(Triple("我的收藏", bookmarkIcon, onFavoriteClick))
             add(Triple("稍后再看", watchLaterIcon, onWatchLaterClick))
             add(Triple("消息中心", inboxIcon, onInboxClick))
             add(Triple("账号切换", accountIcon, onAccountManageClick))
@@ -2784,7 +2786,7 @@ fun ServicesSection(
                     }
                 }
             }
-            if (favoriteFolderShortcuts.isNotEmpty()) {
+            if (showFavoriteService && favoriteFolderShortcuts.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(18.dp))
                 ProfileFavoriteFolderShortcutGrid(
                     shortcuts = favoriteFolderShortcuts,
@@ -2825,24 +2827,26 @@ fun ServicesSection(
                         )
                         ProfileServiceDivider(contentColor)
                     }
-                    ProfileServiceRow(
-                        icon = bookmarkIcon,
-                        title = "我的收藏",
-                        onClick = onFavoriteClick,
-                        iconTint = iOSYellow,
-                        textColor = contentColor,
-                    )
-                    if (favoriteFolderShortcuts.isNotEmpty()) {
-                        ProfileFavoriteFolderShortcutGrid(
-                            shortcuts = favoriteFolderShortcuts,
-                            onFavoriteFolderClick = onFavoriteFolderClick,
-                            contentColor = contentColor,
-                            compactHorizontal = true,
-                            onMoreClick = onFavoriteClick,
-                            modifier = Modifier.padding(start = 58.dp, end = 14.dp, bottom = 10.dp)
+                    if (showFavoriteService) {
+                        ProfileServiceRow(
+                            icon = bookmarkIcon,
+                            title = "我的收藏",
+                            onClick = onFavoriteClick,
+                            iconTint = iOSYellow,
+                            textColor = contentColor,
                         )
+                        if (favoriteFolderShortcuts.isNotEmpty()) {
+                            ProfileFavoriteFolderShortcutGrid(
+                                shortcuts = favoriteFolderShortcuts,
+                                onFavoriteFolderClick = onFavoriteFolderClick,
+                                contentColor = contentColor,
+                                compactHorizontal = true,
+                                onMoreClick = onFavoriteClick,
+                                modifier = Modifier.padding(start = 58.dp, end = 14.dp, bottom = 10.dp)
+                            )
+                        }
+                        ProfileServiceDivider(contentColor)
                     }
-                    ProfileServiceDivider(contentColor)
                     ProfileServiceRow(
                         icon = watchLaterIcon,
                         title = "稍后再看",
@@ -2895,20 +2899,22 @@ fun ServicesSection(
                             textColor = contentColor
                         )
                     }
-                    IOSClickableItem(
-                        icon = bookmarkIcon,
-                        title = "我的收藏",
-                        onClick = onFavoriteClick,
-                        iconTint = iOSYellow,
-                        textColor = contentColor
-                    )
-                    if (favoriteFolderShortcuts.isNotEmpty()) {
-                        ProfileFavoriteFolderShortcutGrid(
-                            shortcuts = favoriteFolderShortcuts,
-                            onFavoriteFolderClick = onFavoriteFolderClick,
-                            contentColor = contentColor,
-                            modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 12.dp)
+                    if (showFavoriteService) {
+                        IOSClickableItem(
+                            icon = bookmarkIcon,
+                            title = "我的收藏",
+                            onClick = onFavoriteClick,
+                            iconTint = iOSYellow,
+                            textColor = contentColor
                         )
+                        if (favoriteFolderShortcuts.isNotEmpty()) {
+                            ProfileFavoriteFolderShortcutGrid(
+                                shortcuts = favoriteFolderShortcuts,
+                                onFavoriteFolderClick = onFavoriteFolderClick,
+                                contentColor = contentColor,
+                                modifier = Modifier.padding(start = 56.dp, end = 16.dp, bottom = 12.dp)
+                            )
+                        }
                     }
                     IOSClickableItem(
                         icon = watchLaterIcon,

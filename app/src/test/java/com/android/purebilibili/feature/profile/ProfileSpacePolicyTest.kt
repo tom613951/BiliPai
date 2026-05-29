@@ -3,6 +3,15 @@ package com.android.purebilibili.feature.profile
 import com.android.purebilibili.data.model.response.FavFolder
 import com.android.purebilibili.data.model.response.FollowBangumiItem
 import com.android.purebilibili.data.model.response.SpaceAggregateArchiveItem
+import com.android.purebilibili.data.model.response.SpaceAggregateData
+import com.android.purebilibili.data.model.response.SpaceAggregateFavoriteItem
+import com.android.purebilibili.data.model.response.SpaceAggregateFavoriteSection
+import com.android.purebilibili.data.model.response.SpaceDynamicContent
+import com.android.purebilibili.data.model.response.SpaceDynamicDraw
+import com.android.purebilibili.data.model.response.SpaceDynamicDrawItem
+import com.android.purebilibili.data.model.response.SpaceDynamicItem
+import com.android.purebilibili.data.model.response.SpaceDynamicMajor
+import com.android.purebilibili.data.model.response.SpaceDynamicModules
 import com.android.purebilibili.data.model.response.SpaceVideoItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -79,5 +88,46 @@ class ProfileSpacePolicyTest {
         assertEquals(null, validateProfileSign(""))
         assertEquals(null, validateProfileSign("a".repeat(70)))
         assertEquals("签名最多支持 70 个字符", validateProfileSign("a".repeat(71)))
+    }
+
+    @Test
+    fun `space favorite folders keep cover from aggregate response`() {
+        val state = resolveProfileSpaceStateFromAggregate(
+            aggregate = SpaceAggregateData(
+                favourite2 = SpaceAggregateFavoriteSection(
+                    count = 1,
+                    item = listOf(
+                        SpaceAggregateFavoriteItem(
+                            mediaId = 123,
+                            title = "默认收藏夹",
+                            cover = "https://i0.hdslb.com/bfs/archive/folder.jpg",
+                            media_count = 9
+                        )
+                    )
+                )
+            ),
+            favoriteFoldersFallback = emptyList(),
+            bangumiItems = emptyList(),
+            dynamicItems = emptyList()
+        )
+
+        assertEquals("https://i0.hdslb.com/bfs/archive/folder.jpg", state.favoriteFolders.first().cover)
+    }
+
+    @Test
+    fun `dynamic cover falls back to draw image when archive is absent`() {
+        val item = SpaceDynamicItem(
+            modules = SpaceDynamicModules(
+                module_dynamic = SpaceDynamicContent(
+                    major = SpaceDynamicMajor(
+                        draw = SpaceDynamicDraw(
+                            items = listOf(SpaceDynamicDrawItem(src = "https://i0.hdslb.com/bfs/draw.jpg"))
+                        )
+                    )
+                )
+            )
+        )
+
+        assertEquals("https://i0.hdslb.com/bfs/draw.jpg", resolveProfileDynamicCover(item))
     }
 }
