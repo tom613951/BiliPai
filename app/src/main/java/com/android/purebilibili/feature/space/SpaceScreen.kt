@@ -106,7 +106,7 @@ import com.android.purebilibili.core.ui.components.IOSSearchBar
 import com.android.purebilibili.core.ui.transition.LocalVideoCardSharedElementSourceRoute
 import com.android.purebilibili.core.ui.transition.VIDEO_SHARED_COVER_ASPECT_RATIO
 import com.android.purebilibili.core.ui.transition.resolveVideoCardSharedTransitionMotionSpec
-import com.android.purebilibili.core.ui.transition.videoCardShellSharedElementKey
+import com.android.purebilibili.core.ui.transition.videoCoverSharedElementKey
 import com.android.purebilibili.core.ui.components.UserLevelBadge
 import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.util.CardPositionManager
@@ -2465,7 +2465,7 @@ private fun Modifier.spaceVideoCoverSharedBounds(
     return with(requireNotNull(sharedTransitionScope)) {
         this@spaceVideoCoverSharedBounds.sharedBounds(
             sharedContentState = rememberSharedContentState(
-                key = videoCardShellSharedElementKey(
+                key = videoCoverSharedElementKey(
                     bvid = requireNotNull(sharedTransitionKey),
                     sourceRoute = sourceRoute
                 )
@@ -2955,7 +2955,7 @@ private fun SpaceArchiveListItemRow(
         with(requireNotNull(sharedTransitionScope)) {
             Modifier.sharedBounds(
                 sharedContentState = rememberSharedContentState(
-                    key = videoCardShellSharedElementKey(
+                    key = videoCoverSharedElementKey(
                         bvid = requireNotNull(sharedTransitionKey),
                         sourceRoute = sourceRoute
                     )
