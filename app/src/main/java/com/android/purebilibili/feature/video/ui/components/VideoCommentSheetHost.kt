@@ -154,8 +154,12 @@ internal fun resolveVideoCommentSheetHostHeightPx(
 }
 
 internal fun resolveVideoCommentSheetHostScrimAlpha(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Float {
+    if (hostContent == VideoCommentSheetHostContent.THREAD_DETAIL) {
+        return resolveVideoSubReplySheetScrimAlpha()
+    }
     return if (mainSheetVisible) {
         MAIN_COMMENT_SHEET_SCRIM_ALPHA
     } else {
@@ -214,13 +218,14 @@ internal fun resolveVideoCommentSheetPresentationProgress(
 
 internal fun resolveVideoCommentSheetHostOverlayVisual(
     mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent,
     presentationProgress: Float
 ): InteractiveOverlayProgressVisual {
     return resolveInteractiveOverlayProgressVisual(
         presentationProgress = presentationProgress,
         surfaceType = InteractiveOverlaySurfaceType.BOTTOM_SHEET,
-        blurActive = mainSheetVisible,
-        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible)
+        blurActive = mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL,
+        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible, hostContent)
     )
 }
 
@@ -270,7 +275,6 @@ fun VideoCommentSheetHost(
         subReplyVisible = subReplyState.visible
     )
     val hostVisible = hostContent != VideoCommentSheetHostContent.HIDDEN
-    val scrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = mainSheetVisible)
     val dismissOnBackdropTap = shouldDismissVideoCommentSheetHostOnBackdropTap(
         mainSheetVisible = mainSheetVisible
     )
@@ -332,9 +336,10 @@ fun VideoCommentSheetHost(
     LaunchedEffect(mainSheetVisible, hostContent, mainSheetVisibilityProgress) {
         onMainSheetVisibilityProgressChange(mainSheetVisibilityProgress)
     }
-    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress) {
+    val overlayVisual = remember(mainSheetVisible, hostContent, mainSheetVisibilityProgress) {
         resolveVideoCommentSheetHostOverlayVisual(
             mainSheetVisible = mainSheetVisible,
+            hostContent = hostContent,
             presentationProgress = mainSheetVisibilityProgress
         )
     }

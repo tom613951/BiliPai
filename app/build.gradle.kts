@@ -121,6 +121,7 @@ android {
             isMinifyEnabled = true
             // 🔥 启用资源压缩 (移除未使用的资源)
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -128,7 +129,7 @@ android {
         }
         debug {
             // Debug 构建保持快速编译
-            applicationIdSuffix = ".debug"
+            // applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             resValue("string", "app_name", "BiliPai Debug")
             buildConfigField("boolean", "ALLOW_HARDCODED_DNS_FALLBACK", "true")
@@ -156,7 +157,7 @@ android {
         create("smooth") {
             // Smooth 用于本地快速验证正式版运行语义：保留非 debug 行为，但跳过 R8/资源压缩。
             initWith(getByName("release"))
-            applicationIdSuffix = ".dev"
+            // applicationIdSuffix = ".dev"
             versionNameSuffix = "-smooth"
             resValue("string", "app_name", "BiliPai Smooth")
             buildConfigField("boolean", "ALLOW_HARDCODED_DNS_FALLBACK", "true")

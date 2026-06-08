@@ -2201,7 +2201,6 @@ private fun VideoPageItem(
             active = isCurrentPage,
             onDismiss = {
                 showCommentSheet = false
-                commentSheetVisibilityProgress = 0f
             },
             onVisibilityProgressChange = { progress ->
                 commentSheetVisibilityProgress = progress
