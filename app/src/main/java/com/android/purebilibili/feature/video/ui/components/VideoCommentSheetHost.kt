@@ -183,6 +183,10 @@ internal fun shouldDismissVideoCommentSheetHostOnBackdropTap(
     return mainSheetVisible
 }
 
+internal fun shouldInterceptVideoCommentSheetHostBackdropTap(
+    mainSheetVisible: Boolean
+): Boolean = mainSheetVisible
+
 internal fun shouldHandleVideoCommentSheetVerticalDrag(
     dragAmountPx: Float,
     currentOffsetPx: Float
@@ -463,17 +467,26 @@ fun VideoCommentSheetHost(
         enter = bottomSheetScrimEnterTransition(motionSpec),
         exit = bottomSheetScrimExitTransition(motionSpec)
     ) {
+        val interceptBackdropTap = shouldInterceptVideoCommentSheetHostBackdropTap(
+            mainSheetVisible = mainSheetVisible
+        )
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = overlayVisual.scrimAlpha))
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {
-                        if (dismissOnBackdropTap) {
-                            onDismiss()
-                        }
+                .then(
+                    if (interceptBackdropTap) {
+                        Modifier.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {
+                                if (dismissOnBackdropTap) {
+                                    onDismiss()
+                                }
+                            }
+                        )
+                    } else {
+                        Modifier
                     }
                 )
         ) {

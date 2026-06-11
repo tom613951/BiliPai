@@ -213,6 +213,16 @@ class VideoCommentSheetHostPolicyTest {
                 mainSheetVisible = false
             )
         )
+        assertTrue(
+            shouldInterceptVideoCommentSheetHostBackdropTap(
+                mainSheetVisible = true
+            )
+        )
+        assertFalse(
+            shouldInterceptVideoCommentSheetHostBackdropTap(
+                mainSheetVisible = false
+            )
+        )
     }
 
     @Test

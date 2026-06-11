@@ -6,8 +6,24 @@ import com.android.purebilibili.feature.video.player.ExternalPlaylistSource
 import com.android.purebilibili.feature.video.player.PlayMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class PlaybackCompletionPolicyTest {
+
+    @Test
+    fun `comment interaction suppresses playback completion navigation`() {
+        assertTrue(
+            shouldSuppressPlaybackCompletionForCommentInteraction(
+                commentInteractionActive = true
+            )
+        )
+        assertFalse(
+            shouldSuppressPlaybackCompletionForCommentInteraction(
+                commentInteractionActive = false
+            )
+        )
+    }
 
     @Test
     fun `stop mode always stops after ended`() {

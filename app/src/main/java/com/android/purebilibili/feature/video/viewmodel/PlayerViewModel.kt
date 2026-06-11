@@ -1330,6 +1330,8 @@ class PlayerViewModel : ViewModel() {
     private var appContext: android.content.Context? = null  //  [新增] 保存 Context 用于网络检测
     private var hasUserStartedPlayback = false  // 🛡️ [修复] 用户是否主动开始播放（用于区分“加载已看完视频”和“自然播放结束”）
     private var isPortraitPlaybackSessionActive = false
+    @Volatile
+    private var isCommentInteractionActive = false
     private val followStatusCheckInFlight = mutableSetOf<Long>()
     private var cachedFollowingOwnerMid: Long = 0L
     private var cachedFollowingMids: Set<Long> = emptySet()
@@ -1378,6 +1380,10 @@ class PlayerViewModel : ViewModel() {
 
     fun setPortraitPlaybackSessionActive(active: Boolean) {
         isPortraitPlaybackSessionActive = active
+    }
+
+    fun setCommentInteractionActive(active: Boolean) {
+        isCommentInteractionActive = active
     }
 
     //  Sleep Timer State
@@ -1801,6 +1807,12 @@ class PlayerViewModel : ViewModel() {
                 recordCurrentCdnHealthEvent(CdnHealthEvent.BUFFERING)
             }
             if (playbackState == Player.STATE_ENDED) {
+                if (shouldSuppressPlaybackCompletionForCommentInteraction(isCommentInteractionActive)) {
+                    _showPlaybackEndedDialog.value = false
+                    Logger.d("PlayerVM", "评论交互进行中，保持当前视频结束态")
+                    return
+                }
+
                 // �️ [修复] 仅当用户主动开始播放后才触发自动连播
                 // 防止从历史记录加载已看完视频时立即跳转
                 if (!hasUserStartedPlayback) {

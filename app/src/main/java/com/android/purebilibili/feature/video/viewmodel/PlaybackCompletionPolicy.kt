@@ -13,6 +13,10 @@ internal enum class PlaybackEndAction {
     AUTO_CONTINUE
 }
 
+internal fun shouldSuppressPlaybackCompletionForCommentInteraction(
+    commentInteractionActive: Boolean
+): Boolean = commentInteractionActive
+
 internal fun resolvePlaybackEndAction(
     behavior: PlaybackCompletionBehavior,
     autoPlayEnabled: Boolean,

@@ -2196,6 +2196,42 @@ fun VideoDetailScreen(
             player.removeListener(listener)
         }
     }
+    val routedCommentInteractionActive =
+        openCommentRootRpidFromRoute > 0L &&
+            (subReplyState.visible || subReplyState.isLoading)
+    val commentInteractionActive =
+        routedCommentInteractionActive || subReplyState.visible || showCommentInput
+    LaunchedEffect(commentInteractionActive) {
+        viewModel.setCommentInteractionActive(commentInteractionActive)
+    }
+    DisposableEffect(viewModel) {
+        onDispose {
+            viewModel.setCommentInteractionActive(false)
+        }
+    }
+    var hasAutoPausedForRoutedComment by rememberSaveable(
+        bvid,
+        openCommentRootRpidFromRoute,
+        openCommentTargetRpidFromRoute
+    ) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(
+        openCommentRootRpidFromRoute,
+        videoSharedPlaybackIntent,
+        isVideoPlaying,
+        hasAutoPausedForRoutedComment
+    ) {
+        val shouldAutoPause =
+            openCommentRootRpidFromRoute > 0L &&
+                videoSharedPlaybackIntent == VideoSharedTransitionPlaybackIntent.ImmediatePlayback &&
+                isVideoPlaying &&
+                !hasAutoPausedForRoutedComment
+        if (shouldAutoPause) {
+            com.android.purebilibili.feature.video.usecase.pausePlayerFromUserAction(playerState.player)
+            hasAutoPausedForRoutedComment = true
+        }
+    }
     val isPlaybackPaused by produceState(
         initialValue = resolveIsPlaybackPausedForCollapse(
             playWhenReady = playerState.player.playWhenReady,
