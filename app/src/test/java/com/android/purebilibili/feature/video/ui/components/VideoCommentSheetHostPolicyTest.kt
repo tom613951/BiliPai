@@ -115,6 +115,17 @@ class VideoCommentSheetHostPolicyTest {
     }
 
     @Test
+    fun `thread detail should not have a grey scrim mask when main sheet is visible`() {
+        assertEquals(
+            0f,
+            resolveVideoCommentSheetHostScrimAlpha(
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
+            )
+        )
+    }
+
+    @Test
     fun `embedded thread detail should cover comment content below reserved player area`() {
         assertEquals(
             0.55f,

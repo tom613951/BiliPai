@@ -154,8 +154,12 @@ internal fun resolveVideoCommentSheetHostHeightPx(
 }
 
 internal fun resolveVideoCommentSheetHostScrimAlpha(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Float {
+    if (hostContent == VideoCommentSheetHostContent.THREAD_DETAIL) {
+        return 0f
+    }
     return if (mainSheetVisible) {
         MAIN_COMMENT_SHEET_SCRIM_ALPHA
     } else {
@@ -218,13 +222,14 @@ internal fun resolveVideoCommentSheetPresentationProgress(
 
 internal fun resolveVideoCommentSheetHostOverlayVisual(
     mainSheetVisible: Boolean,
-    presentationProgress: Float
+    presentationProgress: Float,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): InteractiveOverlayProgressVisual {
     return resolveInteractiveOverlayProgressVisual(
         presentationProgress = presentationProgress,
         surfaceType = InteractiveOverlaySurfaceType.BOTTOM_SHEET,
         blurActive = mainSheetVisible,
-        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible)
+        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible, hostContent)
     )
 }
 
@@ -336,10 +341,11 @@ fun VideoCommentSheetHost(
     LaunchedEffect(mainSheetVisible, hostContent, mainSheetVisibilityProgress) {
         onMainSheetVisibilityProgressChange(mainSheetVisibilityProgress)
     }
-    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress) {
+    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, hostContent) {
         resolveVideoCommentSheetHostOverlayVisual(
             mainSheetVisible = mainSheetVisible,
-            presentationProgress = mainSheetVisibilityProgress
+            presentationProgress = mainSheetVisibilityProgress,
+            hostContent = hostContent
         )
     }
 
