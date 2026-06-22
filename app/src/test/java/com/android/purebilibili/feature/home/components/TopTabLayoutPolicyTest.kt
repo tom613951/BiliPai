@@ -115,15 +115,12 @@ class TopTabLayoutPolicyTest {
                     labelMode = labelMode
                 )
             )
-            assertEquals(
-                60f,
-                resolveIosTopTabItemWidthDp(
-                    containerWidthDp = 360f,
-                    categoryCount = 6,
-                    labelMode = labelMode
-                ),
-                0.001f
+            val itemWidth = resolveIosTopTabItemWidthDp(
+                containerWidthDp = 360f,
+                categoryCount = 6,
+                labelMode = labelMode
             )
+            assertEquals(360f, itemWidth * 6 + 4f, 0.001f)
         }
     }
 

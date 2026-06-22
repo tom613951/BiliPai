@@ -107,6 +107,8 @@ import top.yukonga.miuix.kmp.basic.TabRowWithContour as MiuixTabRowWithContour
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.io.File
 
+private const val IOS_TOP_TAB_CONTENT_PADDING_DP = 2f
+
 internal fun resolveFloatingIndicatorStartPaddingPx(
     baseInsetPx: Float,
     leftBiasPx: Float
@@ -197,7 +199,8 @@ internal fun resolveIosTopTabItemWidthDp(
     categoryCount: Int,
     labelMode: Int
 ): Float = resolveMd3TopTabItemWidthDp(
-    containerWidthDp = containerWidthDp,
+    containerWidthDp = (containerWidthDp - IOS_TOP_TAB_CONTENT_PADDING_DP * 2f)
+        .coerceAtLeast(0f),
     visibleSlots = resolveIosTopTabLayoutVisibleSlots(categoryCount, labelMode)
 )
 
@@ -1139,7 +1142,7 @@ private fun LightweightHomeTopTabs(
                         absolutePagerPosition = iosCapsulePosition,
                         itemWidthPx = itemWidth.toPx(),
                         rowScrollOffsetPx = rowScrollOffsetPx,
-                        contentPaddingPx = 2.dp.toPx(),
+                        contentPaddingPx = IOS_TOP_TAB_CONTENT_PADDING_DP.dp.toPx(),
                         followPagerPosition = pagerIsDragging || pagerIsScrolling || topTabDragActive
                     )
                 }
@@ -1312,7 +1315,7 @@ private fun LightweightHomeTopTabs(
                     horizontalArrangement = Arrangement.Start,
                     contentPadding = PaddingValues(
                         horizontal = if (effectiveRenderer == HomeTopTabRenderer.IOS) {
-                            2.dp
+                            IOS_TOP_TAB_CONTENT_PADDING_DP.dp
                         } else {
                             md3ContentPadding
                         }
