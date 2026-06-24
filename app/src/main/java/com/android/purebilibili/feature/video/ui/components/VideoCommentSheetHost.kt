@@ -163,13 +163,10 @@ internal fun resolveVideoCommentSheetHostHeightPx(
 }
 
 internal fun resolveVideoCommentSheetHostScrimAlpha(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Float {
-    return if (mainSheetVisible) {
-        MAIN_COMMENT_SHEET_SCRIM_ALPHA
-    } else {
-        resolveVideoSubReplySheetScrimAlpha()
-    }
+    return 0f
 }
 
 internal fun shouldApplyVideoCommentThreadStatusBarPadding(
@@ -275,13 +272,14 @@ internal fun resolveVideoCommentSheetPresentationProgress(
 
 internal fun resolveVideoCommentSheetHostOverlayVisual(
     mainSheetVisible: Boolean,
-    presentationProgress: Float
+    presentationProgress: Float,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): InteractiveOverlayProgressVisual {
     return resolveInteractiveOverlayProgressVisual(
         presentationProgress = presentationProgress,
         surfaceType = InteractiveOverlaySurfaceType.BOTTOM_SHEET,
         blurActive = mainSheetVisible,
-        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible)
+        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible, hostContent)
     )
 }
 
@@ -408,10 +406,11 @@ fun VideoCommentSheetHost(
             }
         }
     }
-    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress) {
+    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, hostContent) {
         resolveVideoCommentSheetHostOverlayVisual(
             mainSheetVisible = mainSheetVisible,
-            presentationProgress = mainSheetVisibilityProgress
+            presentationProgress = mainSheetVisibilityProgress,
+            hostContent = hostContent
         )
     }
 
