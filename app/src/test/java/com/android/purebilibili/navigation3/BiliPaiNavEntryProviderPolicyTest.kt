@@ -270,6 +270,20 @@ class BiliPaiNavEntryProviderPolicyTest {
     }
 
     @Test
+    fun settingsInnerPagesPopToActiveMainHostUseLightSiblingPopTransition() {
+        assertEquals(
+            BiliPaiNavRouteTransition.LIGHT_SIBLING_POP,
+            resolveBiliPaiNavEntryPopRouteTransition(
+                defaultTransition = BiliPaiNavRouteTransition.FALLBACK,
+                fromRoute = ScreenRoutes.AppearanceSettings.route,
+                toRoute = BiliPaiNavKey.MainHost.routeBase,
+                sourceMetadata = BiliPaiNavSourceMetadata(),
+                activeMainHostRoute = ScreenRoutes.Settings.route
+            )
+        )
+    }
+
+    @Test
     fun messageInnerPagesUseLightSiblingForwardTransition() {
         val messageChildren = listOf(
             "message/reply_me",
