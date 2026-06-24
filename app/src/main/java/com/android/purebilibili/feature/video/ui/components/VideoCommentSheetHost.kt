@@ -175,14 +175,16 @@ internal fun shouldInitializeVideoCommentSheetHost(
 }
 
 internal fun shouldDismissVideoCommentSheetHostOnBackdropTap(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Boolean {
-    return mainSheetVisible
+    return mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 }
 
 internal fun shouldInterceptVideoCommentSheetHostBackdropTap(
-    mainSheetVisible: Boolean
-): Boolean = mainSheetVisible
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
+): Boolean = mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 
 internal fun shouldHandleVideoCommentSheetVerticalDrag(
     dragAmountPx: Float,
@@ -274,7 +276,8 @@ fun VideoCommentSheetHost(
     val hostVisible = hostContent != VideoCommentSheetHostContent.HIDDEN
     val scrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = mainSheetVisible)
     val dismissOnBackdropTap = shouldDismissVideoCommentSheetHostOnBackdropTap(
-        mainSheetVisible = mainSheetVisible
+        mainSheetVisible = mainSheetVisible,
+        hostContent = hostContent
     )
     val applyThreadStatusBarPadding = shouldApplyVideoCommentThreadStatusBarPadding(
         mainSheetVisible = mainSheetVisible,
@@ -467,7 +470,8 @@ fun VideoCommentSheetHost(
         exit = bottomSheetScrimExitTransition(motionSpec)
     ) {
         val interceptBackdropTap = shouldInterceptVideoCommentSheetHostBackdropTap(
-            mainSheetVisible = mainSheetVisible
+            mainSheetVisible = mainSheetVisible,
+            hostContent = hostContent
         )
         BoxWithConstraints(
             modifier = Modifier

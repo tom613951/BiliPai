@@ -215,22 +215,38 @@ class VideoCommentSheetHostPolicyTest {
     fun `backdrop tap dismissal only applies to main comment sheet`() {
         assertTrue(
             shouldDismissVideoCommentSheetHostOnBackdropTap(
-                mainSheetVisible = true
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertFalse(
             shouldDismissVideoCommentSheetHostOnBackdropTap(
-                mainSheetVisible = false
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
+            )
+        )
+        assertFalse(
+            shouldDismissVideoCommentSheetHostOnBackdropTap(
+                mainSheetVisible = false,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertTrue(
             shouldInterceptVideoCommentSheetHostBackdropTap(
-                mainSheetVisible = true
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertFalse(
             shouldInterceptVideoCommentSheetHostBackdropTap(
-                mainSheetVisible = false
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
+            )
+        )
+        assertFalse(
+            shouldInterceptVideoCommentSheetHostBackdropTap(
+                mainSheetVisible = false,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
     }
