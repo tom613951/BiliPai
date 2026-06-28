@@ -31,7 +31,10 @@ class ProfileServicesVisibilityPolicyTest {
         val servicesSource = source.substringAfter("fun ServicesSection(")
             .substringBefore("@Composable\nprivate fun ProfileFavoriteFolderShortcutGrid")
 
-        assertTrue(servicesSource.contains("val useImmersiveServiceLayout = borderColor != null"))
+        assertTrue(
+            servicesSource.contains("val useImmersiveServiceLayout = borderColor != null || embeddedInPanel")
+        )
+        assertTrue(servicesSource.contains("embeddedInPanel: Boolean = false"))
         assertTrue(servicesSource.contains("ProfileServicesListIsland("))
         assertTrue(servicesSource.contains("ProfileServiceRow("))
         assertTrue(servicesSource.contains("ProfileAccountActionArea("))

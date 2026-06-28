@@ -39,6 +39,15 @@ data class ProfileSpaceTabChromeSpec(
     val rowVerticalInsetDp: Int
 )
 
+data class ProfileSpaceContentPanelSpec(
+    val topCornerRadiusDp: Int,
+    val horizontalInsetDp: Int,
+    val topOverlapDp: Int,
+    val topPaddingDp: Int,
+    val bottomPaddingDp: Int,
+    val heroBottomInsetDp: Int
+)
+
 data class ProfileSpaceWallpaperChromePalette(
     val rowContainerColor: Color,
     val controlContainerColor: Color,
@@ -47,7 +56,11 @@ data class ProfileSpaceWallpaperChromePalette(
     val indicatorColor: Color,
     val serviceContainerColor: Color,
     val serviceBorderColor: Color,
-    val serviceTextColor: Color
+    val serviceTextColor: Color,
+    val contentPanelColor: Color,
+    val contentPanelBorderColor: Color,
+    val sectionTextColor: Color,
+    val cardContainerColor: Color
 )
 
 enum class ProfileSpaceHomeSection {
@@ -112,14 +125,25 @@ fun defaultProfileSpaceTabs(): List<ProfileSpaceTabItem> {
 
 fun resolveProfileSpaceTabChromeSpec(): ProfileSpaceTabChromeSpec {
     return ProfileSpaceTabChromeSpec(
-        rowContainerAlpha = 0.78f,
-        controlContainerAlpha = 0.82f,
+        rowContainerAlpha = 0f,
+        controlContainerAlpha = 0.24f,
         selectedIndicatorAlpha = 0.18f,
         selectedTextAlpha = 1f,
-        unselectedTextAlpha = 0.76f,
-        rowCornerRadiusDp = 28,
-        rowHorizontalInsetDp = 20,
-        rowVerticalInsetDp = 6
+        unselectedTextAlpha = 0.72f,
+        rowCornerRadiusDp = 22,
+        rowHorizontalInsetDp = 16,
+        rowVerticalInsetDp = 0
+    )
+}
+
+fun resolveProfileSpaceContentPanelSpec(): ProfileSpaceContentPanelSpec {
+    return ProfileSpaceContentPanelSpec(
+        topCornerRadiusDp = 28,
+        horizontalInsetDp = 12,
+        topOverlapDp = 28,
+        topPaddingDp = 14,
+        bottomPaddingDp = 24,
+        heroBottomInsetDp = 40
     )
 }
 
@@ -128,23 +152,53 @@ fun resolveProfileSpaceWallpaperChromePalette(
     fallbackSurfaceColor: Color,
     fallbackContentColor: Color
 ): ProfileSpaceWallpaperChromePalette {
-    val source = if (wallpaperColor.alpha > 0f) wallpaperColor else fallbackSurfaceColor
-    val readableText = if (source.luminance() < 0.45f) Color.White else Color.Black
+    val hasWallpaper = wallpaperColor.alpha > 0f
+    val source = if (hasWallpaper) wallpaperColor else fallbackSurfaceColor
+    val isDarkWallpaper = source.luminance() < 0.45f
+    val glassBase = if (isDarkWallpaper) Color.Black else Color.White
+    val readableText = if (isDarkWallpaper) Color.White else Color.Black
     val chromeSpec = resolveProfileSpaceTabChromeSpec()
-    val serviceText = if (calculateProfileSpaceContrast(readableText, source) >= 4.5f) {
+    val serviceText = if (hasWallpaper) {
         readableText
     } else {
         fallbackContentColor
     }
+    val panelAlpha = if (isDarkWallpaper) 0.34f else 0.30f
+    val controlAlpha = if (isDarkWallpaper) 0.26f else 0.22f
+    val cardAlpha = if (isDarkWallpaper) 0.22f else 0.18f
     return ProfileSpaceWallpaperChromePalette(
-        rowContainerColor = source.copy(alpha = chromeSpec.rowContainerAlpha),
-        controlContainerColor = source.copy(alpha = chromeSpec.controlContainerAlpha),
+        rowContainerColor = Color.Transparent,
+        controlContainerColor = if (hasWallpaper) {
+            glassBase.copy(alpha = controlAlpha)
+        } else {
+            fallbackSurfaceColor.copy(alpha = chromeSpec.controlContainerAlpha)
+        },
         selectedTextColor = serviceText.copy(alpha = chromeSpec.selectedTextAlpha),
         unselectedTextColor = serviceText.copy(alpha = chromeSpec.unselectedTextAlpha),
         indicatorColor = serviceText.copy(alpha = chromeSpec.selectedIndicatorAlpha),
-        serviceContainerColor = source.copy(alpha = 0.68f),
-        serviceBorderColor = serviceText.copy(alpha = 0.16f),
-        serviceTextColor = serviceText
+        serviceContainerColor = if (hasWallpaper) Color.Transparent else fallbackSurfaceColor,
+        serviceBorderColor = if (hasWallpaper) {
+            readableText.copy(alpha = 0.12f)
+        } else {
+            Color.Transparent
+        },
+        serviceTextColor = serviceText,
+        contentPanelColor = if (hasWallpaper) {
+            glassBase.copy(alpha = panelAlpha)
+        } else {
+            fallbackSurfaceColor
+        },
+        contentPanelBorderColor = if (hasWallpaper) {
+            readableText.copy(alpha = 0.14f)
+        } else {
+            Color.Transparent
+        },
+        sectionTextColor = serviceText,
+        cardContainerColor = if (hasWallpaper) {
+            glassBase.copy(alpha = cardAlpha)
+        } else {
+            fallbackSurfaceColor.copy(alpha = 0.72f)
+        }
     )
 }
 

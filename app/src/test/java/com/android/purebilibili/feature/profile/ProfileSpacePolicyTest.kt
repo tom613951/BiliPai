@@ -444,21 +444,24 @@ class ProfileSpacePolicyTest {
     }
 
     @Test
-    fun `tab chrome stays readable over custom wallpaper`() {
+    fun `tab chrome uses neutral embedded panel styling`() {
         val spec = resolveProfileSpaceTabChromeSpec()
+        val panelSpec = resolveProfileSpaceContentPanelSpec()
 
-        assertTrue(spec.rowContainerAlpha in 0.65f..0.85f)
-        assertTrue(spec.controlContainerAlpha in 0.75f..0.9f)
+        assertEquals(0f, spec.rowContainerAlpha)
+        assertTrue(spec.controlContainerAlpha in 0.2f..0.3f)
         assertTrue(spec.selectedTextAlpha >= 0.95f)
         assertTrue(spec.unselectedTextAlpha >= 0.65f)
         assertTrue(spec.selectedIndicatorAlpha in 0.12f..0.22f)
-        assertTrue(spec.rowCornerRadiusDp >= 24)
-        assertTrue(spec.rowHorizontalInsetDp >= 16)
-        assertTrue(spec.rowVerticalInsetDp >= 4)
+        assertTrue(spec.rowCornerRadiusDp >= 20)
+        assertTrue(spec.rowHorizontalInsetDp >= 12)
+        assertEquals(0, spec.rowVerticalInsetDp)
+        assertTrue(panelSpec.topCornerRadiusDp >= 24)
+        assertTrue(panelSpec.topOverlapDp >= 20)
     }
 
     @Test
-    fun `wallpaper chrome palette picks readable text from wallpaper color`() {
+    fun `wallpaper chrome palette uses neutral glass over wallpaper luminance`() {
         val darkPalette = resolveProfileSpaceWallpaperChromePalette(
             wallpaperColor = Color(0xFF6E1515),
             fallbackSurfaceColor = Color.White,
@@ -469,10 +472,19 @@ class ProfileSpacePolicyTest {
             fallbackSurfaceColor = Color.White,
             fallbackContentColor = Color.Black
         )
+        val plainPalette = resolveProfileSpaceWallpaperChromePalette(
+            wallpaperColor = Color.Transparent,
+            fallbackSurfaceColor = Color.White,
+            fallbackContentColor = Color.Black
+        )
 
         assertEquals(Color.White, darkPalette.serviceTextColor)
         assertEquals(Color.Black, lightPalette.serviceTextColor)
-        assertTrue(darkPalette.serviceContainerColor.alpha < 0.75f)
-        assertTrue(lightPalette.rowContainerColor.alpha < 0.85f)
+        assertEquals(Color.Transparent, darkPalette.rowContainerColor)
+        assertEquals(Color.Transparent, darkPalette.serviceContainerColor)
+        assertTrue(darkPalette.contentPanelColor.alpha in 0.28f..0.4f)
+        assertTrue(lightPalette.contentPanelColor.alpha in 0.24f..0.36f)
+        assertEquals(Color.White, plainPalette.contentPanelColor)
+        assertEquals(Color.Black, plainPalette.sectionTextColor)
     }
 }

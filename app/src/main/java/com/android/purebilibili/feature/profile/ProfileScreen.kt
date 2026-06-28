@@ -1116,6 +1116,7 @@ private fun ProfileSpaceContent(
                 )
             }
         } else {
+            val panelSpec = remember { resolveProfileSpaceContentPanelSpec() }
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1123,7 +1124,7 @@ private fun ProfileSpaceContent(
                 contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding() + 120.dp)
             ) {
                 item {
-                    ProfileSpaceCoverHeader(
+                    ProfileSpaceHeroHeader(
                         user = user,
                         editableAccount = editableAccount,
                         onEditClick = { showEditDialog = true },
@@ -1132,33 +1133,41 @@ private fun ProfileSpaceContent(
                     )
                 }
                 item {
-                    ProfileSpaceTabs(
-                        selectedTab = space.selectedTab,
-                        onTabSelected = onTabSelected,
-                        chromePalette = wallpaperChromePalette
-                    )
-                }
-                item {
-                    ProfileSpaceTabBody(
-                        user = user,
-                        space = space,
-                        showServicesInHome = true,
-                        favoriteFolderShortcuts = favoriteFolderShortcuts,
-                        onFavoriteClick = onFavoriteClick,
-                        onFavoriteFolderClick = onFavoriteFolderClick,
-                        onBangumiClick = onBangumiClick,
-                        onBangumiMoreClick = onBangumiMoreClick,
-                        onVideoClick = onVideoClick,
-                        onHistoryClick = onHistoryClick,
-                        showHistoryService = showHistoryService,
-                        onDownloadClick = onDownloadClick,
-                        onWatchLaterClick = onWatchLaterClick,
-                        onInboxClick = onInboxClick,
-                        onAccountManageClick = onAccountManageClick,
-                        onLogout = onLogout,
-                        onDynamicDeleteClick = onDynamicDeleteClick,
-                        chromePalette = wallpaperChromePalette
-                    )
+                    ProfileSpaceUnifiedPanel(
+                        isImmersive = isImmersive,
+                        chromePalette = wallpaperChromePalette,
+                        hazeState = hazeState,
+                        panelSpec = panelSpec
+                    ) {
+                        ProfileSpaceTabs(
+                            selectedTab = space.selectedTab,
+                            onTabSelected = onTabSelected,
+                            chromePalette = wallpaperChromePalette,
+                            embeddedInPanel = true
+                        )
+                        ProfileSpaceTabBody(
+                            user = user,
+                            space = space,
+                            showServicesInHome = true,
+                            favoriteFolderShortcuts = favoriteFolderShortcuts,
+                            onFavoriteClick = onFavoriteClick,
+                            onFavoriteFolderClick = onFavoriteFolderClick,
+                            onBangumiClick = onBangumiClick,
+                            onBangumiMoreClick = onBangumiMoreClick,
+                            onVideoClick = onVideoClick,
+                            onHistoryClick = onHistoryClick,
+                            showHistoryService = showHistoryService,
+                            onDownloadClick = onDownloadClick,
+                            onWatchLaterClick = onWatchLaterClick,
+                            onInboxClick = onInboxClick,
+                            onAccountManageClick = onAccountManageClick,
+                            onLogout = onLogout,
+                            onDynamicDeleteClick = onDynamicDeleteClick,
+                            chromePalette = wallpaperChromePalette,
+                            embeddedInPanel = true,
+                            isImmersive = isImmersive
+                        )
+                    }
                 }
             }
             Row(
@@ -1240,35 +1249,33 @@ private fun ProfileSpaceFeedColumn(
 }
 
 @Composable
-private fun ProfileSpaceCoverHeader(
+private fun ProfileSpaceHeroHeader(
     user: UserState,
     editableAccount: ProfileEditableAccountState,
     onEditClick: () -> Unit,
     onWallpaperActionClick: () -> Unit,
     onFollowingClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    Box(modifier = Modifier.fillMaxWidth()) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(user.topPhoto.ifBlank { user.face })
-                .size(1440, 960)
-                .scale(Scale.FILL)
-                .crossfade(true)
-                .build(),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(320.dp)
-        )
+    val windowSizeClass = LocalWindowSizeClass.current
+    val panelSpec = remember { resolveProfileSpaceContentPanelSpec() }
+    val bannerHeight = resolveProfileTopBannerHeightDp(windowSizeClass.widthSizeClass).dp
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(bannerHeight)
+    ) {
         Box(
             modifier = Modifier
-                .matchParentSize()
+                .fillMaxWidth()
+                .height(220.dp)
+                .align(Alignment.BottomCenter)
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f)),
-                        startY = 90f
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.18f),
+                            Color.Black.copy(alpha = 0.58f)
+                        )
                     )
                 )
         )
@@ -1281,7 +1288,62 @@ private fun ProfileSpaceCoverHeader(
             onFollowingClick = onFollowingClick,
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(top = 126.dp, bottom = 18.dp)
+                .padding(
+                    top = 126.dp,
+                    bottom = panelSpec.heroBottomInsetDp.dp
+                )
+        )
+    }
+}
+
+@Composable
+private fun ProfileSpaceUnifiedPanel(
+    isImmersive: Boolean,
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    hazeState: HazeState?,
+    panelSpec: ProfileSpaceContentPanelSpec,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = remember(panelSpec.topCornerRadiusDp) {
+        RoundedCornerShape(
+            topStart = panelSpec.topCornerRadiusDp.dp,
+            topEnd = panelSpec.topCornerRadiusDp.dp
+        )
+    }
+    val panelColor = if (isImmersive) {
+        chromePalette.contentPanelColor
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val borderColor = if (isImmersive) chromePalette.contentPanelBorderColor else null
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = if (isImmersive) panelSpec.horizontalInsetDp.dp else 0.dp)
+            .offset(y = (-panelSpec.topOverlapDp).dp)
+            .then(
+                if (isImmersive && hazeState != null) {
+                    Modifier.unifiedBlur(
+                        hazeState = hazeState,
+                        shape = shape
+                    )
+                } else {
+                    Modifier
+                }
+            ),
+        shape = shape,
+        color = panelColor,
+        border = borderColor?.let { BorderStroke(0.5.dp, it) },
+        shadowElevation = 0.dp,
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(
+                top = panelSpec.topPaddingDp.dp,
+                bottom = panelSpec.bottomPaddingDp.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            content = content
         )
     }
 }
@@ -1524,7 +1586,8 @@ private fun ProfileSpaceStat(label: String, value: Int, color: Color, onClick: (
 private fun ProfileSpaceTabs(
     selectedTab: ProfileSpaceMainTab,
     onTabSelected: (ProfileSpaceMainTab) -> Unit,
-    chromePalette: ProfileSpaceWallpaperChromePalette
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    embeddedInPanel: Boolean = false
 ) {
     val tabs = remember { defaultProfileSpaceTabs() }
     val context = LocalContext.current
@@ -1536,19 +1599,28 @@ private fun ProfileSpaceTabs(
         .getBottomBarLiquidGlassEnabled(context)
         .collectAsStateWithLifecycle(initialValue = true)
     val selectedIndex = tabs.indexOfFirst { it.tab == selectedTab }.coerceAtLeast(0)
+    val tabModifier = if (embeddedInPanel) {
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = chromeSpec.rowHorizontalInsetDp.dp)
+    } else {
+        Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = chromeSpec.rowHorizontalInsetDp.dp,
+                vertical = chromeSpec.rowVerticalInsetDp.dp
+            )
+            .background(chromePalette.rowContainerColor, rowContainerShape)
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    }
     if (bottomBarLiquidGlassEnabled) {
         BottomBarLiquidSegmentedControl(
             items = tabs.map { it.title },
             selectedIndex = selectedIndex,
             onSelected = { index -> tabs.getOrNull(index)?.let { onTabSelected(it.tab) } },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    horizontal = chromeSpec.rowHorizontalInsetDp.dp,
-                    vertical = chromeSpec.rowVerticalInsetDp.dp
-                )
-                .background(chromePalette.rowContainerColor, rowContainerShape)
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+            modifier = tabModifier.then(
+                if (embeddedInPanel) Modifier.padding(horizontal = 2.dp, vertical = 4.dp) else Modifier
+            ),
             height = 46.dp,
             indicatorHeight = 40.dp,
             labelFontSize = 16.sp,
@@ -1562,15 +1634,9 @@ private fun ProfileSpaceTabs(
     }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(
-                horizontal = chromeSpec.rowHorizontalInsetDp.dp,
-                vertical = chromeSpec.rowVerticalInsetDp.dp
-            )
-            .background(chromePalette.rowContainerColor, rowContainerShape)
+        modifier = tabModifier
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp),
+            .then(if (!embeddedInPanel) Modifier else Modifier.padding(horizontal = 2.dp)),
         horizontalArrangement = Arrangement.spacedBy(28.dp)
     ) {
         tabs.forEach { item ->
@@ -1620,7 +1686,9 @@ private fun ProfileSpaceTabBody(
     onAccountManageClick: () -> Unit,
     onLogout: () -> Unit,
     onDynamicDeleteClick: (DynamicDeleteAction) -> Unit,
-    chromePalette: ProfileSpaceWallpaperChromePalette
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    embeddedInPanel: Boolean = false,
+    isImmersive: Boolean = false
 ) {
     when (space.selectedTab) {
         ProfileSpaceMainTab.HOME -> ProfileSpaceHome(
@@ -1640,7 +1708,9 @@ private fun ProfileSpaceTabBody(
             onInboxClick = onInboxClick,
             onAccountManageClick = onAccountManageClick,
             onLogout = onLogout,
-            chromePalette = chromePalette
+            chromePalette = chromePalette,
+            embeddedInPanel = embeddedInPanel,
+            isImmersive = isImmersive
         )
         ProfileSpaceMainTab.DYNAMIC -> ProfileDynamicList(
             items = space.dynamicItems,
@@ -1671,10 +1741,15 @@ private fun ProfileSpaceHome(
     onInboxClick: () -> Unit,
     onAccountManageClick: () -> Unit,
     onLogout: () -> Unit,
-    chromePalette: ProfileSpaceWallpaperChromePalette
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    embeddedInPanel: Boolean = false,
+    isImmersive: Boolean = false
 ) {
     Column(
-        modifier = Modifier.padding(top = 10.dp, bottom = 24.dp),
+        modifier = Modifier.padding(
+            top = if (embeddedInPanel) 6.dp else 10.dp,
+            bottom = if (embeddedInPanel) 0.dp else 24.dp
+        ),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         resolveProfileSpaceHomeSections(
@@ -1690,17 +1765,42 @@ private fun ProfileSpaceHome(
                     folders = space.favoriteFolders,
                     count = space.favoriteFolderCount,
                     onMoreClick = onFavoriteClick,
-                    onFolderClick = onFavoriteFolderClick
+                    onFolderClick = onFavoriteFolderClick,
+                    chromePalette = chromePalette,
+                    isImmersive = isImmersive
                 )
                 ProfileSpaceHomeSection.BANGUMI -> ProfileBangumiStrip(
                     items = space.bangumiItems,
                     count = space.bangumiCount,
                     onMoreClick = onBangumiMoreClick,
-                    onBangumiClick = onBangumiClick
+                    onBangumiClick = onBangumiClick,
+                    chromePalette = chromePalette,
+                    isImmersive = isImmersive
                 )
-                ProfileSpaceHomeSection.COIN_VIDEOS -> ProfileAggregateVideoStrip("最近投币的视频", space.coinVideoCount, space.coinVideos, onVideoClick)
-                ProfileSpaceHomeSection.LIKE_VIDEOS -> ProfileAggregateVideoStrip("最近点赞的视频", space.likeVideoCount, space.likeVideos, onVideoClick)
-                ProfileSpaceHomeSection.CONTRIBUTIONS -> ProfileVideoStrip("投稿预览", space.contributionVideoCount, space.contributionVideos, onVideoClick)
+                ProfileSpaceHomeSection.COIN_VIDEOS -> ProfileAggregateVideoStrip(
+                    title = "最近投币的视频",
+                    count = space.coinVideoCount,
+                    videos = space.coinVideos,
+                    onVideoClick = onVideoClick,
+                    chromePalette = chromePalette,
+                    isImmersive = isImmersive
+                )
+                ProfileSpaceHomeSection.LIKE_VIDEOS -> ProfileAggregateVideoStrip(
+                    title = "最近点赞的视频",
+                    count = space.likeVideoCount,
+                    videos = space.likeVideos,
+                    onVideoClick = onVideoClick,
+                    chromePalette = chromePalette,
+                    isImmersive = isImmersive
+                )
+                ProfileSpaceHomeSection.CONTRIBUTIONS -> ProfileVideoStrip(
+                    title = "投稿预览",
+                    count = space.contributionVideoCount,
+                    videos = space.contributionVideos,
+                    onVideoClick = onVideoClick,
+                    chromePalette = chromePalette,
+                    isImmersive = isImmersive
+                )
                 ProfileSpaceHomeSection.SERVICES -> if (showServices) {
                     ProfileSpaceServices(
                         favoriteFolderShortcuts = favoriteFolderShortcuts,
@@ -1713,7 +1813,8 @@ private fun ProfileSpaceHome(
                         onInboxClick = onInboxClick,
                         onAccountManageClick = onAccountManageClick,
                         onLogout = onLogout,
-                        chromePalette = chromePalette
+                        chromePalette = chromePalette,
+                        embeddedInPanel = embeddedInPanel
                     )
                 }
             }
@@ -1733,13 +1834,14 @@ private fun ProfileSpaceServices(
     onInboxClick: () -> Unit,
     onAccountManageClick: () -> Unit,
     onLogout: () -> Unit,
-    chromePalette: ProfileSpaceWallpaperChromePalette
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    embeddedInPanel: Boolean = false
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "我的服务",
             style = MaterialTheme.typography.titleMedium,
-            color = chromePalette.serviceTextColor,
+            color = chromePalette.sectionTextColor,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 20.dp)
         )
@@ -1757,7 +1859,12 @@ private fun ProfileSpaceServices(
             onLogout = onLogout,
             containerColor = chromePalette.serviceContainerColor,
             contentColor = chromePalette.serviceTextColor,
-            borderColor = chromePalette.serviceBorderColor,
+            borderColor = when {
+                embeddedInPanel -> null
+                chromePalette.serviceBorderColor.alpha > 0f -> chromePalette.serviceBorderColor
+                else -> null
+            },
+            embeddedInPanel = embeddedInPanel,
             isLogin = true
         )
     }
@@ -1769,9 +1876,16 @@ private fun ProfileFavoriteFolderStrip(
     folders: List<FavFolder>,
     count: Int,
     onMoreClick: () -> Unit,
-    onFolderClick: (Long, Long, String) -> Unit
+    onFolderClick: (Long, Long, String) -> Unit,
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    isImmersive: Boolean
 ) {
-    ProfileSpaceSection(title = "收藏", count = count, onMoreClick = onMoreClick) {
+    ProfileSpaceSection(
+        title = "收藏",
+        count = count,
+        onMoreClick = onMoreClick,
+        textColor = if (isImmersive) chromePalette.sectionTextColor else MaterialTheme.colorScheme.onSurface
+    ) {
         folders.take(6).forEach { folder ->
             ProfileSpacePosterCard(
                 title = folder.title,
@@ -1790,9 +1904,16 @@ private fun ProfileBangumiStrip(
     items: List<FollowBangumiItem>,
     count: Int,
     onMoreClick: () -> Unit,
-    onBangumiClick: (Long, Long) -> Unit
+    onBangumiClick: (Long, Long) -> Unit,
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    isImmersive: Boolean
 ) {
-    ProfileSpaceSection(title = "追番", count = count, onMoreClick = onMoreClick) {
+    ProfileSpaceSection(
+        title = "追番",
+        count = count,
+        onMoreClick = onMoreClick,
+        textColor = if (isImmersive) chromePalette.sectionTextColor else MaterialTheme.colorScheme.onSurface
+    ) {
         items.take(8).forEach { item ->
             ProfileSpacePosterCard(
                 title = item.title,
@@ -1811,9 +1932,16 @@ private fun ProfileAggregateVideoStrip(
     title: String,
     count: Int,
     videos: List<SpaceAggregateArchiveItem>,
-    onVideoClick: (String) -> Unit
+    onVideoClick: (String) -> Unit,
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    isImmersive: Boolean
 ) {
-    ProfileSpaceSection(title = title, count = count, onMoreClick = {}) {
+    ProfileSpaceSection(
+        title = title,
+        count = count,
+        onMoreClick = {},
+        textColor = if (isImmersive) chromePalette.sectionTextColor else MaterialTheme.colorScheme.onSurface
+    ) {
         videos.take(8).forEach { video ->
             ProfileSpacePosterCard(
                 title = video.title,
@@ -1828,8 +1956,20 @@ private fun ProfileAggregateVideoStrip(
 }
 
 @Composable
-private fun ProfileVideoStrip(title: String, count: Int, videos: List<SpaceVideoItem>, onVideoClick: (String) -> Unit) {
-    ProfileSpaceSection(title = title, count = count, onMoreClick = {}) {
+private fun ProfileVideoStrip(
+    title: String,
+    count: Int,
+    videos: List<SpaceVideoItem>,
+    onVideoClick: (String) -> Unit,
+    chromePalette: ProfileSpaceWallpaperChromePalette,
+    isImmersive: Boolean
+) {
+    ProfileSpaceSection(
+        title = title,
+        count = count,
+        onMoreClick = {},
+        textColor = if (isImmersive) chromePalette.sectionTextColor else MaterialTheme.colorScheme.onSurface
+    ) {
         videos.take(8).forEach { video ->
             ProfileSpacePosterCard(
                 title = video.title,
@@ -1844,7 +1984,13 @@ private fun ProfileVideoStrip(title: String, count: Int, videos: List<SpaceVideo
 }
 
 @Composable
-private fun ProfileSpaceSection(title: String, count: Int, onMoreClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+private fun ProfileSpaceSection(
+    title: String,
+    count: Int,
+    onMoreClick: () -> Unit,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    content: @Composable RowScope.() -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier
@@ -1855,12 +2001,12 @@ private fun ProfileSpaceSection(title: String, count: Int, onMoreClick: () -> Un
             Text(
                 text = if (count > 0) "$title  ${FormatUtils.formatStat(count.toLong())}" else title,
                 style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
+                color = textColor,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
             TextButton(onClick = onMoreClick) {
-                Text("查看更多")
+                Text("查看更多", color = textColor.copy(alpha = 0.72f))
             }
         }
         Row(
@@ -3528,6 +3674,7 @@ fun ServicesSection(
     containerColor: Color = MaterialTheme.colorScheme.surface,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
     borderColor: Color? = null,
+    embeddedInPanel: Boolean = false,
     isLogin: Boolean = true,
     isTablet: Boolean = false,
     modifier: Modifier = Modifier,
@@ -3588,7 +3735,7 @@ fun ServicesSection(
         }
 
     } else {
-        val useImmersiveServiceLayout = borderColor != null
+        val useImmersiveServiceLayout = borderColor != null || embeddedInPanel
         if (useImmersiveServiceLayout) {
             Column(
                 modifier = modifier
@@ -3596,10 +3743,7 @@ fun ServicesSection(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                ProfileServicesListIsland(
-                    containerColor = containerColor,
-                    borderColor = borderColor
-                ) {
+                val serviceRows: @Composable ColumnScope.() -> Unit = {
                     ProfileServiceRow(
                         icon = downloadIcon,
                         title = "离线缓存",
@@ -3654,6 +3798,16 @@ fun ServicesSection(
                         textColor = contentColor,
                     )
                 }
+                if (embeddedInPanel) {
+                    Column(content = serviceRows)
+                } else {
+                    ProfileServicesListIsland(
+                        containerColor = containerColor,
+                        borderColor = borderColor
+                    ) {
+                        serviceRows()
+                    }
+                }
                 ProfileAccountActionArea(
                     accountIcon = accountIcon,
                     onAccountManageClick = onAccountManageClick,
@@ -3661,7 +3815,8 @@ fun ServicesSection(
                     isLogin = isLogin,
                     textColor = contentColor,
                     containerColor = containerColor,
-                    borderColor = borderColor
+                    borderColor = if (embeddedInPanel) null else borderColor,
+                    embeddedInPanel = embeddedInPanel
                 )
             }
         } else {
@@ -3827,13 +3982,11 @@ private fun ProfileAccountActionArea(
     isLogin: Boolean,
     textColor: Color,
     containerColor: Color,
-    borderColor: Color?
+    borderColor: Color?,
+    embeddedInPanel: Boolean = false
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        ProfileServicesListIsland(
-            containerColor = containerColor,
-            borderColor = borderColor
-        ) {
+        if (embeddedInPanel) {
             ProfileServiceRow(
                 icon = accountIcon,
                 title = "账号切换",
@@ -3841,12 +3994,36 @@ private fun ProfileAccountActionArea(
                 iconTint = iOSOrange,
                 textColor = textColor
             )
+            ProfileServiceDivider(textColor)
+        } else {
+            ProfileServicesListIsland(
+                containerColor = containerColor,
+                borderColor = borderColor
+            ) {
+                ProfileServiceRow(
+                    icon = accountIcon,
+                    title = "账号切换",
+                    onClick = onAccountManageClick,
+                    iconTint = iOSOrange,
+                    textColor = textColor
+                )
+            }
+        }
+        val logoutShape = RoundedCornerShape(22.dp)
+        val logoutContainer = if (embeddedInPanel) {
+            textColor.copy(alpha = 0.08f)
+        } else {
+            containerColor.copy(alpha = 0.72f)
         }
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            color = containerColor.copy(alpha = 0.72f),
-            border = borderColor?.let { BorderStroke(0.5.dp, it.copy(alpha = 0.72f)) },
+            shape = logoutShape,
+            color = logoutContainer,
+            border = if (embeddedInPanel) {
+                null
+            } else {
+                borderColor?.let { BorderStroke(0.5.dp, it.copy(alpha = 0.72f)) }
+            },
             shadowElevation = 0.dp,
             tonalElevation = 0.dp
         ) {
