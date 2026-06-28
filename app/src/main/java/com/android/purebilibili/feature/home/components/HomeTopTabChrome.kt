@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.android.purebilibili.feature.home.HomeTopTabGestureAction
 import com.android.purebilibili.feature.home.resolveHomeTopTabGestureAction
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
+
 import com.android.purebilibili.core.store.LiquidGlassStyle
 import com.android.purebilibili.core.ui.adaptive.MotionTier
 import com.android.purebilibili.core.ui.AppShapes
@@ -55,7 +55,6 @@ internal fun HomeTopTabChrome(
     backdrop: LayerBackdrop?,
     liquidStyle: LiquidGlassStyle,
     liquidGlassTuning: LiquidGlassTuning? = null,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     motionTier: MotionTier,
     isScrolling: Boolean,
     isTransitionRunning: Boolean,
@@ -149,7 +148,7 @@ internal fun HomeTopTabChrome(
                                 backdrop = backdrop,
                                 liquidGlassStyle = liquidStyle,
                                 liquidGlassTuning = liquidGlassTuning,
-                                liquidGlassPreset = liquidGlassPreset,
+
                                 motionTier = motionTier,
                                 isTransitionRunning = isTransitionRunning,
                                 forceLowBlurBudget = forceLowBlurBudget,

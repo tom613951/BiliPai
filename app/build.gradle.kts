@@ -339,7 +339,7 @@ dependencies {
     
     // --- 3.8 Backdrop (液态玻璃效果) ---
     // 提供透镜折射、玻璃高光、连续圆角等 iOS/visionOS 风格视觉效果
-    implementation("io.github.kyant0:backdrop:2.0.0-alpha03")
+    implementation("io.github.kyant0:backdrop:2.0.0")
 
 
     // --- 4. Player (视频播放器 Media3) ---

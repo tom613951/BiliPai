@@ -3,7 +3,6 @@ package com.android.purebilibili.feature.home.components
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.util.lerp
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
 
 internal data class BottomBarInnerRimGlowSpec(
     val radiusDp: Float,
@@ -30,7 +29,6 @@ internal data class BottomBarGlassMaterialSpec(
 )
 
 internal fun resolveBottomBarGlassMaterialSpec(
-    preset: BottomBarLiquidGlassPreset,
     isDarkTheme: Boolean,
     isScrolling: Boolean,
     scrollProgress: Float = if (isScrolling) 1f else 0f,
@@ -52,56 +50,6 @@ internal fun resolveBottomBarGlassMaterialSpec(
             shellShader = null
         )
     }
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED -> bilipaiTunedBottomBarGlassMaterial()
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> ios26BottomBarGlassMaterial(
-            motionProgress = motionProgress,
-            pressProgress = pressProgress,
-            scrollProgress = scrollProgress
-        )
-    }
-}
-
-internal fun resolveBottomBarGlassMaterialContainerColor(
-    surfaceColor: Color,
-    preset: BottomBarLiquidGlassPreset,
-    glassEnabled: Boolean,
-    fallbackAlpha: Float
-): Color {
-    if (!glassEnabled) return surfaceColor.copy(alpha = fallbackAlpha)
-    val isDarkSurface = surfaceColor.luminance() < 0.5f
-    val alpha = when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED -> if (isDarkSurface) 0.30f else 0.38f
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> 0.40f
-    }
-    return surfaceColor.copy(alpha = alpha)
-}
-
-private fun bilipaiTunedBottomBarGlassMaterial(): BottomBarGlassMaterialSpec =
-    BottomBarGlassMaterialSpec(
-        blurRadiusDp = 4f,
-        vibrancy = true,
-        shellRefractionHeightDp = 24f,
-        shellRefractionAmountDp = 24f,
-        shellChromaticAberration = 0f,
-        foregroundTint = Color.Transparent,
-        highlightWidthScale = 1f,
-        shadowAlphaScale = 1f,
-        innerRimGlow = null,
-        shellShader = null
-    )
-
-internal fun resolveBottomBarMaterialScrollAnimationDurationMillis(
-    isScrolling: Boolean
-): Int = if (isScrolling) 140 else 420
-
-private fun ios26BottomBarGlassMaterial(
-    motionProgress: Float,
-    pressProgress: Float,
-    scrollProgress: Float
-): BottomBarGlassMaterialSpec {
-    // iOS26 在底栏实际走 Miuix/KSU drawBackdrop 链；这条链不消费 shellShader。
-    // 因此壳层主材质必须使用 KSU 可见的 vibrancy + blur + lens 组合，否则只剩淡底色和弱内圈。
     val scrollLift = scrollProgress.coerceIn(0f, 1f)
     return BottomBarGlassMaterialSpec(
         blurRadiusDp = 4f,
@@ -119,6 +67,21 @@ private fun ios26BottomBarGlassMaterial(
         shellShader = null
     )
 }
+
+internal fun resolveBottomBarGlassMaterialContainerColor(
+    surfaceColor: Color,
+    glassEnabled: Boolean,
+    fallbackAlpha: Float
+): Color {
+    if (!glassEnabled) return surfaceColor.copy(alpha = fallbackAlpha)
+    val isDarkSurface = surfaceColor.luminance() < 0.5f
+    val alpha = if (isDarkSurface) 0.30f else 0.38f
+    return surfaceColor.copy(alpha = alpha)
+}
+
+internal fun resolveBottomBarMaterialScrollAnimationDurationMillis(
+    isScrolling: Boolean
+): Int = if (isScrolling) 140 else 420
 
 internal data class LiquidGlassShaderUniforms(
     val centerX: Float,

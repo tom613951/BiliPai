@@ -68,7 +68,6 @@ import com.android.purebilibili.core.util.responsiveContentWidth
 import com.android.purebilibili.core.ui.rememberAppBackIcon
 import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.store.HomeSettings
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
 import com.android.purebilibili.core.store.SettingsManager
 import com.android.purebilibili.core.store.resolveEffectiveLiquidGlassEnabled
 import com.android.purebilibili.core.theme.LocalUiPreset
@@ -594,7 +593,6 @@ private fun PartitionSideRailMovingIndicator(
             indicatorWidth = indicatorWidth,
             indicatorHeight = PartitionSideRailItemHeight,
             shellShape = shape,
-            liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
             contentBackdrop = backdrop,
             backdrop = backdrop,
             indicatorLensSpec = indicatorLensSpec,

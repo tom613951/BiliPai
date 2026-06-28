@@ -47,7 +47,6 @@ class HomeSettingsMappingPolicyTest {
         assertEquals(BottomBarSearchLayoutMode.FULL_DOCK, result.bottomBarSearchLayoutMode)
         assertFalse(result.androidNativeLiquidGlassEnabled)
         assertFalse(result.isLiquidGlassEnabled)
-        assertEquals(BottomBarLiquidGlassPreset.BILIPAI_TUNED, result.bottomBarLiquidGlassPreset)
         assertEquals(LiquidGlassStyle.SUKISU, result.liquidGlassStyle)
         assertEquals(LiquidGlassMode.BALANCED, result.liquidGlassMode)
         assertEquals(0.52f, result.liquidGlassStrength)
@@ -95,7 +94,6 @@ class HomeSettingsMappingPolicyTest {
             booleanPreferencesKey("bottom_bar_search_enabled") to true,
             intPreferencesKey("bottom_bar_search_auto_expand_mode") to BottomBarSearchAutoExpandMode.DISABLED.value,
             intPreferencesKey("bottom_bar_search_layout_mode") to BottomBarSearchLayoutMode.HOME_AND_SEARCH.value,
-            intPreferencesKey("bottom_bar_liquid_glass_preset") to 1,
             booleanPreferencesKey("android_native_liquid_glass_enabled") to true,
             intPreferencesKey("liquid_glass_style") to LiquidGlassStyle.IOS26.value,
             intPreferencesKey("grid_column_count") to 4,
@@ -143,8 +141,6 @@ class HomeSettingsMappingPolicyTest {
         assertEquals(BottomBarSearchLayoutMode.HOME_AND_SEARCH, result.bottomBarSearchLayoutMode)
         assertTrue(result.androidNativeLiquidGlassEnabled)
         assertFalse(result.isLiquidGlassEnabled)
-        // bottom_bar_liquid_glass_preset = 1 现在解析为 iOS 26 玻璃（早期为占位回退 BILIPAI）
-        assertEquals(BottomBarLiquidGlassPreset.IOS26_REFINED, result.bottomBarLiquidGlassPreset)
         assertEquals(LiquidGlassStyle.SUKISU, result.liquidGlassStyle)
         assertEquals(LiquidGlassMode.BALANCED, result.liquidGlassMode)
         assertEquals(0.52f, result.liquidGlassStrength)

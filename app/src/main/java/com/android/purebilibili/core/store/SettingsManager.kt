@@ -105,28 +105,6 @@ enum class LiquidGlassMode(val value: Int, val label: String) {
     }
 }
 
-enum class BottomBarLiquidGlassPreset(
-    val value: Int,
-    val label: String,
-    val description: String
-) {
-    BILIPAI_TUNED(
-        0,
-        "BiliPai 调校",
-        "保留当前多层折射、色散和指示器动效"
-    ),
-    IOS26_REFINED(
-        1,
-        "iOS 26 玻璃",
-        "厚边折射 + 顶光高亮环，无色散，沿用 BiliPai 指示器滑动与配色"
-    );
-
-    companion object {
-        fun fromValue(value: Int): BottomBarLiquidGlassPreset =
-            entries.find { it.value == value } ?: BILIPAI_TUNED
-    }
-}
-
 internal fun resolveLegacyLiquidGlassMode(style: LiquidGlassStyle): LiquidGlassMode = when (style) {
     LiquidGlassStyle.IOS26 -> LiquidGlassMode.CLEAR
     LiquidGlassStyle.CLASSIC -> LiquidGlassMode.BALANCED
@@ -416,8 +394,6 @@ data class HomeSettings(
     val isTopBarLiquidGlassEnabled: Boolean = false,
     val isHomeSearchLiquidGlassEnabled: Boolean = false,
     val isBottomBarLiquidGlassEnabled: Boolean = false,
-    val bottomBarLiquidGlassPreset: BottomBarLiquidGlassPreset =
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     val bottomBarInteractiveHighlightEnabled: Boolean = true,
     val isBottomBarSearchEnabled: Boolean = false,
     val bottomBarSearchAutoExpandMode: BottomBarSearchAutoExpandMode =
@@ -1078,7 +1054,6 @@ object SettingsManager {
     private val KEY_HOME_SEARCH_LIQUID_GLASS_ENABLED =
         booleanPreferencesKey("home_search_liquid_glass_enabled")
     private val KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED = booleanPreferencesKey("bottom_bar_liquid_glass_enabled")
-    private val KEY_BOTTOM_BAR_LIQUID_GLASS_PRESET = intPreferencesKey("bottom_bar_liquid_glass_preset")
     private val KEY_BOTTOM_BAR_INTERACTIVE_HIGHLIGHT_ENABLED =
         booleanPreferencesKey("bottom_bar_interactive_highlight_enabled")
     private val KEY_BOTTOM_BAR_SEARCH_ENABLED = booleanPreferencesKey("bottom_bar_search_enabled")
@@ -1211,10 +1186,6 @@ object SettingsManager {
                 preferences[KEY_HOME_SEARCH_LIQUID_GLASS_ENABLED]
                     ?: (preferences[KEY_TOP_BAR_LIQUID_GLASS_ENABLED] ?: false),
             isBottomBarLiquidGlassEnabled = preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED] ?: legacyLiquidGlassEnabled,
-            bottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.fromValue(
-                preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_PRESET]
-                    ?: BottomBarLiquidGlassPreset.BILIPAI_TUNED.value
-            ),
             bottomBarInteractiveHighlightEnabled = true,
             isBottomBarSearchEnabled = preferences[KEY_BOTTOM_BAR_SEARCH_ENABLED] ?: false,
             bottomBarSearchAutoExpandMode = BottomBarSearchAutoExpandMode.fromValue(
@@ -2899,24 +2870,6 @@ object SettingsManager {
     suspend fun setBottomBarLiquidGlassEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED] = value
-        }
-    }
-
-    fun getBottomBarLiquidGlassPreset(context: Context): Flow<BottomBarLiquidGlassPreset> =
-        context.settingsDataStore.data.map { preferences ->
-            BottomBarLiquidGlassPreset.fromValue(
-                preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_PRESET]
-                    ?: BottomBarLiquidGlassPreset.BILIPAI_TUNED.value
-            )
-        }
-
-    suspend fun setBottomBarLiquidGlassPreset(
-        context: Context,
-        preset: BottomBarLiquidGlassPreset
-    ) {
-        val effectivePreset = BottomBarLiquidGlassPreset.fromValue(preset.value)
-        context.settingsDataStore.edit { preferences ->
-            preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_PRESET] = effectivePreset.value
         }
     }
 
@@ -5908,7 +5861,6 @@ object SettingsManager {
             BooleanShareablePreferenceDefinition(KEY_HEADER_BLUR_ENABLED, SettingsShareSection.APPEARANCE),
             BooleanShareablePreferenceDefinition(KEY_BOTTOM_BAR_BLUR_ENABLED, SettingsShareSection.APPEARANCE),
             BooleanShareablePreferenceDefinition(KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED, SettingsShareSection.APPEARANCE),
-            IntShareablePreferenceDefinition(KEY_BOTTOM_BAR_LIQUID_GLASS_PRESET, SettingsShareSection.APPEARANCE),
             IntShareablePreferenceDefinition(KEY_BOTTOM_BAR_SEARCH_LAYOUT_MODE, SettingsShareSection.APPEARANCE),
             BooleanShareablePreferenceDefinition(
                 KEY_ANDROID_NATIVE_LIQUID_GLASS_ENABLED,

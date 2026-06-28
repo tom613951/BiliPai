@@ -2,7 +2,7 @@ package com.android.purebilibili.feature.home.components
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
+
 import com.android.purebilibili.core.theme.UiPreset
 import com.android.purebilibili.core.ui.blur.BlurIntensity
 import kotlin.test.Test
@@ -146,26 +146,15 @@ class BottomBarSurfaceColorPolicyTest {
             blurEnabled = true,
             darkTheme = true
         )
-        val bilipai = resolveAndroidNativeFloatingBottomBarContainerColor(
+        val darkGlass = resolveAndroidNativeFloatingBottomBarContainerColor(
             surfaceColor = Color.Black,
             tuning = tuning,
             glassEnabled = true,
             blurEnabled = true,
-            blurIntensity = BlurIntensity.THIN,
-            liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED
-        )
-        val ios26 = resolveAndroidNativeFloatingBottomBarContainerColor(
-            surfaceColor = Color.Black,
-            tuning = tuning,
-            glassEnabled = true,
-            blurEnabled = true,
-            blurIntensity = BlurIntensity.THIN,
-            liquidGlassPreset = BottomBarLiquidGlassPreset.IOS26_REFINED
+            blurIntensity = BlurIntensity.THIN
         )
 
-        assertEquals(0.30f, bilipai.alpha, 0.003f)
-        assertEquals(0.40f, ios26.alpha, 0.003f)
-        assertTrue(ios26.alpha > bilipai.alpha)
+        assertEquals(0.30f, darkGlass.alpha, 0.003f)
     }
 
     @Test
@@ -546,37 +535,12 @@ class BottomBarSurfaceColorPolicyTest {
     }
 
     @Test
-    fun `ios26 idle glass indicator uses same ksu overlay in dark mode`() {
-        val tunedDark = resolveBottomBarIdleIndicatorSurfaceColor(
-            preset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-            darkTheme = true
-        )
-        val ios26Dark = resolveBottomBarIdleIndicatorSurfaceColor(
-            preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
-            darkTheme = true
-        )
+    fun `idle glass indicator uses ksu overlay in dark and light mode`() {
+        val dark = resolveBottomBarIdleIndicatorSurfaceColor(darkTheme = true)
+        val light = resolveBottomBarIdleIndicatorSurfaceColor(darkTheme = false)
 
-        assertEquals(tunedDark.red, ios26Dark.red, 0.001f)
-        assertEquals(tunedDark.green, ios26Dark.green, 0.001f)
-        assertEquals(tunedDark.blue, ios26Dark.blue, 0.001f)
-        assertEquals(tunedDark.alpha, ios26Dark.alpha, 0.001f)
-    }
-
-    @Test
-    fun `ios26 idle glass indicator keeps ksu low alpha overlay in light mode`() {
-        val tunedLight = resolveBottomBarIdleIndicatorSurfaceColor(
-            preset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-            darkTheme = false
-        )
-        val ios26Light = resolveBottomBarIdleIndicatorSurfaceColor(
-            preset = BottomBarLiquidGlassPreset.IOS26_REFINED,
-            darkTheme = false
-        )
-
-        assertEquals(tunedLight.red, ios26Light.red, 0.001f)
-        assertEquals(tunedLight.green, ios26Light.green, 0.001f)
-        assertEquals(tunedLight.blue, ios26Light.blue, 0.001f)
-        assertEquals(tunedLight.alpha, ios26Light.alpha, 0.001f)
+        assertEquals(0.1f, dark.alpha, 0.003f)
+        assertEquals(0.1f, light.alpha, 0.003f)
     }
 
     @Test

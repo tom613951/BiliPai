@@ -161,7 +161,6 @@ import com.android.purebilibili.feature.home.components.liquid.vibrancy as miuix
 import androidx.compose.foundation.shape.RoundedCornerShape as RoundedCornerShapeAlias
 import androidx.compose.ui.Modifier.Companion.then
 import dev.chrisbanes.haze.hazeSource
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
 import com.android.purebilibili.core.store.BottomBarSearchAutoExpandMode
 import com.android.purebilibili.core.store.BottomBarSearchLayoutMode
 import com.android.purebilibili.core.store.LiquidGlassStyle // [New] Top-level enum
@@ -866,33 +865,11 @@ internal fun shouldRenderBottomBarHeavyInteractiveEffects(
     return isBottomBarInteractionActive && progress > BottomBarTransientAlphaThreshold
 }
 
-internal fun shouldUseBottomBarCombinedIndicatorBackdrop(
-    preset: BottomBarLiquidGlassPreset
-): Boolean {
-    // IOS26_REFINED 在指示器路径上完全等价 BILIPAI_TUNED，仅在壳层材质链上有差异
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> true
-    }
-}
+internal fun shouldUseBottomBarCombinedIndicatorBackdrop(): Boolean = true
 
-internal fun shouldRenderBottomBarForegroundAboveIndicator(
-    preset: BottomBarLiquidGlassPreset
-): Boolean {
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> false
-    }
-}
+internal fun shouldRenderBottomBarForegroundAboveIndicator(): Boolean = false
 
-internal fun shouldUseBottomBarIndicatorLens(
-    preset: BottomBarLiquidGlassPreset
-): Boolean {
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> true
-    }
-}
+internal fun shouldUseBottomBarIndicatorLens(): Boolean = true
 
 internal fun shouldComposeBottomBarDockContent(
     dockContentAlpha: Float,
@@ -921,12 +898,10 @@ internal fun resolveAndroidNativeBottomBarTuning(
 internal fun resolveAndroidNativeBottomBarContainerColor(
     surfaceColor: Color,
     tuning: AndroidNativeBottomBarTuning,
-    glassEnabled: Boolean,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED
+    glassEnabled: Boolean
 ): Color {
     return resolveBottomBarGlassMaterialContainerColor(
         surfaceColor = surfaceColor,
-        preset = liquidGlassPreset,
         glassEnabled = glassEnabled,
         fallbackAlpha = tuning.shellSurfaceAlpha
     )
@@ -938,15 +913,13 @@ internal fun resolveAndroidNativeFloatingBottomBarContainerColor(
     glassEnabled: Boolean,
     blurEnabled: Boolean,
     blurIntensity: com.android.purebilibili.core.ui.blur.BlurIntensity,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     globalWallpaperVisible: Boolean = false
 ): Color {
     val resolvedColor = if (glassEnabled) {
         resolveAndroidNativeBottomBarContainerColor(
             surfaceColor = surfaceColor,
             tuning = tuning,
-            glassEnabled = true,
-            liquidGlassPreset = liquidGlassPreset
+            glassEnabled = true
         )
     } else {
         resolveBottomBarSurfaceColor(
@@ -1016,7 +989,6 @@ internal fun Modifier.kernelSuFloatingDockSurface(
     motionTier: MotionTier,
     isTransitionRunning: Boolean,
     forceLowBlurBudget: Boolean,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     isScrolling: Boolean = false,
     materialScrollProgress: Float = if (isScrolling) 1f else 0f,
     materialMotionProgress: Float = 0f,
@@ -1024,7 +996,6 @@ internal fun Modifier.kernelSuFloatingDockSurface(
 ): Modifier = composed {
     val isDarkTheme = resolveBottomBarDarkTheme(AppSurfaceTokens.chromeBackground())
     val materialSpec: BottomBarGlassMaterialSpec = resolveBottomBarGlassMaterialSpec(
-        preset = liquidGlassPreset,
         isDarkTheme = isDarkTheme,
         isScrolling = isScrolling,
         scrollProgress = materialScrollProgress,
@@ -1179,19 +1150,27 @@ internal fun Modifier.kernelSuMiuixFloatingDockSurface(
     motionTier: MotionTier,
     isTransitionRunning: Boolean,
     forceLowBlurBudget: Boolean,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     isScrolling: Boolean = false,
     materialScrollProgress: Float = 0f,
     materialMotionProgress: Float = 0f,
     materialPressProgress: Float = 0f
 ): Modifier = composed {
     val isDarkTheme = resolveBottomBarDarkTheme(AppSurfaceTokens.chromeBackground())
+    val materialSpec = resolveBottomBarGlassMaterialSpec(
+        isDarkTheme = isDarkTheme,
+        isScrolling = isScrolling,
+        scrollProgress = materialScrollProgress,
+        glassEnabled = glassEnabled,
+        motionProgress = materialMotionProgress,
+        pressProgress = materialPressProgress
+    )
     val useHazeBlur = shouldUseAndroidNativeFloatingHazeBlur(
         glassEnabled = glassEnabled,
         blurEnabled = blurEnabled,
         hasHazeState = hazeState != null
     )
     val baseHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, extraDegrees = -45f)
+    val innerRimGlow = materialSpec.innerRimGlow
 
     this
         .then(
@@ -1225,12 +1204,19 @@ internal fun Modifier.kernelSuMiuixFloatingDockSurface(
                         shape = { shape },
                         effects = {
                             if (glassEnabled) {
-                                miuixVibrancy()
-                                miuixBlur(4.dp.toPx(), 4.dp.toPx())
-                                if (drawShellLens) {
+                                if (materialSpec.vibrancy) {
+                                    miuixVibrancy()
+                                }
+                                val shellBlurRadiusPx = (materialSpec.blurRadiusDp?.dp ?: blurRadius).toPx()
+                                miuixBlur(shellBlurRadiusPx, shellBlurRadiusPx)
+                                if (
+                                    drawShellLens &&
+                                    materialSpec.shellRefractionHeightDp > 0f &&
+                                    materialSpec.shellRefractionAmountDp > 0f
+                                ) {
                                     miuixLens(
-                                        refractionHeight = 24.dp.toPx(),
-                                        refractionAmount = 24.dp.toPx()
+                                        refractionHeight = materialSpec.shellRefractionHeightDp.dp.toPx(),
+                                        refractionAmount = materialSpec.shellRefractionAmountDp.dp.toPx()
                                     )
                                 }
                             } else if (blurEnabled && !useHazeBlur) {
@@ -1251,8 +1237,24 @@ internal fun Modifier.kernelSuMiuixFloatingDockSurface(
                         } else null,
                         onDrawSurface = {
                             drawRect(containerColor)
+                            if (materialSpec.foregroundTint.alpha > 0f) {
+                                drawRect(materialSpec.foregroundTint)
+                            }
                         }
                     )
+                    .run {
+                        if (glassEnabled && innerRimGlow != null) {
+                            miuixInnerShadow(shape = shape) {
+                                MiuixInnerShadow(
+                                    radius = innerRimGlow.radiusDp.dp,
+                                    alpha = innerRimGlow.alpha,
+                                    color = if (isDarkTheme) Color.White else Color.Black
+                                )
+                            }
+                        } else {
+                            this
+                        }
+                    }
             } else {
                 background(containerColor, shape)
             }
@@ -1388,7 +1390,6 @@ internal fun resolveBottomBarDarkTheme(backgroundColor: Color): Boolean {
 }
 
 internal fun resolveBottomBarIdleIndicatorSurfaceColor(
-    preset: BottomBarLiquidGlassPreset,
     darkTheme: Boolean
 ): Color {
     return resolveAndroidNativeIdleIndicatorSurfaceColor(darkTheme)
@@ -1727,19 +1728,14 @@ internal fun resolveBottomBarBackdropPresetProgress(
 }
 
 internal fun resolveBottomBarEffectiveBackdropPresetProgress(
-    preset: BottomBarLiquidGlassPreset,
     motionProgress: Float,
     pressProgress: Float
 ): BottomBarBackdropPresetProgress {
-    val base = resolveBottomBarBackdropPresetProgress(
+    return resolveBottomBarBackdropPresetProgress(
         motionProgress = motionProgress,
         verticalProgress = 0f,
         pressProgress = pressProgress
     )
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> base
-    }
 }
 
 @Suppress("UNUSED_PARAMETER")
@@ -2048,28 +2044,14 @@ internal fun resolveBottomBarRefractionMotionProfile(
     )
 }
 
-internal fun resolveBottomBarEffectiveRefractionMotionProfile(
-    preset: BottomBarLiquidGlassPreset,
-    profile: BottomBarRefractionMotionProfile
-): BottomBarRefractionMotionProfile {
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> profile
-    }
-}
-
-internal fun resolveBottomBarPresetPanelOffsets(
-    preset: BottomBarLiquidGlassPreset,
+internal fun resolveBottomBarPanelOffsets(
     rawPanelOffsetPx: Float
 ): BottomBarPresetPanelOffsets {
-    return when (preset) {
-        BottomBarLiquidGlassPreset.BILIPAI_TUNED,
-        BottomBarLiquidGlassPreset.IOS26_REFINED -> BottomBarPresetPanelOffsets(
-            visiblePanelOffsetPx = rawPanelOffsetPx,
-            exportPanelOffsetPx = rawPanelOffsetPx,
-            indicatorPanelOffsetPx = rawPanelOffsetPx
-        )
-    }
+    return BottomBarPresetPanelOffsets(
+        visiblePanelOffsetPx = rawPanelOffsetPx,
+        exportPanelOffsetPx = rawPanelOffsetPx,
+        indicatorPanelOffsetPx = rawPanelOffsetPx
+    )
 }
 
 internal fun resolveBottomBarMovingIndicatorSurfaceColor(isDarkTheme: Boolean): Color {
@@ -2367,7 +2349,7 @@ fun FrostedBottomBar(
             glassEnabled = glassEnabled,
             blurEnabled = hazeState != null,
             blurIntensity = currentUnifiedBlurIntensity(),
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             globalWallpaperVisible = globalWallpaperVisible
         )
         KernelSuAlignedBottomBar(
@@ -2388,7 +2370,7 @@ fun FrostedBottomBar(
             tuning = tuning,
             glassEnabled = glassEnabled,
             interactiveHighlightEnabled = homeSettings.bottomBarInteractiveHighlightEnabled,
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             iconStyle = SharedFloatingBottomBarIconStyle.CUPERTINO,
             haptic = haptic,
             hazeState = hazeState,
@@ -2499,7 +2481,7 @@ private fun MaterialBottomBar(
             glassEnabled = glassEnabled,
             blurEnabled = blurEnabled,
             blurIntensity = blurIntensity,
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             globalWallpaperVisible = globalWallpaperVisible
         )
     } else {
@@ -2538,7 +2520,7 @@ private fun MaterialBottomBar(
             tuning = androidNativeTuning,
             glassEnabled = glassEnabled,
             interactiveHighlightEnabled = homeSettings.bottomBarInteractiveHighlightEnabled,
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             haptic = haptic,
             bottomBarSearchEnabled = homeSettings.isBottomBarSearchEnabled,
             bottomBarSearchAutoExpandMode = homeSettings.bottomBarSearchAutoExpandMode,
@@ -2755,7 +2737,7 @@ private fun MiuixBottomBar(
             glassEnabled = glassEnabled,
             blurEnabled = blurEnabled,
             blurIntensity = blurIntensity,
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             globalWallpaperVisible = globalWallpaperVisible
         )
     } else {
@@ -2783,7 +2765,7 @@ private fun MiuixBottomBar(
             tuning = tuning,
             glassEnabled = glassEnabled,
             interactiveHighlightEnabled = homeSettings.bottomBarInteractiveHighlightEnabled,
-            liquidGlassPreset = homeSettings.bottomBarLiquidGlassPreset,
+
             iconStyle = SharedFloatingBottomBarIconStyle.CUPERTINO,
             haptic = haptic,
             hazeState = hazeState,
@@ -3036,7 +3018,6 @@ private fun KernelSuAlignedBottomBar(
     tuning: AndroidNativeBottomBarTuning,
     glassEnabled: Boolean,
     interactiveHighlightEnabled: Boolean,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
     iconStyle: SharedFloatingBottomBarIconStyle = SharedFloatingBottomBarIconStyle.MATERIAL,
     haptic: (HapticType) -> Unit,
     hazeState: HazeState? = null,
@@ -3151,10 +3132,7 @@ private fun KernelSuAlignedBottomBar(
         isDragging = dampedDragState.isDragging,
         motionSpec = bottomBarMotionSpec
     )
-    val refractionMotionProfile = resolveBottomBarEffectiveRefractionMotionProfile(
-        preset = liquidGlassPreset,
-        profile = tunedRefractionMotionProfile
-    )
+    val refractionMotionProfile = tunedRefractionMotionProfile
     val effectivePressProgress = dampedDragState.pressProgress
     val motionProgress = maxOf(effectivePressProgress, refractionMotionProfile.progress)
     val indicatorDragScaleProgress = rememberBottomBarIndicatorDragScaleProgress(
@@ -3336,11 +3314,8 @@ private fun KernelSuAlignedBottomBar(
                     }
                 }
             }
-            val presetPanelOffsets = remember(liquidGlassPreset, panelOffsetPx) {
-                resolveBottomBarPresetPanelOffsets(
-                    preset = liquidGlassPreset,
-                    rawPanelOffsetPx = panelOffsetPx
-                )
+            val presetPanelOffsets = remember(panelOffsetPx) {
+                resolveBottomBarPanelOffsets(rawPanelOffsetPx = panelOffsetPx)
             }
             val interactiveHighlightCenterXPx by remember(
                 highlightTranslationXPx,
@@ -3355,9 +3330,8 @@ private fun KernelSuAlignedBottomBar(
                     )
                 }
             }
-            val foregroundAboveIndicator = shouldRenderBottomBarForegroundAboveIndicator(liquidGlassPreset)
+            val foregroundAboveIndicator = shouldRenderBottomBarForegroundAboveIndicator()
             val backdropPresetProgress = resolveBottomBarEffectiveBackdropPresetProgress(
-                preset = liquidGlassPreset,
                 motionProgress = motionProgress,
                 pressProgress = effectivePressProgress
             )
@@ -3373,7 +3347,6 @@ private fun KernelSuAlignedBottomBar(
                 progress = effectivePressProgress
             )
             val indicatorIdleSurfaceColor = resolveBottomBarIdleIndicatorSurfaceColor(
-                preset = liquidGlassPreset,
                 darkTheme = isDarkTheme
             )
             val shellHighlightAlpha = resolveBottomBarShellHighlightAlpha(
@@ -3540,7 +3513,7 @@ private fun KernelSuAlignedBottomBar(
                     shellHighlightAlpha = shellHighlightAlpha,
                     interactiveHighlightCenterXPx = interactiveHighlightCenterXPx,
                     uiSkinDecoration = uiSkinDecoration,
-                    liquidGlassPreset = liquidGlassPreset,
+
                     isScrolling = isFeedScrollInProgress,
                     materialScrollProgress = materialScrollProgress,
                     materialMotionProgress = motionProgress,
@@ -3748,7 +3721,7 @@ private fun KernelSuAlignedBottomBar(
                     indicatorPanelOffsetPx = presetPanelOffsets.indicatorPanelOffsetPx,
                     indicatorWidth = indicatorWidth,
                     shellShape = shellShape,
-                    liquidGlassPreset = liquidGlassPreset,
+
                     contentBackdrop = contentBackdrop,
                     backdrop = miuixBackdrop,
                     indicatorLensSpec = indicatorLensSpec,
@@ -3891,7 +3864,7 @@ private fun KernelSuAlignedBottomBar(
                     contentColor = unselectedColor,
                     accentColor = selectedColor,
                     haptic = haptic,
-                    liquidGlassPreset = liquidGlassPreset,
+
                     isScrolling = isFeedScrollInProgress,
                     materialScrollProgress = materialScrollProgress,
                     materialMotionProgress = 0f,
@@ -3922,7 +3895,7 @@ private fun KernelSuBottomBarShell(
     shellHighlightAlpha: Float,
     interactiveHighlightCenterXPx: Float,
     uiSkinDecoration: BottomBarUiSkinDecoration?,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
+
     isScrolling: Boolean,
     materialScrollProgress: Float,
     materialMotionProgress: Float,
@@ -3954,7 +3927,7 @@ private fun KernelSuBottomBarShell(
                     motionTier = motionTier,
                     isTransitionRunning = isTransitionRunning,
                     forceLowBlurBudget = forceLowBlurBudget,
-                    liquidGlassPreset = liquidGlassPreset,
+
                     isScrolling = isScrolling,
                     materialScrollProgress = materialScrollProgress,
                     materialMotionProgress = materialMotionProgress,
@@ -3988,7 +3961,7 @@ private fun BoxScope.KernelSuMiuixBottomBarIndicatorLayer(
     indicatorWidth: Dp,
     indicatorHeight: Dp = 56.dp,
     shellShape: androidx.compose.ui.graphics.Shape,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
+
     contentBackdrop: MiuixBackdrop?,
     backdrop: MiuixBackdrop?,
     indicatorLensSpec: BottomBarBackdropPresetLensSpec,
@@ -4028,7 +4001,7 @@ private fun BoxScope.KernelSuMiuixBottomBarIndicatorLayer(
         rawIndicatorLayerTransform
     }
     val pillHighlight = rememberGravityRotatedHighlight(iosIndicatorSpecular, extraDegrees = 90f)
-    val indicatorBackdrop = if (shouldUseBottomBarCombinedIndicatorBackdrop(liquidGlassPreset)) {
+    val indicatorBackdrop = if (shouldUseBottomBarCombinedIndicatorBackdrop()) {
         contentBackdrop
     } else {
         backdrop
@@ -4054,7 +4027,7 @@ private fun BoxScope.KernelSuMiuixBottomBarIndicatorLayer(
                         backdrop = indicatorBackdrop,
                         shape = { shellShape },
                         effects = {
-                            if (shouldUseBottomBarIndicatorLens(liquidGlassPreset)) {
+                            if (shouldUseBottomBarIndicatorLens()) {
                                 miuixLens(
                                     refractionHeight = indicatorLensSpec.refractionHeightDp.dp.toPx(),
                                     refractionAmount = indicatorLensSpec.refractionAmountDp.dp.toPx(),
@@ -4117,7 +4090,7 @@ internal fun BoxScope.KernelSuBottomBarIndicatorLayer(
     indicatorWidth: Dp,
     indicatorHeight: Dp = 56.dp,
     shellShape: androidx.compose.ui.graphics.Shape,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
+
     contentBackdrop: Backdrop?,
     backdrop: Backdrop?,
     indicatorLensSpec: BottomBarBackdropPresetLensSpec,
@@ -4156,7 +4129,7 @@ internal fun BoxScope.KernelSuBottomBarIndicatorLayer(
     } else {
         rawIndicatorLayerTransform
     }
-    val indicatorBackdrop = if (shouldUseBottomBarCombinedIndicatorBackdrop(liquidGlassPreset)) {
+    val indicatorBackdrop = if (shouldUseBottomBarCombinedIndicatorBackdrop()) {
         contentBackdrop
     } else {
         backdrop
@@ -4183,7 +4156,7 @@ internal fun BoxScope.KernelSuBottomBarIndicatorLayer(
                         backdrop = indicatorBackdrop,
                         shape = { shellShape },
                         effects = {
-                            if (shouldUseBottomBarIndicatorLens(liquidGlassPreset)) {
+                            if (shouldUseBottomBarIndicatorLens()) {
                                 lens(
                                     refractionHeight = indicatorLensSpec.refractionHeightDp.dp.toPx(),
                                     refractionAmount = indicatorLensSpec.refractionAmountDp.dp.toPx(),
@@ -4309,7 +4282,7 @@ private fun KernelSuBottomBarSearchSlot(
     contentColor: Color,
     accentColor: Color,
     haptic: (HapticType) -> Unit,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
+
     isScrolling: Boolean,
     materialScrollProgress: Float,
     materialMotionProgress: Float,
@@ -4343,7 +4316,7 @@ private fun KernelSuBottomBarSearchSlot(
             contentColor = contentColor,
             accentColor = accentColor,
             haptic = haptic,
-            liquidGlassPreset = liquidGlassPreset,
+
             isScrolling = isScrolling,
             materialScrollProgress = materialScrollProgress,
             materialMotionProgress = materialMotionProgress,
@@ -4374,7 +4347,7 @@ private fun KernelSuBottomBarSearchCapsule(
     contentColor: Color,
     accentColor: Color,
     haptic: (HapticType) -> Unit,
-    liquidGlassPreset: BottomBarLiquidGlassPreset,
+
     isScrolling: Boolean,
     materialScrollProgress: Float,
     materialMotionProgress: Float,
@@ -4436,7 +4409,7 @@ private fun KernelSuBottomBarSearchCapsule(
                 motionTier = motionTier,
                 isTransitionRunning = isTransitionRunning,
                 forceLowBlurBudget = forceLowBlurBudget,
-                liquidGlassPreset = liquidGlassPreset,
+    
                 isScrolling = isScrolling,
                 materialScrollProgress = materialScrollProgress,
                 materialMotionProgress = materialMotionProgress,

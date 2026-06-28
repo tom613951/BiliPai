@@ -1738,7 +1738,6 @@ class iOSHomeHeaderVisualPolicyTest {
         assertTrue(searchCapsuleSource.contains("surfaceColor = skinSearchSurfaceColor"))
         assertTrue(searchCapsuleSource.contains("Modifier.homeTopBottomBarMatchedSurface("))
         assertTrue(searchCapsuleSource.contains("renderMode = searchChromeRenderMode"))
-        assertTrue(searchCapsuleSource.contains("liquidGlassPreset = bottomBarLiquidGlassPreset"))
         assertTrue(searchCapsuleSource.contains("Modifier.homeTopChromeSurface("))
         assertFalse(searchCapsuleSource.contains("KernelSuBottomBarIndicatorLayer("))
         assertFalse(searchCapsuleSource.contains("searchChromeRenderModeEffective"))

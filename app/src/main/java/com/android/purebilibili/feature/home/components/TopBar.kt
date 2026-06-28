@@ -80,7 +80,7 @@ import com.android.purebilibili.core.util.HapticType
 import com.android.purebilibili.feature.home.UserState
 import com.android.purebilibili.feature.home.HomeCategory
 import com.android.purebilibili.feature.home.resolveHomeTopCategories
-import com.android.purebilibili.core.store.BottomBarLiquidGlassPreset
+
 import com.android.purebilibili.core.store.LiquidGlassStyle
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.AppSurfaceTokens
@@ -664,7 +664,6 @@ internal fun Modifier.homeTopBottomBarMatchedSurface(
     backdrop: LayerBackdrop?,
     liquidGlassStyle: LiquidGlassStyle,
     liquidGlassTuning: LiquidGlassTuning?,
-    liquidGlassPreset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     motionTier: MotionTier,
     isTransitionRunning: Boolean,
     forceLowBlurBudget: Boolean,
@@ -697,7 +696,6 @@ internal fun Modifier.homeTopBottomBarMatchedSurface(
         motionTier = motionTier,
         isTransitionRunning = isTransitionRunning,
         forceLowBlurBudget = forceLowBlurBudget,
-        liquidGlassPreset = liquidGlassPreset,
         isScrolling = isScrolling,
         materialScrollProgress = materialScrollProgress
     )
@@ -1208,7 +1206,7 @@ private fun LightweightHomeTopTabs(
                         indicatorWidth = indicatorWidth,
                         indicatorHeight = dockIndicatorHeight,
                         shellShape = capsuleShape,
-                        liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+
                         contentBackdrop = effectiveTopTabIndicatorContentBackdrop,
                         backdrop = null,
                         indicatorLensSpec = topTabIndicatorLensSpec,
@@ -1242,7 +1240,7 @@ private fun LightweightHomeTopTabs(
                         indicatorWidth = md3LiquidCapsuleWidth,
                         indicatorHeight = dockIndicatorHeight,
                         shellShape = resolveSharedBottomBarCapsuleShape(),
-                        liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+
                         contentBackdrop = effectiveTopTabIndicatorContentBackdrop,
                         backdrop = null,
                         indicatorLensSpec = topTabIndicatorLensSpec,
@@ -1275,7 +1273,7 @@ private fun LightweightHomeTopTabs(
                         indicatorWidth = md3LiquidCapsuleWidth,
                         indicatorHeight = dockIndicatorHeight,
                         shellShape = capsuleShape,
-                        liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+
                         contentBackdrop = effectiveTopTabIndicatorContentBackdrop,
                         backdrop = null,
                         indicatorLensSpec = topTabIndicatorLensSpec,
@@ -1408,7 +1406,7 @@ private fun LightweightHomeTopTabs(
                             indicatorWidth = md3IndicatorWidth,
                             indicatorHeight = 4.dp,
                             shellShape = AppShapes.container(ContainerLevel.Pill),
-                            liquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+    
                             contentBackdrop = effectiveTopTabIndicatorContentBackdrop,
                             backdrop = null,
                             indicatorLensSpec = topTabIndicatorLensSpec,

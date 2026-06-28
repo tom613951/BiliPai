@@ -76,13 +76,10 @@ class HomeChromeLiquidSurfaceStructureTest {
                 topHeaderSource.contains("drawChromeSurface = drawTopTabDockChrome") &&
                 topHeaderSource.contains("useBottomBarMatchedSurface = useTopTabBottomBarMatchedDock") &&
                 topHeaderSource.contains("tabChromeRenderMode = if (useTopTabBottomBarMatchedDock)") &&
-                topHeaderSource.contains("val bottomBarLiquidGlassPreset = homeSettings?.bottomBarLiquidGlassPreset") &&
-                topHeaderSource.contains("liquidGlassPreset = bottomBarLiquidGlassPreset") &&
                 topHeaderSource.contains("topTabDockChromeRenderMode") &&
                 topHeaderSource.contains("tabShape = if (useUnifiedTopPanel)") &&
                 topHeaderSource.contains("resolveSharedBottomBarCapsuleShape()") &&
                 topTabChrome.readText().contains("useBottomBarMatchedSurface: Boolean = false") &&
-                topTabChrome.readText().contains("liquidGlassPreset: BottomBarLiquidGlassPreset") &&
                 topTabChrome.readText().contains(".homeTopBottomBarMatchedSurface(")
         )
         assertTrue(
@@ -163,9 +160,7 @@ class HomeChromeLiquidSurfaceStructureTest {
         )
         assertTrue(
             "matched top dock helper should still use the KSU floating dock renderer for header controls",
-            topBarSource.contains(".kernelSuFloatingDockSurface(") &&
-                topBarSource.contains("liquidGlassPreset: BottomBarLiquidGlassPreset") &&
-                topBarSource.contains("liquidGlassPreset = liquidGlassPreset")
+            topBarSource.contains(".kernelSuFloatingDockSurface(")
         )
         assertTrue(
             "top tab indicator should reuse the bottom bar KSU indicator layer when chrome exists",
