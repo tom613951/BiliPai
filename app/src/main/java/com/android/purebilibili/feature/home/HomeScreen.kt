@@ -826,17 +826,14 @@ fun HomeScreen(
         when {
             isReturningFromVideoDetail -> {
                 homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.RETURNING
-                homeVideoTransitionBackgroundProgress.snapTo(1f)
                 homeVideoTransitionBackgroundProgress.animateTo(
-                    targetValue = HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_SETTLE_PROGRESS,
+                    targetValue = 0f,
                     animationSpec = tween(
-                        durationMillis = returnAnimationSuppressionDurationMs
-                            .coerceAtMost(420L)
-                            .toInt()
-                            .coerceAtLeast(180),
+                        durationMillis = HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_DURATION_MS,
                         easing = LinearOutSlowInEasing
                     )
                 )
+                homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.IDLE
             }
             isOpeningVideoDetailBackgroundTransition -> {
                 homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.OPENING
@@ -2423,9 +2420,8 @@ private const val HOME_VIDEO_TRANSITION_MAX_BLUR_RADIUS_PX = 36f
 private const val HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA = 0.22f
 private const val HOME_VIDEO_TRANSITION_MAX_CONTENT_SCALE_REDUCTION = 0.045f
 private const val HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS = 0.18f
-private const val HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_SETTLE_PROGRESS =
-    HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS
 private const val HOME_VIDEO_TRANSITION_BACKGROUND_FORWARD_DURATION_MS = 160
+private const val HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_DURATION_MS = 180
 private const val HOME_VIDEO_TRANSITION_BACKGROUND_CANCEL_DURATION_MS = 160
 
 internal enum class HomeVideoTransitionBackgroundPhase {
@@ -2455,7 +2451,12 @@ internal fun resolveHomeVideoTransitionBackgroundFrame(
         } else {
             0f
         },
-        scrimAlpha = HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA * clamped,
+        scrimAlpha = when (phase) {
+            HomeVideoTransitionBackgroundPhase.OPENING ->
+                HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA * clamped
+            HomeVideoTransitionBackgroundPhase.IDLE,
+            HomeVideoTransitionBackgroundPhase.RETURNING -> 0f
+        },
         contentScale = when (phase) {
             HomeVideoTransitionBackgroundPhase.OPENING ->
                 1f - HOME_VIDEO_TRANSITION_MAX_CONTENT_SCALE_REDUCTION * clamped

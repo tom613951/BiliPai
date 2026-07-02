@@ -102,7 +102,7 @@ class HomeReturnAnimationPolicyTest {
     }
 
     @Test
-    fun returnBackgroundFrame_fadesHomeBlurAndScrimToClear() {
+    fun returnBackgroundFrame_fadesHomeBlurWithoutDarkScrim() {
         val start = resolveHomeVideoTransitionBackgroundFrame(
             progress = 1f,
             phase = HomeVideoTransitionBackgroundPhase.RETURNING,
@@ -121,9 +121,34 @@ class HomeReturnAnimationPolicyTest {
 
         assertTrue(start.blurRadiusPx > middle.blurRadiusPx)
         assertTrue(middle.blurRadiusPx > end.blurRadiusPx)
+        assertEquals(1f, start.contentScale)
+        assertEquals(1f, middle.contentScale)
+        assertEquals(0f, start.scrimAlpha)
+        assertEquals(0f, middle.scrimAlpha)
+        assertEquals(0f, end.blurRadiusPx)
+        assertEquals(0f, end.scrimAlpha)
+    }
+
+    @Test
+    fun openingBackgroundFrame_usesScrimToPushHomeBehindTappedCard() {
+        val start = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 1f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+        val middle = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0.5f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+        val end = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+
         assertTrue(start.scrimAlpha > middle.scrimAlpha)
         assertTrue(middle.scrimAlpha > end.scrimAlpha)
-        assertEquals(0f, end.blurRadiusPx)
         assertEquals(0f, end.scrimAlpha)
     }
 
@@ -152,7 +177,7 @@ class HomeReturnAnimationPolicyTest {
     }
 
     @Test
-    fun returnBackgroundFrame_keepsScrimTailAfterBlurClearsWithoutScale() {
+    fun returnBackgroundFrame_keepsNoScrimTailAfterBlurClears() {
         val tail = resolveHomeVideoTransitionBackgroundFrame(
             progress = 0.16f,
             phase = HomeVideoTransitionBackgroundPhase.RETURNING,
@@ -160,7 +185,7 @@ class HomeReturnAnimationPolicyTest {
         )
 
         assertEquals(0f, tail.blurRadiusPx)
-        assertTrue(tail.scrimAlpha > 0.01f)
+        assertEquals(0f, tail.scrimAlpha)
         assertEquals(1f, tail.contentScale)
     }
 
@@ -182,7 +207,7 @@ class HomeReturnAnimationPolicyTest {
     }
 
     @Test
-    fun returnBackgroundFrame_disablesBlurBelowAndroidSButKeepsScrim() {
+    fun returnBackgroundFrame_disablesBlurBelowAndroidSWithoutDarkScrim() {
         val frame = resolveHomeVideoTransitionBackgroundFrame(
             progress = 1f,
             phase = HomeVideoTransitionBackgroundPhase.RETURNING,
@@ -190,6 +215,6 @@ class HomeReturnAnimationPolicyTest {
         )
 
         assertEquals(0f, frame.blurRadiusPx)
-        assertTrue(frame.scrimAlpha > 0f)
+        assertEquals(0f, frame.scrimAlpha)
     }
 }
