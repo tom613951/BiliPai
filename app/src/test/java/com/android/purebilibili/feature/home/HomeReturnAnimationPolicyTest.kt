@@ -103,9 +103,21 @@ class HomeReturnAnimationPolicyTest {
 
     @Test
     fun returnBackgroundFrame_fadesHomeBlurAndScrimToClear() {
-        val start = resolveHomeVideoTransitionBackgroundFrame(progress = 1f, sdkInt = 35)
-        val middle = resolveHomeVideoTransitionBackgroundFrame(progress = 0.5f, sdkInt = 35)
-        val end = resolveHomeVideoTransitionBackgroundFrame(progress = 0f, sdkInt = 35)
+        val start = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 1f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
+        val middle = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0.5f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
+        val end = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
 
         assertTrue(start.blurRadiusPx > middle.blurRadiusPx)
         assertTrue(middle.blurRadiusPx > end.blurRadiusPx)
@@ -116,8 +128,66 @@ class HomeReturnAnimationPolicyTest {
     }
 
     @Test
+    fun openingBackgroundFrame_scalesHomeContentBehindTappedCard() {
+        val start = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 1f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+        val middle = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0.5f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+        val end = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0f,
+            phase = HomeVideoTransitionBackgroundPhase.OPENING,
+            sdkInt = 35
+        )
+
+        assertTrue(start.contentScale <= 0.955f)
+        assertTrue(start.contentScale < middle.contentScale)
+        assertTrue(middle.contentScale < end.contentScale)
+        assertEquals(1f, end.contentScale)
+    }
+
+    @Test
+    fun returnBackgroundFrame_keepsScrimTailAfterBlurClearsWithoutScale() {
+        val tail = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0.16f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
+
+        assertEquals(0f, tail.blurRadiusPx)
+        assertTrue(tail.scrimAlpha > 0.01f)
+        assertEquals(1f, tail.contentScale)
+    }
+
+    @Test
+    fun returnBackgroundFrame_neverScalesHomeContent() {
+        val start = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 1f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
+        val middle = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 0.5f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 35
+        )
+
+        assertEquals(1f, start.contentScale)
+        assertEquals(1f, middle.contentScale)
+    }
+
+    @Test
     fun returnBackgroundFrame_disablesBlurBelowAndroidSButKeepsScrim() {
-        val frame = resolveHomeVideoTransitionBackgroundFrame(progress = 1f, sdkInt = 30)
+        val frame = resolveHomeVideoTransitionBackgroundFrame(
+            progress = 1f,
+            phase = HomeVideoTransitionBackgroundPhase.RETURNING,
+            sdkInt = 30
+        )
 
         assertEquals(0f, frame.blurRadiusPx)
         assertTrue(frame.scrimAlpha > 0f)

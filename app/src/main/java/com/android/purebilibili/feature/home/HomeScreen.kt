@@ -807,21 +807,28 @@ fun HomeScreen(
         isQuickReturnFromDetail = isQuickReturningFromVideoDetail
     )
     val homeVideoTransitionBackgroundProgress = remember { Animatable(0f) }
+    var homeVideoTransitionBackgroundPhase by remember {
+        mutableStateOf(HomeVideoTransitionBackgroundPhase.IDLE)
+    }
+    val isOpeningVideoDetailBackgroundTransition =
+        hideTopTabsForForwardDetailNav && !isReturningFromVideoDetail
     LaunchedEffect(
-        hideTopTabsForForwardDetailNav,
+        isOpeningVideoDetailBackgroundTransition,
         isReturningFromVideoDetail,
         cardTransitionEnabled,
         returnAnimationSuppressionDurationMs
     ) {
         if (!cardTransitionEnabled) {
+            homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.IDLE
             homeVideoTransitionBackgroundProgress.snapTo(0f)
             return@LaunchedEffect
         }
         when {
             isReturningFromVideoDetail -> {
+                homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.RETURNING
                 homeVideoTransitionBackgroundProgress.snapTo(1f)
                 homeVideoTransitionBackgroundProgress.animateTo(
-                    targetValue = 0f,
+                    targetValue = HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_SETTLE_PROGRESS,
                     animationSpec = tween(
                         durationMillis = returnAnimationSuppressionDurationMs
                             .coerceAtMost(420L)
@@ -831,7 +838,8 @@ fun HomeScreen(
                     )
                 )
             }
-            hideTopTabsForForwardDetailNav -> {
+            isOpeningVideoDetailBackgroundTransition -> {
+                homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.OPENING
                 homeVideoTransitionBackgroundProgress.animateTo(
                     targetValue = 1f,
                     animationSpec = tween(
@@ -848,6 +856,7 @@ fun HomeScreen(
                         easing = FastOutLinearInEasing
                     )
                 )
+                homeVideoTransitionBackgroundPhase = HomeVideoTransitionBackgroundPhase.IDLE
             }
         }
     }
@@ -2351,9 +2360,14 @@ fun HomeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .homeVideoTransitionBackgroundEffect {
-                homeVideoTransitionBackgroundProgress.value
-            }
+            .homeVideoTransitionBackgroundEffect(
+                progressProvider = {
+                    homeVideoTransitionBackgroundProgress.value
+                },
+                phaseProvider = {
+                    homeVideoTransitionBackgroundPhase
+                }
+            )
     ) {
         scaffoldContent()
         val video = pendingNotInterestedVideo
@@ -2407,26 +2421,47 @@ internal fun resolveHomeOverlayMotionSpec(): HomeOverlayMotionSpec {
 
 private const val HOME_VIDEO_TRANSITION_MAX_BLUR_RADIUS_PX = 36f
 private const val HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA = 0.22f
+private const val HOME_VIDEO_TRANSITION_MAX_CONTENT_SCALE_REDUCTION = 0.045f
+private const val HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS = 0.18f
+private const val HOME_VIDEO_TRANSITION_BACKGROUND_RETURN_SETTLE_PROGRESS =
+    HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS
 private const val HOME_VIDEO_TRANSITION_BACKGROUND_FORWARD_DURATION_MS = 160
 private const val HOME_VIDEO_TRANSITION_BACKGROUND_CANCEL_DURATION_MS = 160
 
+internal enum class HomeVideoTransitionBackgroundPhase {
+    IDLE,
+    OPENING,
+    RETURNING
+}
+
 internal data class HomeVideoTransitionBackgroundFrame(
     val blurRadiusPx: Float,
-    val scrimAlpha: Float
+    val scrimAlpha: Float,
+    val contentScale: Float
 )
 
 internal fun resolveHomeVideoTransitionBackgroundFrame(
     progress: Float,
+    phase: HomeVideoTransitionBackgroundPhase,
     sdkInt: Int = Build.VERSION.SDK_INT
 ): HomeVideoTransitionBackgroundFrame {
-    val strength = smoothHomeVideoTransitionBackgroundProgress(progress)
+    val clamped = progress.coerceIn(0f, 1f)
+    val blurProgress = ((clamped - HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS) /
+        (1f - HOME_VIDEO_TRANSITION_BLUR_CLEAR_TAIL_PROGRESS)).coerceIn(0f, 1f)
+    val blurStrength = smoothHomeVideoTransitionBackgroundProgress(blurProgress)
     return HomeVideoTransitionBackgroundFrame(
         blurRadiusPx = if (sdkInt >= Build.VERSION_CODES.S) {
-            HOME_VIDEO_TRANSITION_MAX_BLUR_RADIUS_PX * strength
+            HOME_VIDEO_TRANSITION_MAX_BLUR_RADIUS_PX * blurStrength
         } else {
             0f
         },
-        scrimAlpha = HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA * strength
+        scrimAlpha = HOME_VIDEO_TRANSITION_MAX_SCRIM_ALPHA * clamped,
+        contentScale = when (phase) {
+            HomeVideoTransitionBackgroundPhase.OPENING ->
+                1f - HOME_VIDEO_TRANSITION_MAX_CONTENT_SCALE_REDUCTION * clamped
+            HomeVideoTransitionBackgroundPhase.IDLE,
+            HomeVideoTransitionBackgroundPhase.RETURNING -> 1f
+        }
     )
 }
 
@@ -2462,10 +2497,16 @@ internal fun resolveHomeContentInteractionRestoreDelayMs(
 }
 
 private fun Modifier.homeVideoTransitionBackgroundEffect(
-    progressProvider: () -> Float
+    progressProvider: () -> Float,
+    phaseProvider: () -> HomeVideoTransitionBackgroundPhase
 ): Modifier {
     return graphicsLayer {
-        val frame = resolveHomeVideoTransitionBackgroundFrame(progressProvider())
+        val frame = resolveHomeVideoTransitionBackgroundFrame(
+            progress = progressProvider(),
+            phase = phaseProvider()
+        )
+        scaleX = frame.contentScale
+        scaleY = frame.contentScale
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && frame.blurRadiusPx > 0.01f) {
             renderEffect = RenderEffect
                 .createBlurEffect(
@@ -2479,7 +2520,10 @@ private fun Modifier.homeVideoTransitionBackgroundEffect(
         }
     }.drawWithContent {
         drawContent()
-        val frame = resolveHomeVideoTransitionBackgroundFrame(progressProvider())
+        val frame = resolveHomeVideoTransitionBackgroundFrame(
+            progress = progressProvider(),
+            phase = phaseProvider()
+        )
         if (frame.scrimAlpha > 0.001f) {
             drawRect(Color.Black.copy(alpha = frame.scrimAlpha))
         }
