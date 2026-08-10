@@ -35,7 +35,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.android.purebilibili.core.ui.components.AppCircularProgressIndicator
-import com.android.purebilibili.core.ui.skeleton.CommentListSkeleton
+import com.android.purebilibili.core.ui.AdaptiveLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import com.android.purebilibili.core.ui.components.AppIcon
 import androidx.compose.material3.MaterialTheme
@@ -159,13 +159,10 @@ internal fun resolveVideoCommentSheetHostHeightPx(
 }
 
 internal fun resolveVideoCommentSheetHostScrimAlpha(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Float {
-    return if (mainSheetVisible) {
-        MAIN_COMMENT_SHEET_SCRIM_ALPHA
-    } else {
-        resolveVideoSubReplySheetScrimAlpha()
-    }
+    return 0f
 }
 
 internal fun shouldApplyVideoCommentThreadStatusBarPadding(
@@ -183,14 +180,16 @@ internal fun shouldInitializeVideoCommentSheetHost(
 }
 
 internal fun shouldDismissVideoCommentSheetHostOnBackdropTap(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Boolean {
-    return mainSheetVisible
+    return mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 }
 
 internal fun shouldInterceptVideoCommentSheetHostBackdropTap(
-    mainSheetVisible: Boolean
-): Boolean = mainSheetVisible
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
+): Boolean = mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 
 internal fun shouldHandleVideoCommentSheetVerticalDrag(
     dragAmountPx: Float,
@@ -272,14 +271,13 @@ internal fun resolveVideoCommentSheetPresentationProgress(
 internal fun resolveVideoCommentSheetHostOverlayVisual(
     mainSheetVisible: Boolean,
     presentationProgress: Float,
-    maxScrimAlphaOverride: Float? = null
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): InteractiveOverlayProgressVisual {
     return resolveInteractiveOverlayProgressVisual(
         presentationProgress = presentationProgress,
         surfaceType = InteractiveOverlaySurfaceType.BOTTOM_SHEET,
         blurActive = mainSheetVisible,
-        maxScrimAlpha = maxScrimAlphaOverride
-            ?: resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible)
+        maxScrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible, hostContent)
     )
 }
 
@@ -288,13 +286,6 @@ internal fun resolveVideoCommentSheetHostOverlayVisual(
 fun VideoCommentSheetHost(
     mainSheetVisible: Boolean,
     onDismiss: () -> Unit,
-    /**
-     * 覆盖全屏 scrim 的峰值透明度。
-     *
-     * 详情页楼中楼（嵌入呈现）场景传入 0f：打开子评论时不再盖住播放器上方的阴影，
-     * 但 backdrop 点击拦截仍由 [mainSheetVisible] 控制，点背景关闭行为不受影响。
-     */
-    maxScrimAlphaOverride: Float? = null,
     onMainSheetVisibilityProgressChange: (Float) -> Unit = {},
     commentViewModel: VideoCommentViewModel,
     aid: Long,
@@ -307,7 +298,6 @@ fun VideoCommentSheetHost(
     onVideoClick: ((String) -> Unit)? = null,
     onSearchKeywordClick: ((String) -> Unit)? = null,
     onOpenBilibiliLink: ((String) -> Unit)? = null,
-    onBackToTop: () -> Unit = {},
     screenHeightPx: Int = 0,
     topReservedPx: Int = 0,
     onTimestampClick: ((Long) -> Unit)? = null,
@@ -337,10 +327,10 @@ fun VideoCommentSheetHost(
         subReplyVisible = subReplyState.visible
     )
     val hostVisible = hostContent != VideoCommentSheetHostContent.HIDDEN
-    val scrimAlpha = maxScrimAlphaOverride
-        ?: resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = mainSheetVisible)
+    val scrimAlpha = resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = mainSheetVisible)
     val dismissOnBackdropTap = shouldDismissVideoCommentSheetHostOnBackdropTap(
-        mainSheetVisible = mainSheetVisible
+        mainSheetVisible = mainSheetVisible,
+        hostContent = hostContent
     )
     val applyThreadStatusBarPadding = shouldApplyVideoCommentThreadStatusBarPadding(
         mainSheetVisible = mainSheetVisible,
@@ -411,11 +401,11 @@ fun VideoCommentSheetHost(
             }
         }
     }
-    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, maxScrimAlphaOverride) {
+    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, hostContent) {
         resolveVideoCommentSheetHostOverlayVisual(
             mainSheetVisible = mainSheetVisible,
             presentationProgress = mainSheetVisibilityProgress,
-            maxScrimAlphaOverride = maxScrimAlphaOverride
+            hostContent = hostContent
         )
     }
 
@@ -546,7 +536,8 @@ fun VideoCommentSheetHost(
         exit = motionSpec.scrimExit
     ) {
         val interceptBackdropTap = shouldInterceptVideoCommentSheetHostBackdropTap(
-            mainSheetVisible = mainSheetVisible
+            mainSheetVisible = mainSheetVisible,
+            hostContent = hostContent
         )
         BoxWithConstraints(
             modifier = Modifier
@@ -697,8 +688,7 @@ fun VideoCommentSheetHost(
                                     onCommentUrlClick = openCommentUrl,
                                     onTimestampClick = onTimestampClick,
                                     maxTimestampMs = maxTimestampMs,
-                                    onImagePreview = previewCallback,
-                                    onBackToTop = onBackToTop,
+                                    onImagePreview = previewCallback
                                 )
                             }
 
@@ -761,8 +751,7 @@ internal fun VideoCommentMainList(
     onCommentUrlClick: (String) -> Unit,
     onTimestampClick: ((Long) -> Unit)?,
     maxTimestampMs: Long?,
-    onImagePreview: (List<String>, Int, Rect?, ImagePreviewTextContent?) -> Unit,
-    onBackToTop: () -> Unit = {},
+    onImagePreview: (List<String>, Int, Rect?, ImagePreviewTextContent?) -> Unit
 ) {
     val state by viewModel.commentState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -780,7 +769,7 @@ internal fun VideoCommentMainList(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        CommentSortHeader(
+        CommentSortFilterBar(
             count = state.replyCount,
             sortMode = state.sortMode,
             onSortModeChange = { mode ->
@@ -789,16 +778,17 @@ internal fun VideoCommentMainList(
                     SettingsManager.setCommentDefaultSortMode(context, mode.apiMode)
                 }
             },
+            upOnly = state.upOnlyFilter,
+            onUpOnlyToggle = { viewModel.toggleUpOnly() },
             backdrop = commentChromeBackdrop
         )
 
         CommentFraudDetectingBanner(isDetecting = state.isDetectingFraud)
 
         if (state.isRepliesLoading && state.replies.isEmpty()) {
-            CommentListSkeleton(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = WindowInsets.navigationBars.asPaddingValues(),
-            )
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                AdaptiveLoadingIndicator()
+            }
         } else {
             Box(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
@@ -882,8 +872,6 @@ internal fun VideoCommentMainList(
                         .align(Alignment.BottomEnd)
                         .padding(end = 20.dp, bottom = 20.dp),
                     onClick = {
-                        // 回顶时通知父级(竖屏详情)恢复被评论区压缩的播放器。
-                        onBackToTop()
                         scope.launch {
                             listState.animateScrollToItem(0)
                         }
