@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // AGP 9+ provides built-in Kotlin; do not apply org.jetbrains.kotlin.android
@@ -108,7 +110,31 @@ val buildReleaseTag = providers.gradleProperty("bili.build.releaseTag")
     .orElse("")
     .get()
 
+// 个人自用补丁：release 签名配置。
+// 凭据放在未跟踪的 keystore.properties（已在 .gitignore 中）。
+// 文件缺失时 release 变体回退为未签名，不影响 debug / smooth / dev。
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { load(it) }
+    }
+}
+val releaseStorePath = keystoreProps.getProperty("storeFile")
+val hasReleaseKeystore = !releaseStorePath.isNullOrBlank() && file(releaseStorePath).exists()
+
 android {
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
     namespace = "com.android.purebilibili"
     compileSdk {
         version = release(37) {
@@ -154,6 +180,10 @@ android {
         release {
             // Disable PNG crunching to avoid AAPT errors
             isCrunchPngs = false
+            // 个人自用补丁：有可用密钥库时启用 release 签名，否则保持未签名。
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             buildConfigField("boolean", "ALLOW_HARDCODED_DNS_FALLBACK", "false")
             buildConfigField("boolean", "ENABLE_VERBOSE_DEBUG_LOGS", "false")
             buildConfigField("boolean", "ENABLE_VERBOSE_RUNTIME_LOG_PERSISTENCE", "false")
