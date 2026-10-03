@@ -36,9 +36,6 @@
 2. **禁用云端自动编译**
    - 移除 `.github` 目录，避免第三方仓库触发 GitHub Actions 构建。
 
-3. **本地一键发布脚本**
-   - 保留 `scripts/release_one_click.ps1`，用于本地编译、打 Tag 并上传 Release。
-
 ---
 
 ## 📦 APK 下载
@@ -47,14 +44,15 @@
 
 ### 构建变体说明
 
-本项目 `release` 变体未配置 `signingConfig`，直接执行 `assembleRelease` 会产出**未签名** APK，无法安装。因此本仓库发布的是项目自带的 **`smooth`** 变体：
+本仓库使用自签名配置构建 **`release`** 变体：
 
-| 变体 | 特性 | 可安装 |
-| --- | --- | --- |
-| `smooth`（本仓库发布） | 继承 release 语义，`isDebuggable=false`，跳过 R8 与资源压缩，使用 debug 密钥签名 | ✅ |
-| `release` | 启用 R8 + 资源压缩，但**无签名配置** | ❌ 未签名 |
+| 变体 | 特性 |
+| --- | --- |
+| `release`（本仓库发布） | 启用 R8 代码压缩 + 资源压缩，使用自签名密钥库签名 |
+| `smooth` | 继承 release 语义，`isDebuggable=false`，跳过 R8，用于本地快速验证 |
+| `dev` | 同 release，包名带 `.dev` 后缀，用于并存测试 |
 
-`smooth` 包名带 `.dev` 后缀、应用名显示为 "BiliPai Smooth"，可与官方版**共存安装**。
+> ⚠️ 本仓库 APK 使用**自签名证书**（非官方密钥）。与官方版应用 ID 相同，**安装前需先卸载官方版本**，且后续版本升级须使用同一密钥库签名。
 
 ---
 
@@ -69,13 +67,29 @@ gpr.user=<你的 GitHub 用户名>
 gpr.key=<你的 GitHub Token，需含 read:packages 权限>
 ```
 
+构建正式版还需在仓库根目录放置 `keystore.properties`（已在 `.gitignore` 中）：
+
+```properties
+storeFile=/absolute/path/to/your-release.jks
+storePassword=<密码>
+keyAlias=<别名>
+keyPassword=<密码>
+```
+
+生成密钥库：
+
+```bash
+keytool -genkeypair -v -keystore release.jks -alias bilipai \
+  -keyalg RSA -keysize 4096 -validity 10000
+```
+
 构建：
 
 ```bash
-./gradlew :app:assembleSmooth
+./gradlew :app:assembleRelease
 ```
 
-产物位于 `app/build/outputs/apk/smooth/`。
+产物位于 `app/build/outputs/apk/release/`。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
 
 > ⚠️ 项目路径**不能包含非 ASCII 字符**（含中文的目录会导致 AGP 直接拒绝构建）。
 
