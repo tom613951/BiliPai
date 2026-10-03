@@ -171,13 +171,13 @@ internal fun resolveVideoCommentSheetHostHeightPx(
 }
 
 internal fun resolveVideoCommentSheetHostScrimAlpha(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Float {
-    return if (mainSheetVisible) {
-        MAIN_COMMENT_SHEET_SCRIM_ALPHA
-    } else {
-        resolveVideoSubReplySheetScrimAlpha()
-    }
+    // 个人自用补丁：移除展开评论楼中楼时的灰色遮罩层。
+    // 无论主面板是否可见，scrim 峰值透明度固定为 0，播放器上方不再出现灰色蒙层。
+    // 背景点击行为由 shouldDismiss/shouldInterceptVideoCommentSheetHostBackdropTap 单独控制。
+    return 0f
 }
 
 internal fun shouldApplyVideoCommentThreadStatusBarPadding(
@@ -230,14 +230,17 @@ internal fun shouldInitializeVideoCommentSheetHost(
 }
 
 internal fun shouldDismissVideoCommentSheetHostOnBackdropTap(
-    mainSheetVisible: Boolean
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): Boolean {
-    return mainSheetVisible
+    // 个人自用补丁：展开二级回复（THREAD_DETAIL）时不因点背景而关闭主面板。
+    return mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 }
 
 internal fun shouldInterceptVideoCommentSheetHostBackdropTap(
-    mainSheetVisible: Boolean
-): Boolean = mainSheetVisible
+    mainSheetVisible: Boolean,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
+): Boolean = mainSheetVisible && hostContent != VideoCommentSheetHostContent.THREAD_DETAIL
 
 internal fun shouldHandleVideoCommentSheetVerticalDrag(
     dragAmountPx: Float,
@@ -319,14 +322,15 @@ internal fun resolveVideoCommentSheetPresentationProgress(
 internal fun resolveVideoCommentSheetHostOverlayVisual(
     mainSheetVisible: Boolean,
     presentationProgress: Float,
-    maxScrimAlphaOverride: Float? = null
+    maxScrimAlphaOverride: Float? = null,
+    hostContent: VideoCommentSheetHostContent = VideoCommentSheetHostContent.MAIN_LIST
 ): InteractiveOverlayProgressVisual {
     return resolveInteractiveOverlayProgressVisual(
         presentationProgress = presentationProgress,
         surfaceType = InteractiveOverlaySurfaceType.BOTTOM_SHEET,
         blurActive = mainSheetVisible,
         maxScrimAlpha = maxScrimAlphaOverride
-            ?: resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible)
+            ?: resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible, hostContent)
     )
 }
 
@@ -392,9 +396,13 @@ fun VideoCommentSheetHost(
     }
     val hostVisible = hostContent != VideoCommentSheetHostContent.HIDDEN
     val scrimAlpha = maxScrimAlphaOverride
-        ?: resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = mainSheetVisible)
+        ?: resolveVideoCommentSheetHostScrimAlpha(
+            mainSheetVisible = mainSheetVisible,
+            hostContent = hostContent
+        )
     val dismissOnBackdropTap = shouldDismissVideoCommentSheetHostOnBackdropTap(
-        mainSheetVisible = mainSheetVisible
+        mainSheetVisible = mainSheetVisible,
+        hostContent = hostContent
     )
     val applyThreadStatusBarPadding = shouldApplyVideoCommentThreadStatusBarPadding(
         mainSheetVisible = mainSheetVisible,
@@ -465,11 +473,12 @@ fun VideoCommentSheetHost(
             }
         }
     }
-    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, maxScrimAlphaOverride) {
+    val overlayVisual = remember(mainSheetVisible, mainSheetVisibilityProgress, maxScrimAlphaOverride, hostContent) {
         resolveVideoCommentSheetHostOverlayVisual(
             mainSheetVisible = mainSheetVisible,
             presentationProgress = mainSheetVisibilityProgress,
-            maxScrimAlphaOverride = maxScrimAlphaOverride
+            maxScrimAlphaOverride = maxScrimAlphaOverride,
+            hostContent = hostContent
         )
     }
 
@@ -659,7 +668,8 @@ fun VideoCommentSheetHost(
         exit = motionSpec.scrimExit
     ) {
         val interceptBackdropTap = shouldInterceptVideoCommentSheetHostBackdropTap(
-            mainSheetVisible = mainSheetVisible
+            mainSheetVisible = mainSheetVisible,
+            hostContent = hostContent
         )
         BoxWithConstraints(
             modifier = Modifier
