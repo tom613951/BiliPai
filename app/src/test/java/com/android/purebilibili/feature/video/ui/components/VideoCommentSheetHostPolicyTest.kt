@@ -131,7 +131,8 @@ class VideoCommentSheetHostPolicyTest {
                 topReservedPx = 450
             )
         )
-        assertEquals(0.5f, resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = true))
+        // 个人自用补丁：scrim 恒为 0，不再受 mainSheetVisible 影响。
+        assertEquals(0f, resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = true))
     }
 
     @Test
@@ -149,12 +150,12 @@ class VideoCommentSheetHostPolicyTest {
             presentationProgress = 1f
         )
 
+        // 个人自用补丁：灰色遮罩层已移除，任何 presentationProgress 下 scrim 均为 0。
         assertEquals(0f, hidden.scrimAlpha)
         assertFalse(hidden.blurEnabled)
-        assertEquals(0.25f, half.scrimAlpha)
+        assertEquals(0f, half.scrimAlpha)
         assertTrue(half.forceLowBlurBudget)
-        assertTrue(half.scrimAlpha < shown.scrimAlpha)
-        assertEquals(0.5f, shown.scrimAlpha)
+        assertEquals(0f, shown.scrimAlpha)
         assertFalse(shown.forceLowBlurBudget)
     }
 
@@ -183,6 +184,13 @@ class VideoCommentSheetHostPolicyTest {
             )
         )
         assertEquals(0f, resolveVideoCommentSheetHostScrimAlpha(mainSheetVisible = false))
+        assertEquals(
+            0f,
+            resolveVideoCommentSheetHostScrimAlpha(
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
+            )
+        )
     }
 
     @Test
@@ -288,22 +296,43 @@ class VideoCommentSheetHostPolicyTest {
     fun `backdrop tap dismissal only applies to main comment sheet`() {
         assertTrue(
             shouldDismissVideoCommentSheetHostOnBackdropTap(
-                mainSheetVisible = true
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertFalse(
             shouldDismissVideoCommentSheetHostOnBackdropTap(
-                mainSheetVisible = false
+                mainSheetVisible = false,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertTrue(
             shouldInterceptVideoCommentSheetHostBackdropTap(
-                mainSheetVisible = true
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
             )
         )
         assertFalse(
             shouldInterceptVideoCommentSheetHostBackdropTap(
-                mainSheetVisible = false
+                mainSheetVisible = false,
+                hostContent = VideoCommentSheetHostContent.MAIN_LIST
+            )
+        )
+    }
+
+    @Test
+    fun `thread detail should not dismiss or intercept backdrop taps`() {
+        // 个人自用补丁：展开二级回复时不拦截背景点击，也不因点背景关闭主面板。
+        assertFalse(
+            shouldDismissVideoCommentSheetHostOnBackdropTap(
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
+            )
+        )
+        assertFalse(
+            shouldInterceptVideoCommentSheetHostBackdropTap(
+                mainSheetVisible = true,
+                hostContent = VideoCommentSheetHostContent.THREAD_DETAIL
             )
         )
     }
