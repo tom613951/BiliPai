@@ -14,12 +14,10 @@
 .cxx
 local.properties
 
-# 🔥 忽略 Gradle 构建产物目录。
-#
-# 注意：`**/build/` 同时会匹配 Java 包目录（例如
-# `com/android/purebilibili/build/`），因此必须紧跟以下否定规则，
-# 否则 build-logic 的插件源码会被静默忽略、无法提交。
+# 🔥 忽略所有 build 目录
 **/build/
+# 上游缺陷：Java 包名 com.android.purebilibili.build 会被上面的 **/build/ 误伤。
+# 这导致 build-logic 的插件源码从未被提交。以下否定规则放行源码目录（仅这两处）。
 !build-logic/src/main/java/com/android/purebilibili/build/
 !build-logic/src/main/java/com/android/purebilibili/build/**
 !app/src/main/java/com/android/purebilibili/build/
