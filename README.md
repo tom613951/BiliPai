@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁后自行打包发布。
 
-当前基于官方 **v0.3.3**（`6a95beedc`，versionCode 445）源码构建。
+当前基于官方 **v0.3.3**（`5617ebc04f`，versionCode 445）源码构建。
 
 ---
 
@@ -92,6 +92,21 @@ keytool -genkeypair -v -keystore release.jks -alias bilipai \
 产物位于 `app/build/outputs/apk/release/`。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
 
 > ⚠️ 项目路径**不能包含非 ASCII 字符**（含中文的目录会导致 AGP 直接拒绝构建）。
+
+---
+
+## 🤝 向官方提交的修复
+
+构建本仓库时发现并修复了上游两个问题，均已合入官方仓库：
+
+| 编号 | 类型 | 标题 | 状态 |
+| --- | --- | --- | --- |
+| [#882](https://github.com/jay3-yy/BiliPai/issues/882) | Issue | 干净 clone 无法构建：`.gitignore` 的 `**/build/` 静默排除了插件源码包 `com.android.purebilibili.build` | ✅ CLOSED |
+| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | `fix(build): commit the missing ComposeDetachedOwnerGuard plugin sources` | ✅ MERGED |
+
+**问题简述**：上游 v0.3.x 在 `app/build.gradle.kts` 中引用了 Gradle 插件 `ComposeDetachedOwnerGuard`，但 `.gitignore` 里的 `**/build/` 规则同时匹配了 Java 包目录 `com/android/purebilibili/build/`，导致插件源码被 git 静默忽略（`git add` 不报错也不提示），公开仓库中缺失该实现。任何干净 clone 都会在配置阶段直接失败。
+
+**修复**：在 `**/build/` 之后补充否定规则放行该包目录，并补齐插件实现（ASM 重写 `LayoutNodeKt.requireOwner` 的空检查分支，对应上游 issue [#880](https://github.com/jay3-yy/BiliPai/issues/880) 的全屏切换闪退）。
 
 ---
 
