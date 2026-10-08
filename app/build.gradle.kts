@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -119,14 +120,17 @@ val keystoreProps = Properties().apply {
         keystorePropsFile.inputStream().use { load(it) }
     }
 }
-val releaseStorePath = keystoreProps.getProperty("storeFile")
-val hasReleaseKeystore = !releaseStorePath.isNullOrBlank() && file(releaseStorePath).exists()
+// java.io.File (not a String) so the absolute path is not re-resolved against :app.
+val releaseStoreFile = keystoreProps.getProperty("storeFile")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { File(it) }
+val hasReleaseKeystore = releaseStoreFile?.isFile == true
 
 android {
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
-                storeFile = file(releaseStorePath!!)
+                storeFile = releaseStoreFile
                 storePassword = keystoreProps.getProperty("storePassword")
                 keyAlias = keystoreProps.getProperty("keyAlias")
                 keyPassword = keystoreProps.getProperty("keyPassword")
