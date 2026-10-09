@@ -1,0 +1,28 @@
+# GitHub Linguist 统计排除规则
+#
+# artwork/ 目录存放的是设计资源与动效预览的【构建产物】，
+# 不是手写源代码，不应计入仓库语言统计。
+#
+# 背景：artwork/brand-motion/preview.html 内联了约 6MB 的
+# Lottie base64 动效数据，导致 GitHub 语言统计中 HTML 占比
+# 虚高到 74%，掩盖了真实的代码分布（Kotlin/C#/JavaScript 等）。
+#
+# linguist-generated=true 让 GitHub 把匹配文件标记为“生成文件”，
+# 从语言统计中排除，但文件本身仍保留在仓库中可正常访问。
+
+# ---- 动效预览与设计产物 ----
+artwork/** linguist-generated=true
+brand-motion/** linguist-generated=true
+
+# 构建脚本产出的预览页（含内联 base64 资源）
+artwork/brand-motion/*.html linguist-generated=true
+artwork/brand-motion/*.png linguist-generated=true
+artwork/brand-motion/*.jpg linguist-generated=true
+artwork/brand-motion/*.json linguist-generated=true
+artwork/app-icon/*.png linguist-generated=true
+
+# 第三方 JS 库（Lottie 运行时）
+artwork/brand-motion/lottie.min.js linguist-vendored=true
+
+# Python 缓存
+__pycache__/** linguist-generated=true
