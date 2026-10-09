@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁后自行打包发布。
 
-当前基于官方 **v0.3.3**（`5617ebc04f`，versionCode 445）源码构建。
+当前基于官方 **v0.3.3**（`608ef1d45`，versionCode 445）源码构建。
 
 ---
 
@@ -97,16 +97,33 @@ keytool -genkeypair -v -keystore release.jks -alias bilipai \
 
 ## 🤝 向官方提交的修复
 
-构建本仓库时发现并修复了上游两个问题，均已合入官方仓库：
+构建本仓库时发现并修复了上游的问题，**均已合入官方仓库**：
 
 | 编号 | 类型 | 标题 | 状态 |
 | --- | --- | --- | --- |
 | [#882](https://github.com/jay3-yy/BiliPai/issues/882) | Issue | 干净 clone 无法构建：`.gitignore` 的 `**/build/` 静默排除了插件源码包 `com.android.purebilibili.build` | ✅ CLOSED |
-| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | `fix(build): commit the missing ComposeDetachedOwnerGuard plugin sources` | ✅ MERGED |
+| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | 补齐缺失的 `ComposeDetachedOwnerGuard` 插件源码 | ✅ MERGED |
+| [#885](https://github.com/jay3-yy/BiliPai/pull/885) | PR | 让该插件在全新 CI runner（无 Gradle 缓存）上也能工作 | ✅ MERGED |
 
-**问题简述**：上游 v0.3.x 在 `app/build.gradle.kts` 中引用了 Gradle 插件 `ComposeDetachedOwnerGuard`，但 `.gitignore` 里的 `**/build/` 规则同时匹配了 Java 包目录 `com/android/purebilibili/build/`，导致插件源码被 git 静默忽略（`git add` 不报错也不提示），公开仓库中缺失该实现。任何干净 clone 都会在配置阶段直接失败。
+### #882 / #884
 
-**修复**：在 `**/build/` 之后补充否定规则放行该包目录，并补齐插件实现（ASM 重写 `LayoutNodeKt.requireOwner` 的空检查分支，对应上游 issue [#880](https://github.com/jay3-yy/BiliPai/issues/880) 的全屏切换闪退）。
+上游 v0.3.x 在 `app/build.gradle.kts` 中引用了 Gradle 插件 `ComposeDetachedOwnerGuard`，但 `.gitignore` 里的 `**/build/` 规则同时匹配了 Java 包目录 `com/android/purebilibili/build/`，导致插件源码被 git 静默忽略（`git add` 不报错也不提示），公开仓库中缺失该实现。任何干净 clone 都会在配置阶段直接失败。
+
+修复方式：在 `**/build/` 之后补充否定规则放行该包目录，并补齐插件实现。
+
+### #885
+
+上述实现改为扫描 Gradle transform 缓存并就地改写其中的 `classes.jar`。全新 CI runner 没有该缓存，而插件任务是编译任务的前置依赖、会在缓存被填充之前执行，因此每次干净检出都失败：
+
+```
+[ComposeDetachedOwnerGuard] no compose-ui classes.jar found under
+/home/runner/.gradle/caches; run a build once so the transform cache is
+populated, then retry.
+```
+
+修复方式：改为直接从依赖解析取得 compose-ui AAR（`detachedConfiguration`，版本由 BOM 与解析图决定、不硬编码），补丁产物写入项目内构建目录，**不再读写全局 Gradle 缓存**。同时修掉了旧实现的两个副作用 —— 改写时丢失 jar 目录项（内层 `classes.jar` 从 1375 项掉到 1333），以及在 compose-ui 缺席时静默报成功而非显式失败。
+
+> 说明：这两个修复现已属于上游代码，**本仓库不再携带任何插件相关改动**，与上游逐字节一致。
 
 ---
 
