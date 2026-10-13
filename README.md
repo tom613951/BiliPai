@@ -8,7 +8,7 @@
 
 <p>
   <a href="https://github.com/tom613951/BiliPai/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v0.3.3--personal-007AFF?style=for-the-badge&logo=github" alt="最新 Release" />
+    <img src="https://img.shields.io/badge/Release-v0.3.7--personal-007AFF?style=for-the-badge&logo=github" alt="最新 Release" />
   </a>
   <a href="https://github.com/jay3-yy/BiliPai">
     <img src="https://img.shields.io/badge/Upstream-jay3--yy%2FBiliPai-FF9500?style=for-the-badge&logo=github" alt="官方 Upstream" />
@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁后自行打包发布。
 
-当前基于官方 **v0.3.3**（`608ef1d45`，versionCode 445）源码构建。
+当前基于官方 **v0.3.7**（`8b47769d2`，versionCode 458）源码构建。
 
 ---
 
@@ -124,6 +124,25 @@ populated, then retry.
 修复方式：改为直接从依赖解析取得 compose-ui AAR（`detachedConfiguration`，版本由 BOM 与解析图决定、不硬编码），补丁产物写入项目内构建目录，**不再读写全局 Gradle 缓存**。同时修掉了旧实现的两个副作用 —— 改写时丢失 jar 目录项（内层 `classes.jar` 从 1375 项掉到 1333），以及在 compose-ui 缺席时静默报成功而非显式失败。
 
 > 说明：这两个修复现已属于上游代码，**本仓库不再携带任何插件相关改动**，与上游逐字节一致。
+
+### 后续：上游改用 AGP 原生插桩（v0.3.6）
+
+我在 [#880](https://github.com/jay3-yy/BiliPai/issues/880) 下反馈过：上述实现虽然能产出正确的补丁 AAR，但**该产物没有被接入 `:app` 的编译 classpath**，因此运行时崩溃仍未消除。
+
+上游在 v0.3.6（提交 `3608e0347`）采纳了这一结论，并选择了更彻底的方案 —— 放弃 AAR 补丁路线，改用 **AGP 原生 `AsmClassVisitorFactory` 插桩**：
+
+```java
+components.onVariants(components.selector().all(), (Action<Variant>) variant -> {
+    variant.getInstrumentation().transformClassesWith(
+            ComposeDetachedOwnerGuard.class, InstrumentationScope.ALL, parameters -> Unit.INSTANCE);
+    variant.getInstrumentation().setAsmFramesComputationMode(
+            FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS);
+});
+```
+
+插件由 333 行精简至 33 行，`DetachedOwnerFallback.java` 随之删除。官方 CHANGELOG 的表述是「**修正旧补丁仅生成 AAR、未接入打包流程的问题**」。
+
+该方案在编译期直接改写字节码，产物天然进入打包流程。本仓库构建时已验证生效：`Task :app:transformReleaseClassesWithAsm` 执行，`LayoutNodeSubcompositionsState.getOutOfFrameExecutor()` 中注入 `isAttached` 守卫，未附着时直接返回 `null` 而非抛出 `IllegalStateException`。
 
 ---
 
