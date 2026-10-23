@@ -40,6 +40,13 @@ data class FavoriteResourceData(
 )
 
 @Serializable
+data class FavoriteInfoResponse(
+    val code: Int = 0,
+    val message: String = "",
+    val data: FavoriteInfo? = null
+)
+
+@Serializable
 data class FavoriteInfo(
     val id: Long = 0,
     val fid: Long = 0,
@@ -200,6 +207,7 @@ data class WatchLaterChargingPay(val level: Int? = null)
 @Serializable
 data class WatchLaterRights(
     @SerialName("is_cooperation") val isCooperation: Int? = null,
+    @SerialName("is_stein_gate") val isSteinGate: Int? = null,
 )
 
 @Serializable

@@ -473,7 +473,7 @@ fun ProfileWallpaperAdjustmentSheet(
 }
 
 @Composable
-private fun WallpaperDeviceTabRow(
+internal fun WallpaperDeviceTabRow(
     selectedTab: Int,
     modifier: Modifier = Modifier,
     onSelectedTabChange: (Int) -> Unit,
@@ -485,6 +485,8 @@ private fun WallpaperDeviceTabRow(
         )
     }
     AppThemeAdaptiveTabRow(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
         options = options,
         selectedValue = selectedTab,

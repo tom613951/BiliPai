@@ -3,6 +3,8 @@ package com.android.purebilibili.feature.video.screen
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Offset
 import com.android.purebilibili.core.ui.transition.VideoCardSourceLayout
+import com.android.purebilibili.core.ui.transition.VideoCardTransitionBackgroundPhase
+import com.android.purebilibili.core.ui.transition.resolveVideoDetailMediaLayoutHandoffProgress
 import java.io.File
 import kotlin.math.roundToInt
 import kotlin.test.Test
@@ -11,6 +13,122 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VideoDetailReturnMediaLayoutTest {
+    @Test
+    fun opaqueCoverOcclusionPreservesInsetAndRoundedEdges() {
+        val frame = VideoDetailReturnMediaLayoutFrame(
+            offsetXPx = 20, offsetYPx = 48, widthPx = 1000, heightPx = 600,
+        )
+        assertEquals(Rect(37f, 65f, 1003f, 631f),
+            resolveVideoDetailOpaqueCoverInterior(frame, coverAlpha = 1f, cornerRadiusPx = 16f))
+        // A loading image still has an opaque cover backing; a partial crossfade does not.
+        assertEquals(null, resolveVideoDetailOpaqueCoverInterior(frame, 0.999f, 16f))
+        assertEquals(null, resolveVideoDetailOpaqueCoverInterior(frame, 0f, 16f))
+    }
+
+    @Test
+    fun opaqueCoverOcclusionRejectsTinyOrInvalidCoverage() {
+        val tiny = VideoDetailReturnMediaLayoutFrame(0, 0, 10, 10)
+        assertEquals(null, resolveVideoDetailOpaqueCoverInterior(tiny, 1f, 16f))
+        assertEquals(null, resolveVideoDetailOpaqueCoverInterior(tiny, Float.NaN, 0f))
+        assertEquals(Rect(1f, 1f, 9f, 9f), resolveVideoDetailOpaqueCoverInterior(tiny, 1f, 0f))
+    }
+
+    @Test
+    fun horizontalCoverStaysInsideTheContractingShellInBothDirectionsAndOnCancel() {
+        val hostWidth = 1080f
+        val hostHeight = 2400f
+        val bounds = Rect(24f, 800f, 1056f, 1088f)
+        val cover = Rect(24f, 800f, 456f, 1070f)
+        val layout = resolveVideoDetailReturnSourceCardLayout(
+            viewportWidthPx = hostWidth,
+            sourceBounds = bounds,
+            sourceCoverBounds = cover,
+            sourceLayout = VideoCardSourceLayout.SIDE_BY_SIDE,
+        )
+        val sourceX = bounds.width / hostWidth
+        val sourceY = bounds.height / hostHeight
+        for (phase in listOf(
+            VideoCardTransitionBackgroundPhase.OPENING,
+            VideoCardTransitionBackgroundPhase.RETURNING,
+            VideoCardTransitionBackgroundPhase.HELD,
+        )) {
+            // Reverse sampling also covers cancelling/re-grabbing a predictive return.
+            for (step in (0..1000).toList() + (1000 downTo 0).toList()) {
+                val depth = step / 1000f
+                val gesture = phase == VideoCardTransitionBackgroundPhase.HELD
+                val alpha = resolveVideoDetailFlyingSourceChromeAlpha(
+                    depth, phase, gesture, VideoCardSourceLayout.SIDE_BY_SIDE,
+                )
+                val handoff = resolveVideoDetailMediaLayoutHandoffProgress(
+                    depth, phase, gesture, VideoCardSourceLayout.SIDE_BY_SIDE,
+                    sourceChromeAlpha = alpha,
+                )
+                val frame = resolveVideoDetailReturnMediaLayoutFrame(
+                    containerWidthPx = hostWidth.toInt(),
+                    containerHeightPx = 608,
+                    landingLayout = layout,
+                    handoffProgress = handoff,
+                )
+                val x = com.android.purebilibili.navigation3.predictiveback
+                    .resolveMiuixVideoCardOuterScale(sourceX, depth, 1f)
+                val y = com.android.purebilibili.navigation3.predictiveback
+                    .resolveMiuixVideoCardOuterScaleY(sourceX, sourceY, depth, 1f)
+                val visibleCoverBottom = (frame.offsetYPx + frame.heightPx) * x
+                assertTrue(
+                    visibleCoverBottom <= hostHeight * y + 1f,
+                    "Cover clipped at depth=$depth phase=$phase: bottom=$visibleCoverBottom shell=${hostHeight * y}",
+                )
+                val detailAlpha = com.android.purebilibili.core.ui.transition
+                    .resolveVideoCardDetailChromeAlpha(
+                        depth, phase, gesture, sourceLayout = VideoCardSourceLayout.SIDE_BY_SIDE,
+                    )
+                assertEquals(1f, detailAlpha + alpha, 0.0001f)
+                assertEquals(alpha, handoff, 0.0001f)
+            }
+        }
+    }
+
+    @Test
+    fun sixteenByTenSourceCoverHasTheSameOpeningReturnAndIdleEndpoint() {
+        val layout = resolveVideoDetailReturnSourceCardLayout(
+            viewportWidthPx = 1080f,
+            sourceBounds = Rect(20f, 100f, 520f, 660f),
+            sourceCoverBounds = Rect(20f, 100f, 520f, 412.5f),
+            sourceInfoBounds = Rect(20f, 412.5f, 520f, 660f),
+            sourceLayout = VideoCardSourceLayout.STACKED,
+        )
+        val inverse = com.android.purebilibili.navigation3.predictiveback
+            .resolveMiuixVideoCardInverseScaleForDepth(
+                sourceScaleX = 500f / 1080f,
+                sourceScaleY = 560f / 2400f,
+                depth = 0f,
+            )
+        for (phase in listOf(
+            VideoCardTransitionBackgroundPhase.OPENING,
+            VideoCardTransitionBackgroundPhase.RETURNING,
+            VideoCardTransitionBackgroundPhase.IDLE,
+        )) {
+            val handoff = resolveVideoDetailMediaLayoutHandoffProgress(
+                morphDepthProgress = 0f,
+                phase = phase,
+                isReturnGestureInProgress = false,
+                sourceLayout = VideoCardSourceLayout.STACKED,
+                isCommittedCardReturn = phase != VideoCardTransitionBackgroundPhase.OPENING,
+            )
+            val frame = resolveVideoDetailReturnMediaLayoutFrame(
+                containerWidthPx = 1080,
+                containerHeightPx = 608,
+                landingLayout = layout,
+                handoffProgress = handoff,
+                inverseScaleX = inverse.scaleX,
+                inverseScaleY = inverse.scaleY,
+            )
+            assertEquals(675, frame.heightPx)
+            assertEquals(312.5f, frame.heightPx * layout.sourceScale, 0.001f)
+            assertEquals(frame.heightPx, resolveVideoDetailStackedInfoTopPx(layout, inverse.scaleY, frame))
+        }
+    }
+
     @Test
     fun stackedInfoFollowsMediaEdgeBeforeLandingWithTheOriginalGap() {
         val layout = resolveVideoDetailReturnSourceCardLayout(
@@ -91,15 +209,15 @@ class VideoDetailReturnMediaLayoutTest {
     @Test
     fun fullBarSnapshotKeepsItsAspectRatioWhileTheOuterShellIsStillTall() {
         val bounds = Rect(24f, 1800f, 1056f, 1968f)
-        // At depth 0.1 the page-height inverse is much larger than the width
-        // inverse. A bitmap must use the width inverse on both axes.
+        // Source bitmap reconstruction must preserve the width-based scale on both
+        // axes even before the flying shell reaches its final bounds.
         val inverse = com.android.purebilibili.navigation3.predictiveback
             .resolveMiuixVideoCardInverseScaleForDepth(
                 sourceScaleX = bounds.width / 1080f,
                 sourceScaleY = bounds.height / 2400f,
                 depth = 0.1f,
             )
-        assertTrue(inverse.scaleY > inverse.scaleX)
+        assertEquals(inverse.scaleX, inverse.scaleY, .0001f)
         val frame = resolveVideoDetailReturnMediaLayoutFrame(
             containerWidthPx = 1080,
             containerHeightPx = 608,

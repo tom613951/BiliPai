@@ -1,5 +1,9 @@
 package com.android.purebilibili.feature.video.ui.components
 
+import com.android.purebilibili.core.ui.components.AppText
+import com.android.purebilibili.core.ui.videoCardTitleMaxLines
+import com.android.purebilibili.core.ui.videoCardTitleOverflow
+import com.android.purebilibili.feature.home.HomeFeedCardLayout
 import com.android.purebilibili.core.ui.AppContentColors
 
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -20,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -33,6 +38,7 @@ import com.android.purebilibili.core.store.HomeFeedCardStyle
 import com.android.purebilibili.core.store.SettingsManager
 import com.android.purebilibili.feature.home.components.cards.HorizontalVideoCardFrame
 import com.android.purebilibili.feature.home.resolveHomeFeedCardLayout
+import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.ContainerLevel
 import com.android.purebilibili.feature.video.ui.VideoDetailShapes
@@ -41,7 +47,7 @@ import com.android.purebilibili.feature.video.ui.VideoDetailShapes
  *  骨架屏组件 - iOS 风格加载占位
  */
 
-private val LocalVideoSkeletonPulse = staticCompositionLocalOf { 0.5f }
+private val LocalVideoSkeletonPulse = staticCompositionLocalOf<Float?> { null }
 
 // 基础 Shimmer 容器
 @Composable
@@ -50,7 +56,7 @@ fun ShimmerContainer(
     animated: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val pulse = if (animated) rememberVideoSkeletonPulse() else 0.5f
+    val pulse = if (animated) LocalVideoSkeletonPulse.current ?: rememberVideoSkeletonPulse() else 0.5f
     CompositionLocalProvider(LocalVideoSkeletonPulse provides pulse) {
         Box(modifier = modifier) {
             content()
@@ -291,49 +297,100 @@ private fun RelatedVideoGridRowSkeleton() {
     val cardLayout = remember(homeFeedCardStyle) {
         resolveHomeFeedCardLayout(homeFeedCardStyle)
     }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = cardLayout.outerPaddingDp.dp, vertical = 4.dp)
-    ) {
-        RelatedVideoItemSkeleton(
-            modifier = Modifier.fillMaxWidth(),
-            coverAspectRatio = cardLayout.coverAspectRatio,
-        )
+    RelatedVideoGridRowSkeleton(cardLayout = cardLayout)
+}
+
+/** Same viewport, cover ratio and horizontal/stacked frame as a real recommendation row. */
+@Composable
+internal fun RelatedVideoGridRowSkeleton(
+    cardLayout: HomeFeedCardLayout,
+    title: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    ShimmerContainer(modifier = modifier) {
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clearAndSetSemantics { }
+                .padding(horizontal = cardLayout.outerPaddingDp.dp, vertical = 2.dp),
+        ) {
+            RelatedVideoItemSkeleton(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                coverAspectRatio = cardLayout.coverAspectRatio,
+                stacked = resolveRelatedVideoCardLayout(maxWidth.value.toInt()) == RelatedVideoCardLayout.STACKED,
+                title = title,
+            )
+        }
     }
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 private fun RelatedVideoItemSkeleton(
     modifier: Modifier = Modifier,
-    @Suppress("UNUSED_PARAMETER") coverAspectRatio: Float = RELATED_VIDEO_CARD_COVER_ASPECT_RATIO,
+    coverAspectRatio: Float = com.android.purebilibili.core.ui.videoCardCoverAspectRatio(),
+    stacked: Boolean = false,
+    title: String? = null,
 ) {
     HorizontalVideoCardFrame(
+        coverAspectRatio = coverAspectRatio,
+        stacked = stacked,
+        trailingContent = { Spacer(Modifier.size(48.dp)) },
         modifier = modifier
-            .clip(VideoDetailShapes.contentCard())
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(8.dp),
+            .clip(AppShapes.container(ContainerLevel.Card))
+            .background(AppSurfaceTokens.cardContainer()),
         coverContent = {
             SkeletonBlock(
                 modifier = Modifier.fillMaxSize(),
-                shape = VideoDetailShapes.media(),
+                shape = androidx.compose.ui.graphics.RectangleShape,
             )
         },
-        infoVerticalArrangement = Arrangement.spacedBy(4.dp),
         infoContent = {
-            SkeletonBox(modifier = Modifier.fillMaxWidth(), height = 16.dp, cornerRadius = 8.dp)
-            SkeletonBox(modifier = Modifier.fillMaxWidth(0.82f), height = 16.dp, cornerRadius = 8.dp)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SkeletonBlock(modifier = Modifier.size(16.dp), shape = CircleShape)
-                Spacer(modifier = Modifier.width(6.dp))
-                SkeletonBox(modifier = Modifier.width(72.dp), height = 14.dp, cornerRadius = 7.dp)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SkeletonBox(modifier = Modifier.width(48.dp), height = 13.dp, cornerRadius = 7.dp)
-                Spacer(modifier = Modifier.width(12.dp))
-                SkeletonBox(modifier = Modifier.width(48.dp), height = 13.dp, cornerRadius = 7.dp)
+            val typography = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography()
+            RelatedSkeletonText(
+                text = title ?: "推荐视频标题占位\n第二行标题占位",
+                style = typography.title,
+                maxLines = videoCardTitleMaxLines(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(com.android.purebilibili.core.ui.AppSpacingTokens.ExtraSmall)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(com.android.purebilibili.core.ui.AppSpacingTokens.Small),
+                ) {
+                    RelatedSkeletonText("00-00", MaterialTheme.typography.labelMedium)
+                    if (com.android.purebilibili.core.ui.LocalUpBadgeVisibility.current.showAvatars) {
+                        SkeletonBlock(modifier = Modifier.size(16.dp), shape = CircleShape)
+                    }
+                    RelatedSkeletonText("UP 主名称", MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    RelatedSkeletonText("▷ 000.0万", typography.statistic)
+                    RelatedSkeletonText("▤ 0000", typography.statistic)
+                }
             }
         },
+    )
+}
+
+/** Measure text with the same typography/font scale as the loaded card. */
+@Composable
+private fun RelatedSkeletonText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1,
+) {
+    val color = rememberVideoSkeletonBlockColor()
+    com.android.purebilibili.core.ui.skeleton.ContentSkeletonText(
+        text = text,
+        style = style,
+        colorProvider = { color },
+        modifier = modifier,
+        maxLines = maxLines,
     )
 }
 
@@ -372,7 +429,7 @@ private fun rememberVideoSkeletonPulse(): Float {
 
 @Composable
 private fun rememberVideoSkeletonBlockColor(): Color {
-    val pulse = LocalVideoSkeletonPulse.current
+    val pulse = LocalVideoSkeletonPulse.current ?: 0.5f
     val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val alpha = if (isDarkTheme) {
         VIDEO_SKELETON_DARK_MIN_ALPHA +

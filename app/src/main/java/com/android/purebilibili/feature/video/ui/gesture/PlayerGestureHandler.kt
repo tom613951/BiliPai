@@ -5,8 +5,10 @@ import android.app.Activity
 import android.content.Context
 import android.media.AudioManager
 import android.provider.Settings
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -18,7 +20,9 @@ import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -269,16 +273,79 @@ fun GestureIndicator(
 }
 
 /**
- * Create tap gesture detector
+ * A stable Compose hit target above passive Android rendering views. It does not consume
+ * events: the parent owns tap/drag/long-press recognition. Interactive overlays are placed
+ * above this surface, so their buttons and BAS links keep priority over player gestures.
+ */
+@Composable
+internal fun PlayerGestureInputSurface(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) awaitPointerEvent()
+            }
+        },
+    )
+}
+
+/**
+ * Only short presses can enter the double-tap stream. Long presses remain owned by
+ * the separate speed/drag detector; awaitEachGesture drains their release events.
+ * Distant taps are independent, and the second can still start a new double tap.
  */
 suspend fun PointerInputScope.detectPlayerTapGestures(
-    onTap: () -> Unit,
-    onDoubleTap: () -> Unit
+    onTap: (Offset) -> Unit,
+    onDoubleTap: (Offset) -> Unit,
+    doubleTapSlopPx: Float,
+    captureSingleTap: (Offset) -> (() -> Unit)? = { null }
 ) {
-    detectTapGestures(
-        onTap = { onTap() },
-        onDoubleTap = { onDoubleTap() }
-    )
+    // Movement within one press uses touchSlop; spacing between two taps uses the
+    // platform double-tap tolerance, which allows natural finger repositioning.
+    val doubleTapSlopSquared = doubleTapSlopPx * doubleTapSlopPx
+    awaitEachGesture {
+        var down = awaitFirstDown()
+        while (true) {
+            down.consume()
+            val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                waitForUpOrCancellation()
+            } ?: return@awaitEachGesture
+            up.consume()
+            // Snapshot moving targets now; only invoke if this remains a single tap.
+            val capturedTap = captureSingleTap(up.position)
+
+            val secondDown = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+                val minUptime = up.uptimeMillis + viewConfiguration.doubleTapMinTimeMillis
+                var candidate = awaitFirstDown()
+                while (candidate.uptimeMillis < minUptime) {
+                    candidate = awaitFirstDown()
+                }
+                candidate
+            }
+            if (secondDown == null) {
+                capturedTap?.invoke() ?: onTap(up.position)
+                return@awaitEachGesture
+            }
+
+            val distanceSquared = (secondDown.position - down.position).getDistanceSquared()
+            if (distanceSquared > doubleTapSlopSquared) {
+                capturedTap?.invoke() ?: onTap(up.position)
+                down = secondDown
+                continue
+            }
+
+            secondDown.consume()
+            val secondUp = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                waitForUpOrCancellation()
+            }
+            if (secondUp == null) {
+                capturedTap?.invoke() ?: onTap(up.position)
+            } else {
+                secondUp.consume()
+                onDoubleTap(secondUp.position)
+            }
+            return@awaitEachGesture
+        }
+    }
 }
 
 /**

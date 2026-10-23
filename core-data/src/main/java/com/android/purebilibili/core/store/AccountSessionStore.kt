@@ -192,6 +192,11 @@ object AccountSessionStore {
         val current = getAccounts(context)
         if (current.none { it.mid == mid }) return false
 
+        current.firstOrNull { it.mid == mid }?.let { account ->
+            com.android.purebilibili.core.network.AccountCookieStore.remove(
+                context, com.android.purebilibili.core.network.AccountCookieSession.from(account)
+            )
+        }
         val updated = current.filterNot { it.mid == mid }
         persistAccounts(context, updated)
 
@@ -239,6 +244,15 @@ object AccountSessionStore {
         persistAccounts(context, merged)
         setActiveAccountMid(context, mid)
         return updated
+    }
+
+    /** Refreshes only the avatar; session credentials and account selection remain untouched. */
+    fun updateAccountAvatar(context: Context, mid: Long, face: String) {
+        if (mid <= 0L || face.isBlank()) return
+        val accounts = getAccounts(context)
+        val previous = accounts.firstOrNull { it.mid == mid } ?: return
+        if (previous.face == face) return
+        persistAccounts(context, accounts.map { if (it.mid == mid) it.copy(face = face) else it })
     }
 
     suspend fun activateAccount(context: Context, mid: Long): Boolean {

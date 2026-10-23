@@ -2,6 +2,7 @@ package com.android.purebilibili.feature.settings.ui
 
 import com.android.purebilibili.core.ui.AppContentColors
 
+import com.android.purebilibili.core.ui.globalWallpaperAwareBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -188,6 +189,9 @@ internal fun SettingsPageScaffold(
 
     CompositionLocalProvider(
         LocalAppPreferenceIconTreatment provides AppPreferenceIconTreatment.FILLED,
+        // Settings-only Miuix icons; shared defaults and MD3 remain unchanged in both glass states.
+        com.android.purebilibili.core.ui.components.LocalAppPreferenceIconColors provides
+            com.android.purebilibili.feature.settings.settingsIconColors(),
         LocalAppPreferenceGroupPresentation provides if (LocalAppUiStyle.current == AppUiStyle.MIUIX) {
             AppPreferenceGroupPresentation.CARD
         } else {
@@ -253,7 +257,7 @@ internal fun SettingsPageScaffold(
                 .fillMaxSize()
                 .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                 .then(if (hazeState != null) Modifier.hazeSourceCompat(hazeState) else Modifier)
-                .background(pageContainerColor)
+                .globalWallpaperAwareBackground(pageContainerColor)
 
             val windowSizeClass = LocalWindowSizeClass.current
             val isExpandedScreen = windowSizeClass.isExpandedScreen

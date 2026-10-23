@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.home.components.cards
 
+import com.android.purebilibili.core.ui.components.VideoStatusBadges
+import com.android.purebilibili.core.ui.components.wallpaperAwareMediaCardBackground
 import com.android.purebilibili.core.ui.AppContentColors
 
 import coil3.request.crossfade
@@ -39,7 +41,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +76,7 @@ import com.android.purebilibili.core.ui.transition.shouldUseVideoCardShellShared
 import com.android.purebilibili.core.ui.transition.videoCardShellSharedBoundsOrEmpty
 import com.android.purebilibili.core.ui.transition.withMeasuredCoverDecodeSize
 import com.android.purebilibili.core.util.CardPositionManager
+import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.util.HapticType
 import com.android.purebilibili.core.util.rememberHapticFeedback
@@ -88,7 +91,7 @@ import kotlin.math.roundToInt
 internal fun HomeStyleSingleColumnVideoCard(
     video: VideoItem,
     sourceRoute: String,
-    @Suppress("UNUSED_PARAMETER") coverAspectRatio: Float,
+    coverAspectRatio: Float,
     transitionEnabled: Boolean,
     sharedTransitionEnabled: Boolean = transitionEnabled,
     isFollowing: Boolean = false,
@@ -105,7 +108,7 @@ internal fun HomeStyleSingleColumnVideoCard(
 ) {
     val context = LocalContext.current
     val isLongPressEnabled = com.android.purebilibili.core.ui.LocalVideoCardLongPressEnabled.current
-    val contentTypography = feedContentTypography(FeedTitleHierarchy.Standard)
+    val contentTypography = horizontalVideoCardTypography()
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val densityValue = density.density
@@ -142,7 +145,10 @@ internal fun HomeStyleSingleColumnVideoCard(
     }
     val cardBounds = remember { object { var value: Rect? = null } }
     val coverBounds = remember { object { var value: Rect? = null } }
-    val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(video.bvid)
+    val infoCoordinates = remember { object { var value: LayoutCoordinates? = null } }
+    val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(
+        video.bvid, enabled = sharedTransitionEnabled,
+    )
     val cardShape = AppShapes.container(ContainerLevel.Card)
     val cardCornerDp = AppShapes.containerCornerDp(ContainerLevel.Card)
     val useCardShellSharedBounds = shouldUseVideoCardShellSharedBounds(
@@ -181,14 +187,16 @@ internal fun HomeStyleSingleColumnVideoCard(
                 sourceCornerDp = cardCornerDp.value.roundToInt(),
                 coverBounds = sourceCoverBounds,
                 sourceLayout = VideoCardSourceLayout.SIDE_BY_SIDE,
+                infoBounds = infoCoordinates.value?.takeIf { it.isAttached }?.videoCardSourceBoundsInRoot(),
                 sourceChromeSnapshot = VideoCardSourceChromeSnapshot(
                     title = video.title,
                     ownerName = video.owner.name,
                     ownerFaceUrl = video.owner.face,
+                    recommendationReason = video.recommendationReason,
                     viewText = FormatUtils.formatStat(video.stat.view.toLong()),
                     danmakuText = FormatUtils.formatStat(video.stat.danmaku.toLong()),
                     durationText = FormatUtils.formatDuration(video.duration),
-                    followed = isFollowing,
+                    followed = isFollowing || video.isFollowed,
                     // Single-column paints play/danmaku in the info column (not on cover only).
                     infoPresentation = com.android.purebilibili.core.ui.transition
                         .resolveVideoCardSourceInfoPresentation(
@@ -224,10 +232,11 @@ internal fun HomeStyleSingleColumnVideoCard(
     }
     val moreHaptic = rememberHapticFeedback()
     HorizontalVideoCardFrame(
+        coverAspectRatio = coverAspectRatio,
         modifier = modifier
             .adaptiveCardHoverEffect(shape = cardShape)
             .onGloballyPositioned { coordinates ->
-                cardBounds.value = coordinates.boundsInRoot()
+                cardBounds.value = coordinates.videoCardSourceBoundsInRoot()
             }
             .videoCardShellSharedBoundsOrEmpty(
                 enabled = useCardShellSharedBounds,
@@ -239,15 +248,18 @@ internal fun HomeStyleSingleColumnVideoCard(
                 clipShape = cardShape,
                 crossfadeSourceContent = true,
             )
-            .clip(cardShape)
             .then(nativeCardSnapshot.modifier)
-            .background(AppSurfaceTokens.cardContainer())
+            .clip(cardShape)
+            .wallpaperAwareMediaCardBackground(AppSurfaceTokens.cardContainer(), cardShape)
             .combinedClickable(
                 onClick = triggerClick,
                 onLongClick = if (isLongPressEnabled) onLongClick else null,
             ),
         coverModifier = Modifier.onGloballyPositioned { coordinates ->
-            coverBounds.value = coordinates.boundsInRoot()
+            coverBounds.value = coordinates.videoCardSourceBoundsInRoot()
+        },
+        infoModifier = Modifier.onGloballyPositioned { coordinates ->
+            infoCoordinates.value = coordinates
         },
         coverOverlayModifier = nativeCardSnapshot.coverOverlayModifier,
         coverContent = {
@@ -259,23 +271,16 @@ internal fun HomeStyleSingleColumnVideoCard(
             )
         },
         coverOverlayContent = {
+            VideoStatusBadges(
+                labels = video.statusLabels,
+                modifier = Modifier.align(Alignment.TopEnd).padding(AppSpacingTokens.ExtraSmall),
+            )
             if (durationStyle == com.android.purebilibili.core.store.HomeDurationStyle.HIDDEN) {
                 return@HorizontalVideoCardFrame
             }
-            AppText(
+            VideoCardCoverDurationText(
                 text = FormatUtils.formatDuration(video.duration),
-                color = MediaContrastPalette.Foreground,
-                style = contentTypography.coverBadge.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    shadow = Shadow(
-                        color = MediaContrastPalette.Scrim.copy(alpha = 0.64f),
-                        blurRadius = 4f,
-                        offset = Offset(0f, 1f),
-                    ),
-                ),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
             )
         },
         infoContent = {
@@ -311,13 +316,21 @@ internal fun HomeStyleSingleColumnVideoCard(
                 } else {
                     null
                 },
-                nameLeadingContent = if (isFollowing) {
+                nameLeadingContent = if (isFollowing || video.isFollowed || video.recommendationReason.isNotBlank()) {
                     {
-                        AppText(
-                            text = "已关注",
-                            style = contentTypography.coverBadge,
-                            color = AppContentColors.accent(),
-                        )
+                        Row(
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            VideoRecommendationBadge(video.recommendationReason)
+                            if (isFollowing || video.isFollowed) {
+                                AppText(
+                                    text = "已关注",
+                                    style = contentTypography.coverBadge,
+                                    color = AppContentColors.accent(),
+                                )
+                            }
+                        }
                     }
                 } else {
                     null
@@ -352,22 +365,13 @@ internal fun HomeStyleSingleColumnVideoCard(
         trailingContent = when {
             trailingContent != null -> {
                 {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(
-                                end = AppSpacingTokens.Small,
-                                bottom = AppSpacingTokens.ExtraSmall,
-                            ),
-                    ) { trailingContent() }
+                    trailingContent()
                 }
             }
             onMoreClick != null -> {
                 {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = AppSpacingTokens.Micro, bottom = AppSpacingTokens.Micro)
                             .size(AppChromeSizeTokens.MinimumTouchTarget)
                             .clip(CircleShape)
                             .semantics { contentDescription = "更多操作" }

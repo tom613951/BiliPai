@@ -42,6 +42,24 @@ data class OpenSourceLibrary(
  */
 val openSourceLibraries = listOf(
     OpenSourceLibrary(
+        name = "FlClash Liquid Indicator",
+        license = "GPL-3.0",
+        url = "https://github.com/chen08209/FlClash/blob/8d4f9744948751f1273fe871e1d05276fac09b0e/lib/ui/navigation_dock.dart",
+        description = "液态玻璃指示器的独立形变弹簧参考；保留现有拖动效果，仅在停止后追加甩尾回弹",
+    ),
+    OpenSourceLibrary(
+        name = "Telegram / Nagram Chat Avatar Placement",
+        license = "GPL-2.0-or-later（按 GPLv3 分发）",
+        url = "https://github.com/NextAlone/Nagram/blob/fb56ea9801e5de68c60f0152b444bbe2a0fda520/TMessagesProj/src/main/java/org/telegram/ui/ChatActivity.java",
+        description = "聊天头像底部吸附与消息边界约束代码移植，原作者 Nikolai Kudashov；适配评论、回复和搜索结果"
+    ),
+    OpenSourceLibrary(
+        name = "Flex Seed Scheme",
+        license = "BSD-3-Clause",
+        url = "https://github.com/rydmike/flex_seed_scheme",
+        description = "扩展调色板的色调表与配色规则（原生移植自 5.0.1）"
+    ),
+    OpenSourceLibrary(
         name = "Kotlin",
         license = "Apache 2.0",
         url = "https://github.com/JetBrains/kotlin",
@@ -64,6 +82,12 @@ val openSourceLibraries = listOf(
         license = "Apache 2.0",
         url = "https://github.com/material-components/material-components-android",
         description = "Material Design 组件与主题系统"
+    ),
+    OpenSourceLibrary(
+        name = "Material Symbols",
+        license = "Apache 2.0",
+        url = "https://github.com/google/material-design-icons",
+        description = "设置语义图标使用的 Outlined 矢量字形"
     ),
     OpenSourceLibrary(
         name = "Miuix",
@@ -157,7 +181,7 @@ val openSourceLibraries = listOf(
     ),
     OpenSourceLibrary(
         name = "Material Kolor",
-        license = "Apache 2.0",
+        license = "MIT / Apache 2.0",
         url = "https://github.com/jordond/materialkolor",
         description = "Material You 动态配色生成"
     ),
@@ -327,7 +351,7 @@ fun OpenSourceLicensesScreen(
                     AppText(
                         text = "说明：该列表按当前工程依赖、投屏/测试模块以及明确参考实现整理，可能不包含全部传递依赖或完整法律清单。",
                         style = MaterialTheme.typography.labelMedium,
-                        color = AppContentColors.accent(),
+                        color = AppContentColors.link(),
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
@@ -406,7 +430,7 @@ fun LicenseCard(
                     AppText(
                         text = "GitHub/链接",
                         style = MaterialTheme.typography.labelSmall,
-                        color = AppContentColors.accent(),
+                        color = AppContentColors.link(),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -414,7 +438,7 @@ fun LicenseCard(
                 AppText(
                     text = library.url,
                     style = MaterialTheme.typography.labelSmall,
-                    color = AppContentColors.accent(),
+                    color = AppContentColors.link(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 4.dp)

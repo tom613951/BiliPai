@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.video.screen
 
+import com.android.purebilibili.feature.video.viewmodel.CommentSubjectKey
+import com.android.purebilibili.feature.video.viewmodel.resolveReplyCount
 import com.android.purebilibili.core.ui.AppContentColors
 
 import android.content.Context
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.purebilibili.core.ui.AppShapes
@@ -50,6 +53,7 @@ import com.android.purebilibili.feature.video.share.buildVideoSharePayload
 import com.android.purebilibili.feature.video.danmaku.DanmakuManager
 import com.android.purebilibili.feature.video.state.VideoPlayerState
 import com.android.purebilibili.feature.video.ui.components.BottomInputBar
+import com.android.purebilibili.feature.video.ui.components.VideoDetailSkeleton
 import com.android.purebilibili.feature.video.ui.components.resolveBottomInputBarContentBottomPadding
 import com.android.purebilibili.feature.video.ui.components.shouldUseFloatingLiquidBottomInputBar
 import com.android.purebilibili.feature.home.components.BottomBarMatchedReusableLiquidDock
@@ -74,7 +78,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     introListState: LazyListState,
     commentListState: LazyListState,
     videoContentPagerState: PagerState,
-    commentState: CommentUiState,
+    commentStateHandle: androidx.compose.runtime.State<CommentUiState>,
     engagementState: VideoEngagementUiState,
     androidNativeLiquidGlassEnabled: Boolean,
     commentMemberDecorationsEnabled: Boolean,
@@ -87,6 +91,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     motionSpec: VideoDetailMotionSpec,
     hazeState: HazeState,
     isTransitionFinished: Boolean,
+    relatedContentReady: Boolean = true,
     isLeaving: Boolean,
     rootTransitionOwnsContentAlpha: Boolean,
     keepContentVisibleAfterBackPreview: Boolean = false,
@@ -98,7 +103,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     showCommentInput: Boolean,
     isCommentThreadVisible: Boolean,
     showFavoriteFolderDialog: Boolean,
-    downloadProgress: Float,
+    downloadProgress: androidx.compose.runtime.State<Float>,
     danmakuEnabledForDetail: Boolean,
     /**
      * 详情页共享的弹幕会话。
@@ -116,7 +121,6 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     homeUpBadgesVisible: Boolean,
     isVideoPlaying: Boolean,
     onSelectedTabChange: (Int) -> Unit,
-    onIntroScrollThresholdChange: (Boolean) -> Unit,
     openFavoriteFolders: (VideoFavoriteEntryPoint, isLongPress: Boolean) -> Unit,
     navigateToUserSpaceFromVideo: (Long) -> Unit,
     navigateToRelatedVideo: (String, android.os.Bundle?) -> Unit,
@@ -128,13 +132,19 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     onShowExternalPlaylistQueueSheet: () -> Unit,
     commentThreadCoveredBlurProgressProvider: () -> Float = { 0f },
     commentPullToRefreshEnabled: Boolean = true,
+    animateLateEntryContent: Boolean = false,
 ) {
+    val commentState by commentStateHandle
     val engagementSuccess = success.withEngagementUiState(engagementState)
     var pendingVideoShare by remember { mutableStateOf<VideoSharePayload?>(null) }
     val coveredBlurEffectCache = remember { BlurRenderEffectCache() }
     // Android 16 ART 曾拒绝校验 VideoDetailScreen 中捕获过多状态的匿名 Compose lambda。
     // 保持这个成功态为命名边界，避免 R8/Compose 再生成单个超大内容块。
     key(success.info.bvid) {
+        val lateContentReveal = rememberVideoDetailLateContentReveal(animateLateEntryContent)
+        val showLoadingUnderlay by remember {
+            derivedStateOf { lateContentReveal.value < 1f }
+        }
         Box(modifier = Modifier.fillMaxSize().videoInputDiagnostics("detail_body") {
             "fullscreen=$isFullscreenMode portraitFs=$isPortraitFullscreen " +
                 "leaving=$isLeaving transitionFinished=$isTransitionFinished thread=$isCommentThreadVisible " +
@@ -145,6 +155,16 @@ internal fun VideoDetailPhoneSuccessContentLayer(
             Box(
                 modifier = Modifier.fillMaxSize()
             ) {
+                // Only late arrival adds an opacity handoff; root geometry and the
+                // glass / MD3 / Miuix layouts stay unchanged. Drop the static underlay
+                // once complete instead of leaving an invisible skeleton mounted.
+                if (showLoadingUnderlay) {
+                    Box(Modifier.fillMaxSize().graphicsLayer {
+                        alpha = 1f - lateContentReveal.value
+                    }) {
+                        VideoDetailSkeleton(animated = false)
+                    }
+                }
                 val detailContentRevealEnter = fadeIn(
                     tween(
                         motionSpec.contentRevealFadeDurationMillis,
@@ -159,6 +179,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                     )
                 )
                 AnimatedVisibility(
+                    modifier = Modifier.graphicsLayer { alpha = lateContentReveal.value },
                     visible = shouldShowVideoDetailContent(
                         isTransitionFinished = isTransitionFinished,
                         isLeaving = isLeaving,
@@ -246,7 +267,10 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                     relatedVideos = success.related,
                                     relatedLoadState = success.relatedLoadState,
                                     replies = commentState.replies,
-                                    replyCount = commentState.replyCount,
+                                    replyCount = commentState.resolveReplyCount(
+                                        subject = CommentSubjectKey(engagementSuccess.info.aid),
+                                        detailCount = engagementSuccess.info.stat.reply,
+                                    ) ?: engagementSuccess.info.stat.reply,
                                     emoteMap = success.emoteMap,
                                     followingMids = engagementState.followingMids,
                                     videoTags = success.videoTags,
@@ -263,7 +287,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                     isDisliked = engagementState.isDisliked,
                                     coinCount = engagementState.coinCount,
                                     currentPageIndex = currentPageIndex,
-                                    downloadProgress = downloadProgress,
+                                    downloadProgress = downloadProgress.value,
                                     isInWatchLater = engagementState.isInWatchLater,
                                 ),
                                 commentState = VideoContentCommentState(
@@ -279,6 +303,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                     dissolvingIds = commentState.dissolvingIds,
                                     likedComments = commentState.likedComments,
                                     hatedComments = commentState.hatedComments,
+                                    nextPage = commentState.nextPage,
                                 ),
                                 noteState = VideoContentNoteState(
                                     aiSummary = success.aiSummary,
@@ -301,6 +326,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                     isVideoPlaying = isVideoPlaying,
                                     bottomContentPadding = videoContentBottomPadding,
                                     commentPullToRefreshEnabled = commentPullToRefreshEnabled,
+                                    relatedContentReady = relatedContentReady,
                                 ),
                                 primaryActions = VideoContentPrimaryActions(
                                     onFollowClick = engagementActions.toggleFollow,
@@ -387,7 +413,6 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                 ),
                                 uiActions = VideoContentUiActions(
                                     onSelectedTabChange = onSelectedTabChange,
-                                    onIntroScrollThresholdChange = onIntroScrollThresholdChange,
                                     onCommentScrollStateChange = { _, _ -> },
                                 ),
                             )
@@ -512,16 +537,18 @@ private fun ExternalPlaylistQueueCollapsedBar(
     modifier: Modifier = Modifier
 ) {
     val shape = AppShapes.container(ContainerLevel.Pill)
+    // 队列入口按内容紧凑排版，两种材质共用最小高度，大字体可自然撑高。
+    val minBarHeight = 40.dp
     if (liquidGlassEnabled) {
         BottomBarMatchedReusableLiquidDock(
             shape = shape,
             modifier = modifier
                 .fillMaxWidth()
-                .height(64.dp),
+                .heightIn(min = minBarHeight),
             backdrop = backdrop,
             reuseEnabled = true,
             drawShellLens = true,
-            shellLensIntensity = resolveFloatingDockGeometryScale(64f),
+            shellLensIntensity = resolveFloatingDockGeometryScale(minBarHeight.value),
             isScrollInProgressProvider = isScrollInProgressProvider,
         ) {
             ExternalPlaylistQueueCollapsedBarContent(
@@ -536,7 +563,7 @@ private fun ExternalPlaylistQueueCollapsedBar(
     AppSurface(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .heightIn(min = minBarHeight)
             // 先 clip 再 haze：否则模糊层按矩形绘制，左/右端会露出直角（与展开 sheet 一致）。
             .clip(shape)
             .then(
@@ -548,8 +575,7 @@ private fun ExternalPlaylistQueueCollapsedBar(
                 } else {
                     Modifier
                 }
-            )
-            .clickable { onClick() },
+            ),
         shape = shape,
         color = AppSurfaceTokens.cardContainer().copy(alpha = 0.74f),
         tonalElevation = 0.dp,
@@ -571,26 +597,31 @@ private fun ExternalPlaylistQueueCollapsedBarContent(
     title: String,
     videoCount: Int,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
         Row(
-            modifier = Modifier
-                .fillMaxSize()
+            modifier = modifier
+                .fillMaxWidth()
                 .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             AppText(
                 text = title,
+                modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = AppContentColors.primaryText()
+                color = AppContentColors.primaryText(),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.width(8.dp))
             AppText(
                 text = "${videoCount}个视频",
                 color = AppContentColors.accent(),
                 style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
             )
             Spacer(modifier = Modifier.width(4.dp))
             AppIcon(

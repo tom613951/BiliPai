@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.android.purebilibili.core.network.NetworkModule
 import com.android.purebilibili.data.model.CommentFraudStatus
 import com.android.purebilibili.data.model.response.ReplyData
+import com.android.purebilibili.data.model.response.CommentMainListContinuation
 import com.android.purebilibili.data.model.response.ReplyItem
 import com.android.purebilibili.data.model.response.ReplyPage
 import com.android.purebilibili.data.model.response.ReplyPicture
@@ -23,7 +24,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.collections.immutable.ImmutableList
@@ -47,7 +47,7 @@ enum class CommentSortMode(val apiMode: Int, val label: String) {
 
 private const val SUB_REPLY_PAGE_SIZE = 20
 
-internal data class CommentSubjectKey(
+data class CommentSubjectKey(
     val oid: Long,
     val type: Int = VIDEO_COMMENT_TYPE
 ) {
@@ -96,6 +96,9 @@ data class CommentUiState(
     val isRepliesLoading: Boolean = false,
     val isRepliesRefreshing: Boolean = false,
     val replyCount: Int = 0,
+    // Null means unknown; a known zero is valid and must not fall back to stale detail metadata.
+    val replyCountSubject: CommentSubjectKey? = null,
+    val replyCountIsAuthoritative: Boolean = false,
     val repliesError: String? = null,
     val isRepliesEnd: Boolean = false,
     val nextPage: Int = 1,
@@ -106,6 +109,7 @@ data class CommentUiState(
     val isSending: Boolean = false,
     val sendError: String? = null,
     val replyTarget: ReplyItem? = null,  // 回复目标评论（为空则是一级评论）
+    val composerDrafts: CommentComposerDraftState = CommentComposerDraftState(),
     val likedComments: ImmutableSet<Long> = persistentSetOf(),  // 已点赞的评论 rpid 集合
     val hatedComments: ImmutableSet<Long> = persistentSetOf(),   // 已点踩的评论 rpid 集合
     // [新增] 删除与动画状态
@@ -119,6 +123,7 @@ data class CommentUiState(
     val showUpFlag: Boolean = false,
     val pinnedReplyIds: ImmutableSet<Long> = persistentSetOf(),
     val grpcNextOffset: String? = null,
+    val mainListContinuation: CommentMainListContinuation? = null,
     // [新增] 评论反诈检测状态
     val isDetectingFraud: Boolean = false,
     val fraudDetectResult: CommentFraudStatus? = null,
@@ -143,6 +148,7 @@ data class SubReplyUiState(
     val upMid: Long = 0,
     val grpcNextOffset: String? = null,
     val baseGrpcNextOffset: String? = null,
+    val retryRequest: SubReplyPageRequest? = null,
     val conversationAnchor: ReplyItem? = null,
     val targetReplyId: Long = 0,
     // [新增] 消散动画状态
@@ -199,7 +205,8 @@ data class FullCommentSearchUiState(
     val loadedCount: Int = 0,
     val totalCount: Int = 0,
     val isReady: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val isComplete: Boolean = false,
 )
 
 class VideoCommentViewModel : ViewModel() {
@@ -213,6 +220,7 @@ class VideoCommentViewModel : ViewModel() {
     // 再后台静默刷新，避免每次都从白屏骨架开始。
     private val commentCache = sharedVideoCommentCache
     private var subReplyLoadJob: Job? = null
+    private var subReplySession = 0L
     private val _subReplyState = MutableStateFlow(SubReplyUiState())
     val subReplyState = _subReplyState.asStateFlow()
 
@@ -257,6 +265,7 @@ class VideoCommentViewModel : ViewModel() {
                 nextPage = state.nextPage,
                 isEnd = state.isRepliesEnd,
                 grpcNextOffset = state.grpcNextOffset,
+                mainListContinuation = state.mainListContinuation,
                 upMid = state.upMid,
                 pinnedReplyIds = state.pinnedReplyIds,
                 subject = subject,
@@ -275,7 +284,8 @@ class VideoCommentViewModel : ViewModel() {
         currentSubject = CommentSubjectKey(0L)
         allReplies = emptyList()
         _commentState.value = CommentUiState(
-            currentMid = com.android.purebilibili.core.store.TokenManager.midCache ?: 0L
+            currentMid = com.android.purebilibili.core.store.TokenManager.midCache ?: 0L,
+            composerDrafts = _commentState.value.composerDrafts.reset()
         )
         subReplyLoadJob?.cancel()
         _subReplyState.value = SubReplyUiState()
@@ -287,18 +297,24 @@ class VideoCommentViewModel : ViewModel() {
         aid: Long,
         upMid: Long = 0,
         preferredSortMode: CommentSortMode = CommentSortMode.HOT,
-        expectedReplyCount: Int = 0,
+        expectedReplyCount: Int? = null,
         commentType: Int = VIDEO_COMMENT_TYPE
     ) {
         android.util.Log.d("CommentVM", " init called with aid=$aid, upMid=$upMid, currentAid=$currentAid, type=$commentType")
         if (currentAid == aid && _commentState.value.upMid == upMid && currentSubject.type == commentType) {
             // [修复] 即使视频相同，也刷新 currentMid（防止登录状态变化后不更新）
             refreshCurrentMid()
-            if (expectedReplyCount > _commentState.value.replyCount) {
-                _commentState.value = _commentState.value.copy(replyCount = expectedReplyCount)
+            if (expectedReplyCount != null && !_commentState.value.replyCountIsAuthoritative &&
+                (_commentState.value.replyCountSubject == null || expectedReplyCount > _commentState.value.replyCount)
+            ) {
+                _commentState.value = _commentState.value.copy(
+                    replyCount = expectedReplyCount.coerceAtLeast(0),
+                    replyCountSubject = currentSubject,
+                )
             }
             return
         }
+        val currentStateSubjectChanged = currentSubject != CommentSubjectKey(aid, commentType)
         commentLoadRequestId++
         commentLoadJob?.cancel()
         currentAid = aid
@@ -312,7 +328,16 @@ class VideoCommentViewModel : ViewModel() {
             sortMode = preferredSortMode,
             upMid = upMid,
             currentMid = myMid,
-            replyCount = expectedReplyCount.coerceAtLeast(0)
+            replyCount = expectedReplyCount?.coerceAtLeast(0) ?: 0,
+            replyCountSubject = currentSubject.takeIf { expectedReplyCount != null },
+            replyTarget = if (currentStateSubjectChanged) null else _commentState.value.replyTarget,
+            isSending = !currentStateSubjectChanged && _commentState.value.isSending,
+            sendError = if (currentStateSubjectChanged) null else _commentState.value.sendError,
+            composerDrafts = if (currentStateSubjectChanged) {
+                _commentState.value.composerDrafts.reset()
+            } else {
+                _commentState.value.composerDrafts
+            }
         )
         subReplyLoadJob?.cancel()
         _subReplyState.value = SubReplyUiState()
@@ -343,7 +368,13 @@ class VideoCommentViewModel : ViewModel() {
             sortMode = mode,
             upMid = currentState.upMid,
             currentMid = currentState.currentMid,
-            replyCount = currentState.replyCount
+            replyCount = currentState.replyCount,
+            replyCountSubject = currentState.replyCountSubject,
+            replyCountIsAuthoritative = currentState.replyCountIsAuthoritative,
+            isSending = currentState.isSending,
+            sendError = currentState.sendError,
+            replyTarget = currentState.replyTarget,
+            composerDrafts = currentState.composerDrafts
         )
         loadComments()
     }
@@ -386,21 +417,23 @@ class VideoCommentViewModel : ViewModel() {
                 _commentState.value = _commentState.value.copy(
                     replies = cached.replies.toImmutableList(),
                     replyCount = maxOf(cached.replyCount, currentState.replyCount),
+                    replyCountSubject = requestSubject,
                     isRepliesEnd = cached.isEnd,
                     nextPage = cached.nextPage,
                     grpcNextOffset = cached.grpcNextOffset,
+                    mainListContinuation = cached.mainListContinuation,
                     pinnedReplyIds = cached.pinnedReplyIds.toImmutableSet(),
                     upMid = if (cached.upMid > 0L) cached.upMid else currentState.upMid,
                 )
             }
             //  使用当前排序模式
-            val result = CommentRepository.getCommentsForSubject(
+            val result = CommentRepository.getMobileCommentsForSubject(
                 oid = requestSubject.oid,
                 type = requestSubject.type,
                 page = pageToLoad, 
                 ps = VIDEO_COMMENT_PAGE_SIZE,
                 mode = currentState.sortMode.apiMode,
-                paginationOffset = if (refresh) null else currentState.grpcNextOffset,
+                continuation = if (pageToLoad == 1) null else currentState.mainListContinuation,
                 fallbackOnMissingLocation = requestSubject.type == 1,
             )
 
@@ -441,7 +474,8 @@ class VideoCommentViewModel : ViewModel() {
                     fallbackCount = current.replyCount
                 )
                 val totalCount = pageResolution.totalCount
-                val isEnd = pageResolution.isEnd
+                // 手机入口已按所选接口解析末页；不因本页去重后没有新增而截断有效游标。
+                val isEnd = data.cursor.isEnd
                 
                 android.util.Log.d(
                     "CommentVM",
@@ -458,6 +492,8 @@ class VideoCommentViewModel : ViewModel() {
                         (listOf(root) + root.replies.orEmpty()).filter { it.action == 2 }.map { it.rpid }
                     }).toImmutableSet(),
                     replyCount = totalCount,
+                    replyCountSubject = requestSubject,
+                    replyCountIsAuthoritative = true,
                     isRepliesLoading = false,
                     isRepliesRefreshing = false,
                     repliesError = null,
@@ -468,7 +504,8 @@ class VideoCommentViewModel : ViewModel() {
                     canInputComment = data.control?.inputDisable?.not() ?: current.canInputComment,
                     showUpFlag = data.config?.showUpFlag ?: current.showUpFlag,
                     pinnedReplyIds = pinnedReplyIds.toImmutableSet(),
-                    grpcNextOffset = data.grpcNextOffset.takeIf { it.isNotBlank() }
+                    grpcNextOffset = data.grpcNextOffset.takeIf { it.isNotBlank() },
+                    mainListContinuation = data.mainListContinuation,
                 )
                 // 只缓存首页：后续页没有缓存时也能从首页继续翻，缓存整段会让内存迅速膨胀。
                 if (pageToLoad == 1) {
@@ -487,11 +524,8 @@ class VideoCommentViewModel : ViewModel() {
                     isRepliesLoading = false,
                     isRepliesRefreshing = false,
                     repliesError = if (cached != null) null else (e.message ?: "加载评论失败"),
-                    isRepliesEnd = if (refresh || cached != null) {
-                        _commentState.value.isRepliesEnd
-                    } else {
-                        true
-                    }
+                    // 失败保留页码和游标，由用户重试同一页。
+                    isRepliesEnd = _commentState.value.isRepliesEnd
                 )
             }
         }
@@ -501,54 +535,45 @@ class VideoCommentViewModel : ViewModel() {
 
     fun loadAllCommentsForSearch() {
         val state = _fullSearchState.value
-        if (state.isLoading || state.isReady) return
+        if (state.isLoading || state.isReady && state.error == null) return
         val subject = currentSubject
         if (!subject.isValid) return
         fullSearchJob?.cancel()
         _fullSearchState.value = FullCommentSearchUiState(isLoading = true)
         fullSearchJob = viewModelScope.launch {
-            val collected = mutableListOf<ReplyItem>()
-            var offset: String? = null
-            var page = 1
-            var totalCount = 0
-            var failure: String? = null
-            while (isActive) {
-                val data = CommentRepository.getCommentsForSubject(
-                    oid = subject.oid,
-                    type = subject.type,
-                    page = page,
-                    ps = VIDEO_COMMENT_PAGE_SIZE,
-                    mode = CommentGrpcRepository.MODE_TIME,
-                    paginationOffset = offset,
-                ).getOrNull()
-                if (data == null) {
-                    failure = "评论加载失败，请稍后重试"
-                    break
-                }
-                if (page == 1) {
-                    totalCount = data.getAllCount()
-                    collected += data.collectTopReplies()
-                }
-                val batch = data.replies.orEmpty()
-                collected += batch
-                _fullSearchState.value = _fullSearchState.value.copy(
-                    loadedCount = collected.size,
-                    totalCount = totalCount
-                )
-                val next = data.grpcNextOffset.takeIf { it.isNotBlank() }
-                if (data.cursor.isEnd || batch.isEmpty() || next == null) break
-                offset = next
-                page++
-                // 安全上限：极端大评论区最多拉 300 页（约 6000 条根评论）
-                if (page >= 300) break
-            }
-            val deduped = collected.distinctBy { it.rpid }
-            _fullSearchReplies.value = deduped
+            val result = loadCommentSearchReplies(
+                loadMain = { page, continuation ->
+                    CommentRepository.getMobileCommentsForSubject(
+                        oid = subject.oid, type = subject.type, page = page,
+                        ps = VIDEO_COMMENT_PAGE_SIZE, mode = CommentGrpcRepository.MODE_TIME,
+                        continuation = continuation,
+                    )
+                },
+                loadThread = { rootId, offset ->
+                    CommentRepository.getMobileSortedSubCommentsForSubject(
+                        oid = subject.oid, type = subject.type, rootId = rootId,
+                        mode = CommentGrpcRepository.MODE_TIME, paginationOffset = offset,
+                        supplementLocations = false,
+                    )
+                },
+                onProgress = { progress ->
+                    if (currentSubject == subject) {
+                        _fullSearchReplies.value = progress.replies
+                        _fullSearchState.value = FullCommentSearchUiState(
+                            isLoading = true, loadedCount = progress.loadedCount,
+                            totalCount = progress.totalCount,
+                        )
+                    }
+                },
+            )
+            if (currentSubject != subject) return@launch
+            _fullSearchReplies.value = result.replies
             _fullSearchState.value = FullCommentSearchUiState(
-                isReady = failure == null,
-                loadedCount = deduped.size,
-                totalCount = totalCount,
-                error = failure
+                isReady = true,
+                isComplete = result.isComplete,
+                loadedCount = result.loadedCount,
+                totalCount = result.totalCount,
+                error = result.error,
             )
         }
     }
@@ -567,6 +592,7 @@ class VideoCommentViewModel : ViewModel() {
             "subreply_click subjectValid=${requestSubject.isValid} visible=${_subReplyState.value.visible}"
         }
         if (!requestSubject.isValid) return
+        subReplySession++
         subReplyLoadJob?.cancel()
         _subReplyState.value = SubReplyUiState(
             visible = true,
@@ -601,6 +627,7 @@ class VideoCommentViewModel : ViewModel() {
             return true
         }
 
+        subReplySession++
         subReplyLoadJob?.cancel()
         val routeSubject = currentSubject
         _subReplyState.value = _subReplyState.value.copy(
@@ -611,7 +638,7 @@ class VideoCommentViewModel : ViewModel() {
         )
 
         subReplyLoadJob = viewModelScope.launch {
-            CommentRepository.getSortedSubCommentsForSubject(
+            CommentRepository.getMobileSortedSubCommentsForSubject(
                 oid = routeSubject.oid,
                 type = routeSubject.type,
                 rootId = rootReplyId,
@@ -675,6 +702,7 @@ class VideoCommentViewModel : ViewModel() {
     }
 
     fun closeSubReply() {
+        subReplySession++
         subReplyLoadJob?.cancel()
         _subReplyState.update { current ->
             current.copy(
@@ -740,8 +768,7 @@ class VideoCommentViewModel : ViewModel() {
             else -> {
                 allReplies.map { rootReply ->
                     if (rootReply.rpid != newReply.root) return@map rootReply
-                    val updatedPreviewReplies = (listOf(newReply) + rootReply.replies.orEmpty())
-                        .distinctBy { it.rpid }
+                    val updatedPreviewReplies = insertSentSubReply(rootReply.replies.orEmpty(), newReply)
                     rootReply.copy(
                         count = rootReply.count + 1,
                         rcount = rootReply.rcount + 1,
@@ -758,15 +785,7 @@ class VideoCommentViewModel : ViewModel() {
         )
 
         if (subState.visible && activeRootReply != null && newReply.root == activeRootReply.rpid) {
-            val updatedItems = (listOf(newReply) + subState.items).distinctBy { it.rpid }
-            _subReplyState.value = subState.copy(
-                items = updatedItems.toImmutableList(),
-                totalCount = resolveSubReplyLoadedTotalCount(
-                    rootReply = activeRootReply,
-                    loadedReplyCount = updatedItems.size,
-                    remoteReplyCount = subState.totalCount + 1
-                )
-            )
+            _subReplyState.value = subState.withSentSubReply(newReply)
         }
     }
 
@@ -806,17 +825,17 @@ class VideoCommentViewModel : ViewModel() {
     fun loadMoreSubReplies() {
         val state = _subReplyState.value
         if (state.isLoading || state.isEnd || state.rootReply == null) return
-        val nextPage = if (state.error != null && state.items.isEmpty()) 1 else state.page + 1
+        val request = resolveSubReplyNextRequest(state)
         _subReplyState.value = state.copy(isLoading = true, error = null)
         val anchor = state.conversationAnchor
         if (anchor != null) {
-            loadConversationReplies(anchor, nextPage)
+            loadConversationReplies(anchor, request.page, paginationOffset = request.offset)
         } else {
             loadSubReplies(
                 subject = currentSubject,
                 rootId = state.rootReply.rpid,
-                page = nextPage,
-                paginationOffset = state.grpcNextOffset
+                page = request.page,
+                paginationOffset = request.offset
             )
         }
     }
@@ -841,6 +860,7 @@ class VideoCommentViewModel : ViewModel() {
             isEnd = false,
             isLoading = true,
             isRefreshing = false,
+            retryRequest = null,
             error = null,
             grpcNextOffset = null
         )
@@ -859,6 +879,7 @@ class VideoCommentViewModel : ViewModel() {
             conversationAnchor = null,
             isLoading = false,
             isRefreshing = false,
+            retryRequest = null,
             error = null
         )
     }
@@ -874,7 +895,7 @@ class VideoCommentViewModel : ViewModel() {
         val targetReplyId = _subReplyState.value.targetReplyId.takeIf { page == 1 } ?: 0L
         subReplyLoadJob?.cancel()
         subReplyLoadJob = viewModelScope.launch {
-            val result = CommentRepository.getSortedSubCommentsForSubject(
+            val result = CommentRepository.getMobileSortedSubCommentsForSubject(
                 oid = subject.oid,
                 type = subject.type,
                 rootId = rootId,
@@ -919,6 +940,7 @@ class VideoCommentViewModel : ViewModel() {
                     isEnd = isEnd,
                     baseIsEnd = isEnd,
                     error = null,
+                    retryRequest = null,
                     grpcNextOffset = data.grpcNextOffset,
                     baseGrpcNextOffset = data.grpcNextOffset
                 )
@@ -942,7 +964,8 @@ class VideoCommentViewModel : ViewModel() {
                 _subReplyState.value = _subReplyState.value.copy(
                     isLoading = false,
                     isRefreshing = false,
-                    error = it.message ?: "回复加载失败"
+                    error = it.message ?: "回复加载失败",
+                    retryRequest = SubReplyPageRequest(page, paginationOffset),
                 )
             }
         }
@@ -1002,8 +1025,9 @@ class VideoCommentViewModel : ViewModel() {
                     isLoading = false,
                     isRefreshing = false,
                     page = page,
-                    isEnd = data.cursor.isEnd || newItems.isEmpty() || nextOffset == null,
+                    isEnd = data.cursor.isEnd,
                     error = null,
+                    retryRequest = null,
                     grpcNextOffset = nextOffset
                 )
             }.onFailure { error ->
@@ -1025,8 +1049,9 @@ class VideoCommentViewModel : ViewModel() {
                     }.toImmutableList(),
                     isLoading = false,
                     isRefreshing = false,
-                    isEnd = if (current.isRefreshing) current.isEnd else true,
-                    error = error.message
+                    isEnd = current.isEnd,
+                    error = error.message ?: "对话加载失败",
+                    retryRequest = SubReplyPageRequest(page, paginationOffset),
                 )
             }
         }
@@ -1081,6 +1106,10 @@ class VideoCommentViewModel : ViewModel() {
         val sendCurrentAid = currentAid
         val sendReplyTarget = currentState.replyTarget
         val sendSubReplyState = _subReplyState.value
+        val sendSubReplySession = subReplySession
+        val sendDraftSession = currentState.composerDrafts.sessionId
+        val sendDraftReplyRpid = sendReplyTarget?.rpid
+        val sentDraft = currentState.composerDrafts.drafts[commentComposerDraftKey(sendDraftReplyRpid)]
         
         viewModelScope.launch {
             // [修复] 正确计算 root ID
@@ -1092,7 +1121,7 @@ class VideoCommentViewModel : ViewModel() {
             val root = if (isSubReplyContext) {
                 sendSubReplyState.rootReply!!.rpid
             } else {
-                sendReplyTarget?.rpid ?: 0
+                sendReplyTarget?.let { it.root.takeIf { id -> id > 0L } ?: it.rpid } ?: 0L
             }
             // parent 总是回复目标的 ID (如果没有回复目标，则是 0)
             val parent = sendReplyTarget?.rpid ?: 0
@@ -1120,7 +1149,17 @@ class VideoCommentViewModel : ViewModel() {
             result.onSuccess { newReply ->
                 if (!shouldApplyCommentSubjectResult(sendSubject, currentSubject)) return@onSuccess
                 android.util.Log.d("CommentVM", " sendComment success: newReply=${newReply?.rpid}, root=$root, parent=$parent")
-                val current = _commentState.value
+                val latest = _commentState.value
+                val current = latest.copy(
+                    composerDrafts = latest.composerDrafts.complete(
+                        sendDraftSession, sendDraftReplyRpid, sentDraft
+                    )
+                )
+                val completedReplyTarget = if (current.composerDrafts.sessionId == sendDraftSession) {
+                    null
+                } else {
+                    current.replyTarget
+                }
 
                 // [新增] 启动评论反诈检测（后台协程，不阻塞 UI）
                 val rpidToCheck = newReply?.rpid ?: 0L
@@ -1157,7 +1196,7 @@ class VideoCommentViewModel : ViewModel() {
                             replies = updatedReplies.toImmutableList(),
                             isSending = false,
                             sendError = null,
-                            replyTarget = null,
+                            replyTarget = completedReplyTarget,
                             replyCount = current.replyCount + 1
                         )
                     } else {
@@ -1166,7 +1205,7 @@ class VideoCommentViewModel : ViewModel() {
                         _commentState.value = current.copy(
                             isSending = false,
                             sendError = null,
-                            replyTarget = null
+                            replyTarget = completedReplyTarget
                         )
                         // 重置并重新加载
                         allReplies = emptyList()
@@ -1180,19 +1219,23 @@ class VideoCommentViewModel : ViewModel() {
                 } 
                 // 2. 如果是二级评论，刷新二级评论列表
                 else if (isSubReplyContext) {
-                    if (newReply != null) {
-                        // 有返回评论对象，直接添加到列表顶部
-                        val currentSub = _subReplyState.value
-                        _subReplyState.value = currentSub.copy(
-                            items = (listOf(newReply) + currentSub.items).toImmutableList(),
+                    val currentSub = _subReplyState.value
+                    val canApplyToThread = shouldApplySentSubReplyResult(
+                        root, sendSubReplySession, subReplySession, currentSub
+                    )
+                    if (newReply != null && canApplyToThread) {
+                        _subReplyState.value = currentSub.withSentSubReply(
+                            resolveSentSubReply(newReply, root, parent, sendReplyTarget)
                         )
-                    } else {
+                    } else if (newReply == null && canApplyToThread) {
                         // [修复] newReply 为 null 时，重新加载二级评论列表
                         android.util.Log.d("CommentVM", " sendComment: sub-reply newReply is null, reloading...")
-                        val currentSub = _subReplyState.value
-                        currentSub.rootReply?.let { root ->
+                        subReplyLoadJob?.cancel()
+                        currentSub.rootReply?.let { activeRoot ->
                             _subReplyState.value = currentSub.copy(
                                 items = emptyList<ReplyItem>().toImmutableList(),
+                                baseItems = emptyList<ReplyItem>().toImmutableList(),
+                                conversationAnchor = null,
                                 page = 1,
                                 isEnd = false,
                                 isLoading = true,
@@ -1200,7 +1243,7 @@ class VideoCommentViewModel : ViewModel() {
                             )
                             loadSubReplies(
                                 subject = sendSubject,
-                                rootId = root.rpid,
+                                rootId = activeRoot.rpid,
                                 page = 1,
                                 paginationOffset = null
                             )
@@ -1210,7 +1253,7 @@ class VideoCommentViewModel : ViewModel() {
                     _commentState.value = current.copy(
                         isSending = false,
                         sendError = null,
-                        replyTarget = null
+                        replyTarget = completedReplyTarget
                     )
                 }
                 // 3. 一级列表回复 (展开二级或直接回复)
@@ -1218,7 +1261,7 @@ class VideoCommentViewModel : ViewModel() {
                     _commentState.value = current.copy(
                         isSending = false,
                         sendError = null,
-                        replyTarget = null,
+                        replyTarget = completedReplyTarget,
                         replyCount = current.replyCount + 1
                     )
                 }
@@ -1265,6 +1308,26 @@ class VideoCommentViewModel : ViewModel() {
         }.getOrNull()
     }
     
+    fun beginCommentDraft() {
+        _commentState.update { it.copy(composerDrafts = it.composerDrafts.open(), sendError = null) }
+    }
+
+    fun updateCommentDraft(
+        sessionId: Long,
+        replyRpid: Long?,
+        text: String,
+        imageUris: List<Uri>,
+        syncToDynamic: Boolean
+    ) {
+        _commentState.update {
+            it.copy(
+                composerDrafts = it.composerDrafts.update(
+                    sessionId, replyRpid, CommentComposerDraft(text, imageUris, syncToDynamic)
+                )
+            )
+        }
+    }
+
     fun replyTo(reply: ReplyItem) {
         _commentState.value = _commentState.value.copy(replyTarget = reply)
     }

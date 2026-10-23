@@ -115,12 +115,14 @@ fun ActionButton(
                 modifier = Modifier
                     .fillMaxWidth()
                     .appElasticPress(enabled = enabled),
-                insideMargin = MiuixButtonDefaults.InsideMargin
+                // This remains a native Miuix button with glass enabled; keep its
+                // content metrics independent from the material used by page docks.
+                insideMargin = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
             ) {
                 AppIcon(
                     imageVector = buttonIcon,
                     contentDescription = null,
-                    modifier = Modifier.size(AppSpacingTokens.Large + AppSpacingTokens.Micro),
+                    modifier = Modifier.size(20.dp),
                     tint = buttonColor,
                 )
                 DynamicNativeActionText(
@@ -143,7 +145,7 @@ fun ActionButton(
                     .heightIn(min = AppChromeSizeTokens.MinimumTouchTarget)
                     .appElasticPress(enabled = enabled),
                 contentPadding = PaddingValues(
-                    horizontal = AppSpacingTokens.Small + AppSpacingTokens.Micro,
+                    horizontal = AppSpacingTokens.Small,
                     vertical = AppSpacingTokens.Small
                 ),
                 colors = ButtonDefaults.buttonColors(
@@ -157,7 +159,7 @@ fun ActionButton(
                 AppIcon(
                     imageVector = buttonIcon,
                     contentDescription = label,
-                    modifier = Modifier.size(AppSpacingTokens.Large + AppSpacingTokens.Micro),
+                    modifier = Modifier.size(20.dp),
                     tint = buttonColor,
                 )
                 DynamicNativeActionText(
@@ -259,6 +261,12 @@ private fun DynamicNativeActionText(
     ) { text ->
         AppText(
             text = text,
+            // Both native themes share constrained action slots, with or without glass.
+            style = MaterialTheme.typography.labelLarge,
+            autoSize = androidx.compose.foundation.text.TextAutoSize.StepBased(
+                minFontSize = MaterialTheme.typography.labelSmall.fontSize,
+                maxFontSize = MaterialTheme.typography.labelLarge.fontSize,
+            ),
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Ellipsis

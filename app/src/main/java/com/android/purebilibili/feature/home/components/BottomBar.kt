@@ -1,6 +1,11 @@
 // 文件路径: feature/home/components/BottomBar.kt
 package com.android.purebilibili.feature.home.components
 
+import com.android.purebilibili.core.ui.animation.rememberLiquidIndicatorWobble
+import com.android.purebilibili.core.ui.animation.liquidWobbleScaleX
+import com.android.purebilibili.core.ui.animation.liquidWobbleScaleY
+
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import com.android.purebilibili.core.ui.resolveMatchedLiquidIndicatorHeightDp
@@ -595,10 +600,11 @@ internal fun resolveBiliPaiBottomBarDockHeight(
     searchExpanded: Boolean,
     hasUiSkinDecoration: Boolean = false
 ): Dp {
-    return if (searchExpanded) {
-        resolveBiliPaiBottomBarSearchCircleSize()
-    } else if (hasUiSkinDecoration) {
+    return if (hasUiSkinDecoration) {
+        // Search width changes must not compress the skin's icon/label stack.
         resolveBottomBarSkinDockHeight()
+    } else if (searchExpanded) {
+        resolveBiliPaiBottomBarSearchCircleSize()
     } else {
         // Keep the resting dock level with the adjacent search circle. Indicator
         // inset and press bloom are derived proportionally from this compact height.
@@ -1023,6 +1029,113 @@ internal fun Modifier.biliPaiMiuixFloatingDockSurface(
     val hasBackdrop = backdrop != null && (renderGlassEffects || blurEnabled)
     val hasHazeBlur = !hasBackdrop && useHazeBlur && hazeState != null
 
+    // Keep optical callbacks stable when navigation or unrelated rim animation
+    // recomposes chrome. Each callback is keyed only by the inputs it draws.
+    val backdropShape = remember(shape) { { shape } }
+    val backdropEffects = remember(
+        renderGlassEffects, blurEnabled, blurRadius, drawShellLens,
+        effectiveShellLensIntensity, materialSpec.vibrancy, materialSpec.blurRadiusDp,
+        materialSpec.shellRefractionHeightDp, materialSpec.shellRefractionAmountDp,
+        materialSpec.shellChromaticAberration, liquidGlassTuning.saturation,
+    ) {
+        val block: top.yukonga.miuix.kmp.blur.BackdropEffectScope.() -> Unit = {
+            if (renderGlassEffects) {
+                val resolvedShellRefractionAmountDp = if (drawShellLens) {
+                    materialSpec.shellRefractionAmountDp *
+                        effectiveShellLensIntensity
+                } else {
+                    0f
+                }
+                padding = maxOf(
+                    padding,
+                    resolveFloatingDockEffectPaddingDp(
+                        refractionAmountDp = resolvedShellRefractionAmountDp,
+                        pressBloomDp = AppSpacingTokens.Large.value,
+                    ).dp.toPx(),
+                )
+                if (materialSpec.vibrancy) {
+                    miuixVibrancy(liquidGlassTuning.saturation)
+                }
+                val resolvedBlurRadius =
+                    materialSpec.blurRadiusDp?.dp ?: AppSpacingTokens.ExtraSmall
+                miuixBlur(resolvedBlurRadius.toPx(), resolvedBlurRadius.toPx())
+                if (
+                    drawShellLens &&
+                    effectiveShellLensIntensity > 0f &&
+                    materialSpec.shellRefractionHeightDp > 0f &&
+                    materialSpec.shellRefractionAmountDp > 0f
+                ) {
+                    miuixLens(
+                        refractionHeight = (
+                            materialSpec.shellRefractionHeightDp *
+                                effectiveShellLensIntensity
+                            ).dp.toPx(),
+                        refractionAmount = (
+                            materialSpec.shellRefractionAmountDp *
+                                effectiveShellLensIntensity
+                            ).dp.toPx(),
+                        chromaticAberration = materialSpec.shellChromaticAberration
+                    )
+                }
+            } else if (blurEnabled) {
+                val resolvedBlurRadius = maxOf(blurRadius, 25.dp)
+                val radiusPx = resolvedBlurRadius.toPx()
+                miuixBlur(radiusPx, radiusPx)
+            }
+        }
+        block
+    }
+    val backdropHighlight = remember(
+        baseHighlight, renderGlassEffects, materialSpec.highlightWidthScale, effectiveShellLensIntensity,
+    ) {
+        val block: top.yukonga.miuix.kmp.blur.BackdropEffectScope.() -> MiuixHighlight? = {
+            baseHighlight?.value?.copy(
+                alpha = if (renderGlassEffects) {
+                    0.75f * materialSpec.highlightWidthScale *
+                        effectiveShellLensIntensity
+                } else {
+                    0f
+                }
+            )
+        }
+        block
+    }
+    val backdropLayer = remember(interactionState, renderGlassEffects, materialPressProgress) {
+        val block: (androidx.compose.ui.graphics.GraphicsLayerScope.() -> Unit)? = interactionState?.layerBlock ?: if (renderGlassEffects) {
+            {
+                val width = size.width.coerceAtLeast(1f)
+                val s = lerp(1f, 1f + AppSpacingTokens.Large.toPx() / width, materialPressProgress)
+                scaleX = s
+                scaleY = s
+            }
+        } else null
+        block
+    }
+    val backdropSurface = remember(
+        renderGlassEffects, containerColor, liquidGlassTuning.contentReadabilityScrimAlpha,
+        isDarkTheme, materialSpec.foregroundTint, interactionState,
+    ) {
+        val block: androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit = {
+            if (renderGlassEffects) {
+                drawRect(containerColor)
+                if (liquidGlassTuning.contentReadabilityScrimAlpha > 0f) {
+                    drawRect(
+                        (if (isDarkTheme) Color.Black else Color.White).copy(
+                            alpha = liquidGlassTuning.contentReadabilityScrimAlpha
+                        )
+                    )
+                }
+                if (materialSpec.foregroundTint.alpha > 0f) {
+                    drawRect(materialSpec.foregroundTint)
+                }
+            } else {
+                drawRect(containerColor.copy(alpha = 0.65f))
+            }
+            interactionState?.drawHighlight(this)
+        }
+        block
+    }
+
     this
         .then(
             if (hasHazeBlur) {
@@ -1053,88 +1166,11 @@ internal fun Modifier.biliPaiMiuixFloatingDockSurface(
                     )
                     .miuixDrawBackdrop(
                         backdrop = backdrop,
-                        shape = { shape },
-                        effects = {
-                            if (renderGlassEffects) {
-                                val resolvedShellRefractionAmountDp = if (drawShellLens) {
-                                    materialSpec.shellRefractionAmountDp *
-                                        effectiveShellLensIntensity
-                                } else {
-                                    0f
-                                }
-                                padding = maxOf(
-                                    padding,
-                                    resolveFloatingDockEffectPaddingDp(
-                                        refractionAmountDp = resolvedShellRefractionAmountDp,
-                                        pressBloomDp = AppSpacingTokens.Large.value,
-                                    ).dp.toPx(),
-                                )
-                                if (materialSpec.vibrancy) {
-                                    miuixVibrancy(liquidGlassTuning.saturation)
-                                }
-                                val resolvedBlurRadius =
-                                    materialSpec.blurRadiusDp?.dp ?: AppSpacingTokens.ExtraSmall
-                                miuixBlur(resolvedBlurRadius.toPx(), resolvedBlurRadius.toPx())
-                                if (
-                                    drawShellLens &&
-                                    effectiveShellLensIntensity > 0f &&
-                                    materialSpec.shellRefractionHeightDp > 0f &&
-                                    materialSpec.shellRefractionAmountDp > 0f
-                                ) {
-                                    miuixLens(
-                                        refractionHeight = (
-                                            materialSpec.shellRefractionHeightDp *
-                                                effectiveShellLensIntensity
-                                            ).dp.toPx(),
-                                        refractionAmount = (
-                                            materialSpec.shellRefractionAmountDp *
-                                                effectiveShellLensIntensity
-                                            ).dp.toPx(),
-                                        chromaticAberration = materialSpec.shellChromaticAberration
-                                    )
-                                }
-                            } else if (blurEnabled) {
-                                val resolvedBlurRadius = maxOf(blurRadius, 25.dp)
-                                val radiusPx = resolvedBlurRadius.toPx()
-                                miuixBlur(radiusPx, radiusPx)
-                            }
-                        },
-                        highlight = {
-                            baseHighlight?.value?.copy(
-                                alpha = if (renderGlassEffects) {
-                                    0.75f * materialSpec.highlightWidthScale *
-                                        effectiveShellLensIntensity
-                                } else {
-                                    0f
-                                }
-                            )
-                        },
-                        layerBlock = interactionState?.layerBlock ?: if (renderGlassEffects) {
-                            {
-                                val width = size.width.coerceAtLeast(1f)
-                                val s = lerp(1f, 1f + AppSpacingTokens.Large.toPx() / width, materialPressProgress)
-                                scaleX = s
-                                scaleY = s
-                            }
-                        } else null,
-                        onDrawSurface = {
-                            if (renderGlassEffects) {
-                                drawRect(containerColor)
-                                if (liquidGlassTuning.contentReadabilityScrimAlpha > 0f) {
-                                    drawRect(
-                                        (if (isDarkTheme) Color.Black else Color.White).copy(
-                                            alpha = liquidGlassTuning.contentReadabilityScrimAlpha
-                                        )
-                                    )
-                                }
-                                if (materialSpec.foregroundTint.alpha > 0f) {
-                                    drawRect(materialSpec.foregroundTint)
-                                }
-                            } else {
-                                drawRect(containerColor.copy(alpha = 0.65f))
-                            }
-                            interactionState?.drawHighlight(this)
-                        }
+                        shape = backdropShape,
+                        effects = backdropEffects,
+                        highlight = backdropHighlight,
+                        layerBlock = backdropLayer,
+                        onDrawSurface = backdropSurface
                     )
                     .run {
                         val innerRimGlow = materialSpec.innerRimGlow
@@ -1753,13 +1789,20 @@ internal fun rememberBottomBarClickPulseTransform(
     pulseKey: Int
 ): BottomBarClickPulseTransform {
     val progress = remember { Animatable(1f) }
-    LaunchedEffect(pulseKey) {
-        if (pulseKey <= 0) return@LaunchedEffect
-        progress.snapTo(0f)
-        progress.animateTo(
-            targetValue = 1f,
-            animationSpec = bottomBarClickPulseMotionSpec()
-        )
+    val currentPulseKey by rememberUpdatedState(pulseKey)
+    LaunchedEffect(progress) {
+        snapshotFlow { currentPulseKey }.collect { key ->
+            // Repeated taps keep the current feedback moving; do not reset its scale.
+            if (key > 0 && !progress.isRunning) {
+                launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                    progress.snapTo(0f)
+                    progress.animateTo(
+                        targetValue = 1f,
+                        animationSpec = bottomBarClickPulseMotionSpec()
+                    )
+                }
+            }
+        }
     }
     return resolveBottomBarClickPulseTransform(progress.value)
 }
@@ -2171,6 +2214,9 @@ fun FrostedBottomBar(
     collapseLinkedDock: Boolean = false,
     indicatorPositionProvider: (() -> Float)? = null,
     isPagerScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
     uiSkinDecoration: BottomBarUiSkinDecoration? = null,
     linkedDockPhase: LinkedDockPhase? = null,
     onLinkedDockPhaseChange: ((LinkedDockPhase) -> Unit)? = null,
@@ -2222,72 +2268,78 @@ fun FrostedBottomBar(
             androidNativeLiquidGlassEnabled = homeSettings.androidNativeLiquidGlassEnabled,
             materialContent = { policy ->
                 MaterialBottomBar(
-                currentItem = currentItem,
-                nowPlayingContent = nowPlayingContent,
-                onItemClick = resolvedItemClick,
-                modifier = modifier,
-                visibleItems = visibleItems,
-                itemLabels = itemLabels,
-                onToggleSidebar = effectiveToggleSidebar,
-                dynamicUnreadCount = dynamicUnreadCount,
-                isFloating = isFloating,
-                isTablet = isTablet,
-                labelMode = labelMode,
-                blurEnabled = hazeState != null,
-                hazeState = hazeState,
-                miuixBackdrop = miuixBackdrop,
-                homeSettings = homeSettings,
-                onSearchClick = onSearchClick,
-                onSearchKeywordSubmit = onSearchKeywordSubmit,
-                motionTier = motionTier,
-                isTransitionRunning = isTransitionRunning,
-                forceLowBlurBudget = forceLowBlurBudget,
-                isFeedScrollInProgress = isFeedScrollInProgress,
-                collapseLinkedDock = collapseLinkedDock,
-                indicatorPositionProvider = indicatorPositionProvider,
-                isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
-                uiSkinDecoration = uiSkinDecoration,
-                sharedLiquidGlassEnabled = policy.liquidGlassEnabled,
-                linkedDockPhase = linkedDockPhase,
-                onLinkedDockPhaseChange = onLinkedDockPhaseChange,
-                isTopLevelDestination = isTopLevelDestination,
-                animateNowPlayingPresence = animateNowPlayingPresence,
+                    currentItem = currentItem,
+                    nowPlayingContent = nowPlayingContent,
+                    onItemClick = resolvedItemClick,
+                    modifier = modifier,
+                    visibleItems = visibleItems,
+                    itemLabels = itemLabels,
+                    onToggleSidebar = effectiveToggleSidebar,
+                    dynamicUnreadCount = dynamicUnreadCount,
+                    isFloating = isFloating,
+                    isTablet = isTablet,
+                    labelMode = labelMode,
+                    blurEnabled = hazeState != null,
+                    hazeState = hazeState,
+                    miuixBackdrop = miuixBackdrop,
+                    homeSettings = homeSettings,
+                    onSearchClick = onSearchClick,
+                    onSearchKeywordSubmit = onSearchKeywordSubmit,
+                    motionTier = motionTier,
+                    isTransitionRunning = isTransitionRunning,
+                    forceLowBlurBudget = forceLowBlurBudget,
+                    isFeedScrollInProgress = isFeedScrollInProgress,
+                    collapseLinkedDock = collapseLinkedDock,
+                    indicatorPositionProvider = indicatorPositionProvider,
+                    isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+                    isPagerDraggingProvider = isPagerDraggingProvider,
+                    pagerTargetPositionProvider = pagerTargetPositionProvider,
+                    isPagerNavigatingProvider = isPagerNavigatingProvider,
+                    uiSkinDecoration = uiSkinDecoration,
+                    sharedLiquidGlassEnabled = policy.liquidGlassEnabled,
+                    linkedDockPhase = linkedDockPhase,
+                    onLinkedDockPhaseChange = onLinkedDockPhaseChange,
+                    isTopLevelDestination = isTopLevelDestination,
+                    animateNowPlayingPresence = animateNowPlayingPresence,
                 )
             },
             platformContent = { policy ->
                 MiuixBottomBar(
-                currentItem = currentItem,
-                nowPlayingContent = nowPlayingContent,
-                onItemClick = resolvedItemClick,
-                modifier = modifier,
-                visibleItems = visibleItems,
-                itemLabels = itemLabels,
-                onToggleSidebar = effectiveToggleSidebar,
-                dynamicUnreadCount = dynamicUnreadCount,
-                isFloating = isFloating,
-                isTablet = isTablet,
-                labelMode = labelMode,
-                blurEnabled = hazeState != null,
-                hazeState = hazeState,
-                miuixBackdrop = miuixBackdrop,
-                homeSettings = homeSettings,
-                onSearchClick = onSearchClick,
-                onSearchKeywordSubmit = onSearchKeywordSubmit,
-                searchLaunchKey = searchLaunchKey,
-                onSearchLaunchTransitionFinished = onSearchLaunchTransitionFinished,
-                motionTier = motionTier,
-                isTransitionRunning = isTransitionRunning,
-                forceLowBlurBudget = forceLowBlurBudget,
-                isFeedScrollInProgress = isFeedScrollInProgress,
-                collapseLinkedDock = collapseLinkedDock,
-                indicatorPositionProvider = indicatorPositionProvider,
-                isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
-                uiSkinDecoration = uiSkinDecoration,
-                sharedLiquidGlassEnabled = policy.liquidGlassEnabled,
-                linkedDockPhase = linkedDockPhase,
-                onLinkedDockPhaseChange = onLinkedDockPhaseChange,
-                isTopLevelDestination = isTopLevelDestination,
-                animateNowPlayingPresence = animateNowPlayingPresence,
+                    currentItem = currentItem,
+                    nowPlayingContent = nowPlayingContent,
+                    onItemClick = resolvedItemClick,
+                    modifier = modifier,
+                    visibleItems = visibleItems,
+                    itemLabels = itemLabels,
+                    onToggleSidebar = effectiveToggleSidebar,
+                    dynamicUnreadCount = dynamicUnreadCount,
+                    isFloating = isFloating,
+                    isTablet = isTablet,
+                    labelMode = labelMode,
+                    blurEnabled = hazeState != null,
+                    hazeState = hazeState,
+                    miuixBackdrop = miuixBackdrop,
+                    homeSettings = homeSettings,
+                    onSearchClick = onSearchClick,
+                    onSearchKeywordSubmit = onSearchKeywordSubmit,
+                    searchLaunchKey = searchLaunchKey,
+                    onSearchLaunchTransitionFinished = onSearchLaunchTransitionFinished,
+                    motionTier = motionTier,
+                    isTransitionRunning = isTransitionRunning,
+                    forceLowBlurBudget = forceLowBlurBudget,
+                    isFeedScrollInProgress = isFeedScrollInProgress,
+                    collapseLinkedDock = collapseLinkedDock,
+                    indicatorPositionProvider = indicatorPositionProvider,
+                    isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+                    isPagerDraggingProvider = isPagerDraggingProvider,
+                    pagerTargetPositionProvider = pagerTargetPositionProvider,
+                    isPagerNavigatingProvider = isPagerNavigatingProvider,
+                    uiSkinDecoration = uiSkinDecoration,
+                    sharedLiquidGlassEnabled = policy.liquidGlassEnabled,
+                    linkedDockPhase = linkedDockPhase,
+                    onLinkedDockPhaseChange = onLinkedDockPhaseChange,
+                    isTopLevelDestination = isTopLevelDestination,
+                    animateNowPlayingPresence = animateNowPlayingPresence,
                 )
             },
         )
@@ -2322,6 +2374,9 @@ private fun MaterialBottomBar(
     collapseLinkedDock: Boolean = false,
     indicatorPositionProvider: (() -> Float)? = null,
     isPagerScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
     uiSkinDecoration: BottomBarUiSkinDecoration? = null,
     sharedLiquidGlassEnabled: Boolean,
     linkedDockPhase: LinkedDockPhase? = null,
@@ -2422,7 +2477,7 @@ private fun MaterialBottomBar(
         SideEffect {
             if (nowPlayingContent != null) hasHostedNowPlaying = true
         }
-        if (searchEnabled || nowPlayingContent != null || hasHostedNowPlaying) {
+        if (searchEnabled || nowPlayingContent != null || hasHostedNowPlaying || homeSettings.bottomBarScrollCompactEnabled) {
             LinkedBottomDock(
                 currentItem = currentItem,
                 firstItem = bottomBarVisibleItems.firstOrNull() ?: BottomNavItem.HOME,
@@ -2450,6 +2505,8 @@ private fun MaterialBottomBar(
                 onDockPhaseChange = onLinkedDockPhaseChange,
                 isTopLevelDestination = isTopLevelDestination,
                 mergeOnScrollDownEnabled = mergeOnScrollDownEnabled,
+                compactOnScrollEnabled = homeSettings.bottomBarScrollCompactEnabled,
+                currentLabel = resolveBottomNavItemLabel(currentItem, itemLabels),
                 animateNowPlayingPresence = animateNowPlayingPresence,
                 modifier = modifier,
                 navigationContent = {
@@ -2464,7 +2521,15 @@ private fun MaterialBottomBar(
                         showIcon = showIcon,
                         showText = showText,
                         haptic = haptic,
-                        modifier = Modifier.fillMaxSize(),
+                        // Native MD3 wraps its content inside LinkedBottomDock's wider slot.
+                        // Align the capsule to the search edge so unused slot width does not
+                        // add to the 8dp gap. Glass and Miuix use their own layout paths.
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (searchEnabled) Modifier.wrapContentWidth(Alignment.End)
+                                else Modifier
+                            ),
                         blurEnabled = blurEnabled,
                         hazeState = hazeState,
                         backdrop = miuixBackdrop,
@@ -2526,6 +2591,7 @@ private fun MaterialBottomBar(
             haptic = haptic,
             bottomBarSearchEnabled = homeSettings.isBottomBarSearchEnabled,
             mergeOnScrollDownEnabled = homeSettings.linkedDockMergeOnScrollEnabled,
+            compactOnScrollEnabled = homeSettings.bottomBarScrollCompactEnabled,
             bottomBarSearchAutoExpandMode = homeSettings.bottomBarSearchAutoExpandMode,
             bottomBarSearchLayoutMode = homeSettings.bottomBarSearchLayoutMode,
             onSearchClick = onSearchClick,
@@ -2536,6 +2602,9 @@ private fun MaterialBottomBar(
             collapseLinkedDock = collapseLinkedDock,
             indicatorPositionProvider = indicatorPositionProvider,
             isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+            isPagerDraggingProvider = isPagerDraggingProvider,
+            pagerTargetPositionProvider = pagerTargetPositionProvider,
+            isPagerNavigatingProvider = isPagerNavigatingProvider,
             uiSkinDecoration = uiSkinDecoration,
             linkedDockPhase = linkedDockPhase,
             onLinkedDockPhaseChange = onLinkedDockPhaseChange,
@@ -2904,6 +2973,9 @@ private fun MiuixBottomBar(
     collapseLinkedDock: Boolean = false,
     indicatorPositionProvider: (() -> Float)? = null,
     isPagerScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
     uiSkinDecoration: BottomBarUiSkinDecoration? = null,
     sharedLiquidGlassEnabled: Boolean,
     linkedDockPhase: LinkedDockPhase? = null,
@@ -3005,6 +3077,7 @@ private fun MiuixBottomBar(
             motionTier = motionTier,
             isTransitionRunning = isTransitionRunning,
             forceLowBlurBudget = forceLowBlurBudget,
+            compactOnScrollEnabled = homeSettings.bottomBarScrollCompactEnabled,
             bottomBarSearchEnabled = homeSettings.isBottomBarSearchEnabled,
             bottomBarSearchAutoExpandMode = homeSettings.bottomBarSearchAutoExpandMode,
             bottomBarSearchLayoutMode = homeSettings.bottomBarSearchLayoutMode,
@@ -3016,6 +3089,9 @@ private fun MiuixBottomBar(
             collapseLinkedDock = collapseLinkedDock,
             indicatorPositionProvider = indicatorPositionProvider,
             isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+            isPagerDraggingProvider = isPagerDraggingProvider,
+            pagerTargetPositionProvider = pagerTargetPositionProvider,
+            isPagerNavigatingProvider = isPagerNavigatingProvider,
             uiSkinDecoration = uiSkinDecoration,
             linkedDockPhase = linkedDockPhase,
             onLinkedDockPhaseChange = onLinkedDockPhaseChange,
@@ -3051,7 +3127,7 @@ private fun MiuixBottomBar(
                 .fillMaxWidth()
                 .then(
                     if (uiSkinDecoration != null) {
-                        Modifier.height(resolveBottomBarSkinDockHeight())
+                        Modifier.heightIn(min = resolveBottomBarSkinDockHeight())
                     } else {
                         Modifier
                     }
@@ -3061,10 +3137,11 @@ private fun MiuixBottomBar(
             defaultWindowInsetsPadding = true,
             mode = displayMode
         ) {
-            val selectedItemColor = AppContentColors.accent()
+            val selectedItemColor = AppContentColors.selectionAccent(sharedLiquidGlassEnabled)
             val unselectedItemColor = AppContentColors.secondaryText()
             val dockedIndicatorColor = resolveDockedBottomBarIndicatorColor(
-                defaultColor = MaterialTheme.colorScheme.secondaryContainer,
+                defaultColor = if (!sharedLiquidGlassEnabled) AppSurfaceTokens.selectionContainer()
+                    else MaterialTheme.colorScheme.secondaryContainer,
                 hasUiSkinDecoration = uiSkinDecoration != null,
             )
         val skinItemColors = resolveBottomBarSkinContentColors(
@@ -3189,7 +3266,10 @@ internal fun IllustratedSkinBottomBar(
         skinTrimTint = decoration.bottomTrimTint,
     )
     BoxWithConstraints(modifier = modifier) {
-        val iconSize = resolveIllustratedSkinIconSize(maxWidth / visibleItems.size.coerceAtLeast(1))
+        val preferredIconSize = resolveIllustratedSkinIconSize(maxWidth / visibleItems.size.coerceAtLeast(1))
+        // Keep illustrated icons within the same safe icon/label stack as floating skins.
+        val iconSize = if (showText) minOf(preferredIconSize, resolveBottomBarSkinDockIconSize())
+            else preferredIconSize
         DockedBottomBarSkinContainer(
             decoration = decoration,
             modifier = Modifier.fillMaxWidth(),
@@ -3223,7 +3303,7 @@ internal fun IllustratedSkinBottomBar(
                                 badgeText = badge,
                                 modifier = Modifier
                                     .align(if (showText) Alignment.TopCenter else Alignment.Center)
-                                    .offset(y = if (showText) (-10).dp else 0.dp),
+                                    .padding(top = if (showText) resolveBottomBarSkinDockIconTopPadding() else 0.dp),
                             ) {
                                 if (iconPath != null) {
                                     BottomBarSkinIcon(
@@ -3451,18 +3531,22 @@ private fun BiliPaiFloatingBottomBar(
     collapseLinkedDock: Boolean = false,
     indicatorPositionProvider: (() -> Float)? = null,
     isPagerScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
     uiSkinDecoration: BottomBarUiSkinDecoration? = null,
     linkedDockPhase: LinkedDockPhase? = null,
     onLinkedDockPhaseChange: ((LinkedDockPhase) -> Unit)? = null,
     isTopLevelDestination: Boolean = true,
     mergeOnScrollDownEnabled: Boolean = true,
+    compactOnScrollEnabled: Boolean = false,
     animateNowPlayingPresence: Boolean = true,
 ) {
     var hasHostedNowPlaying by remember { mutableStateOf(nowPlayingContent != null) }
     SideEffect {
         if (nowPlayingContent != null) hasHostedNowPlaying = true
     }
-    if (bottomBarSearchEnabled || nowPlayingContent != null || hasHostedNowPlaying) {
+    if (bottomBarSearchEnabled || nowPlayingContent != null || hasHostedNowPlaying || compactOnScrollEnabled) {
         LinkedBottomDock(
             currentItem = currentItem,
             firstItem = visibleItems.firstOrNull() ?: BottomNavItem.HOME,
@@ -3471,6 +3555,8 @@ private fun BiliPaiFloatingBottomBar(
             onDockPhaseChange = onLinkedDockPhaseChange,
             isTopLevelDestination = isTopLevelDestination,
             mergeOnScrollDownEnabled = mergeOnScrollDownEnabled,
+            compactOnScrollEnabled = compactOnScrollEnabled,
+            currentLabel = resolveBottomNavItemLabel(currentItem, itemLabels),
             animateNowPlayingPresence = animateNowPlayingPresence,
             searchEnabled = bottomBarSearchEnabled,
             isFeedScrollInProgress = isFeedScrollInProgress,
@@ -3487,6 +3573,7 @@ private fun BiliPaiFloatingBottomBar(
             navigationItemCount = visibleItems.size + if (isTablet && onToggleSidebar != null) 1 else 0,
             navigationLabelMode = labelMode,
             navigationMinEdgePadding = tuning.outerHorizontalPaddingDp.dp,
+            hasUiSkinDecoration = uiSkinDecoration != null,
             nowPlayingContent = nowPlayingContent,
             modifier = modifier,
             navigationContent = {
@@ -3527,6 +3614,9 @@ private fun BiliPaiFloatingBottomBar(
                     isFeedScrollInProgress = isFeedScrollInProgress,
                     indicatorPositionProvider = indicatorPositionProvider,
                     isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+                    isPagerDraggingProvider = isPagerDraggingProvider,
+                    pagerTargetPositionProvider = pagerTargetPositionProvider,
+                    isPagerNavigatingProvider = isPagerNavigatingProvider,
                     uiSkinDecoration = uiSkinDecoration,
                     embeddedDock = true,
                 )
@@ -3570,6 +3660,9 @@ private fun BiliPaiFloatingBottomBar(
             isFeedScrollInProgress = isFeedScrollInProgress,
             indicatorPositionProvider = indicatorPositionProvider,
             isPagerScrollInProgressProvider = isPagerScrollInProgressProvider,
+            isPagerDraggingProvider = isPagerDraggingProvider,
+            pagerTargetPositionProvider = pagerTargetPositionProvider,
+            isPagerNavigatingProvider = isPagerNavigatingProvider,
             uiSkinDecoration = uiSkinDecoration,
         )
     }
@@ -3616,6 +3709,9 @@ private fun BiliPaiFloatingBottomBarChrome(
     isFeedScrollInProgress: Boolean = false,
     indicatorPositionProvider: (() -> Float)? = null,
     isPagerScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
     uiSkinDecoration: BottomBarUiSkinDecoration? = null
 ) {
     // BiliPai 对齐：材质/动效由 FloatingBottomBar 三层结构承担；
@@ -3639,14 +3735,10 @@ private fun BiliPaiFloatingBottomBarChrome(
     }
     val selectedIndex = visibleItems.indexOf(currentItem).coerceAtLeast(0)
     val isValidSelection = currentItem in visibleItems
-    val neutralMiuixSelection = LocalAppUiStyle.current == AppUiStyle.MIUIX &&
+    val themedMiuixSelection = LocalAppUiStyle.current == AppUiStyle.MIUIX &&
         !effectiveGlassEnabled && uiSkinDecoration == null
-    val baseSelectedColor = if (neutralMiuixSelection) {
-        AppContentColors.primaryText()
-    } else {
-        AppContentColors.accent()
-    }
-    val baseUnselectedColor = if (!effectiveGlassEnabled && (neutralMiuixSelection || iconStyle == SharedFloatingBottomBarIconStyle.MATERIAL)) {
+    val baseSelectedColor = AppContentColors.selectionAccent(effectiveGlassEnabled)
+    val baseUnselectedColor = if (!effectiveGlassEnabled && (themedMiuixSelection || iconStyle == SharedFloatingBottomBarIconStyle.MATERIAL)) {
         AppContentColors.secondaryText()
     } else {
         AppContentColors.primaryText()
@@ -3666,7 +3758,7 @@ private fun BiliPaiFloatingBottomBarChrome(
     val unselectedColor = lerpColor(
         skinContentColors.unselectedColor,
         readableContentColor,
-        if (neutralMiuixSelection) 0f else liquidGlassTuning.contentReadabilityBoost,
+        if (themedMiuixSelection) 0f else liquidGlassTuning.contentReadabilityBoost,
     ).copy(alpha = 1f)
     val totalItems = allItems.size.coerceAtLeast(1)
 
@@ -3755,9 +3847,9 @@ private fun BiliPaiFloatingBottomBarChrome(
             hasUiSkinDecoration = uiSkinDecoration != null,
         )
     }
-    // Use the same opaque surface roles as the non-glass top dock capsule.
-    val neutralIndicatorContainerColor = if (neutralMiuixSelection) {
-        if (isDarkTheme) AppSurfaceTokens.surfaceContainerHighest() else AppSurfaceTokens.surfaceContainer()
+    // Share the theme-tinted selection fill with opaque top tabs and category rails.
+    val themedIndicatorContainerColor = if (themedMiuixSelection) {
+        AppSurfaceTokens.selectionContainer()
     } else {
         null
     }
@@ -3936,6 +4028,9 @@ private fun BiliPaiFloatingBottomBarChrome(
                             visibleItems.forEachIndexed { index, item ->
                                 val label = resolveBottomNavItemLabel(item, itemLabels)
                                 val routeSelected = currentItem == item
+                                // Export filled accent glyphs for every slot. The moving
+                                // capsule reveals the active copy at its current position;
+                                // the base row continues to reflect the selected route.
                                 val selected = index == selectedIndexForBar ||
                                     LocalFloatingBottomBarActiveContent.current
                                 val skinIconPath = uiSkinDecoration?.iconPathFor(
@@ -4005,7 +4100,7 @@ private fun BiliPaiFloatingBottomBarChrome(
                                 tabsCount = totalItems,
                                 modifier = dockModifier,
                                 colors = floatingColors,
-                                indicatorContainerColor = neutralIndicatorContainerColor
+                                indicatorContainerColor = themedIndicatorContainerColor
                                     ?: floatingColors.indicatorColor.copy(alpha = 0.14f),
                                 content = dockContent,
                             )
@@ -4019,8 +4114,13 @@ private fun BiliPaiFloatingBottomBarChrome(
                                     tabsCount = totalItems,
                                     modifier = dockModifier,
                                     mode = floatingMode,
+                                    // Glass-only breathing room; preserve the native 4dp default.
+                                    contentHorizontalPadding = com.android.purebilibili.core.ui.resolveLiquidGlassIndicatorHorizontalInsetDp(
+                                        requestedInsetDp = 4f,
+                                        liquidGlassEnabled = floatingMode == FloatingBottomBarMode.LiquidGlass,
+                                    ).dp,
                                     colors = floatingColors,
-                                    indicatorIdleSurfaceColorOverride = neutralIndicatorContainerColor,
+                                    indicatorIdleSurfaceColorOverride = themedIndicatorContainerColor,
                                     shellHeight = dockHeight,
                                     indicatorHeight = resolveBiliPaiBottomBarIndicatorHeight(dockHeight),
                                     minimumIndicatorWidth = searchLayoutState.minimumIndicatorWidth,
@@ -4030,6 +4130,9 @@ private fun BiliPaiFloatingBottomBarChrome(
                                     indicatorPositionProvider = indicatorPositionProvider,
                                     externalPagerMotionEffectsEnabled = indicatorPositionProvider != null,
                                     isScrollInProgressProvider = isPagerScrollInProgressProvider,
+                                    isPagerDraggingProvider = isPagerDraggingProvider,
+                                    pagerTargetPositionProvider = pagerTargetPositionProvider,
+                                    isPagerNavigatingProvider = isPagerNavigatingProvider,
                                     liquidGlassTuning = liquidGlassTuning,
                                 ) {
                                     dockContent()
@@ -4279,6 +4382,10 @@ private fun ColumnScope.FloatingBottomBarTabVisual(
                 showText = showText,
                 fontScale = LocalDensity.current.fontScale,
             ),
+            lineHeight = resolveFloatingDockLabelLineHeight(
+                showIcon = showIcon,
+                fontScale = LocalDensity.current.fontScale,
+            ),
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -4334,7 +4441,11 @@ internal fun BoxScope.BiliPaiMiuixBottomBarIndicatorLayer(
     isDarkTheme: Boolean,
     swapMotionAxes: Boolean = false,
     indicatorAlignment: Alignment = Alignment.CenterStart,
-    interactionModifier: Modifier = Modifier
+    interactionModifier: Modifier = Modifier,
+    wobblePosition: (() -> Float)? = null,
+    wobbleSelection: (() -> Any?)? = null,
+    wobbleReady: (() -> Boolean)? = null,
+    wobbleLastIndex: Int = -1,
 ) {
     if (!visible) return
     val opticalProgress = resolveSharedLiquidIndicatorLensProgress(
@@ -4343,26 +4454,80 @@ internal fun BoxScope.BiliPaiMiuixBottomBarIndicatorLayer(
         isDragging = isDragging,
     )
     val effectiveIndicatorEffectsEnabled = indicatorEffectsEnabled
-    val rawIndicatorLayerTransform = if (effectiveIndicatorEffectsEnabled) {
-        resolveBottomBarIndicatorLayerTransform(
-            motionProgress = motionProgress,
-            velocityItemsPerSecond = velocityItemsPerSecond,
-            isDragging = isDragging,
-            dragScaleProgress = indicatorLayerScaleProgress,
-            dragScaleTransform = indicatorLayerScaleTransform,
-            dragScaleTarget = dragScaleTarget,
-            motionSpec = bottomBarMotionSpec
-        )
-    } else {
-        BottomBarIndicatorLayerTransform(scaleX = 1f, scaleY = 1f)
+    // 额外形变仅属于玻璃材质，关闭独立开关时沿用原有光学与缩放进度。
+    val wobbleEnabled = glassEnabled && effectiveIndicatorEffectsEnabled &&
+        com.android.purebilibili.core.ui.animation.LocalLiquidIndicatorWobbleEnabled.current
+    val motionExtentPx = with(LocalDensity.current) {
+        (if (swapMotionAxes) indicatorHeight else indicatorWidth).toPx().coerceAtLeast(1f)
     }
-    val indicatorLayerTransform = if (swapMotionAxes) {
-        BottomBarIndicatorLayerTransform(
-            scaleX = rawIndicatorLayerTransform.scaleY,
-            scaleY = rawIndicatorLayerTransform.scaleX
+    // Only the glass tail uses this gate; native transforms and timings remain unchanged.
+    val canRecoil: () -> Boolean = {
+        !isDragging && (wobbleReady?.invoke() ?: (
+            effectivePressProgress <= 0.001f && abs(velocityItemsPerSecond) <= 0.01f &&
+                indicatorLayerScaleProgress <= 0.001f &&
+                abs((indicatorLayerScaleTransform?.scaleX ?: 1f) - 1f) <= 0.001f &&
+                abs((indicatorLayerScaleTransform?.scaleY ?: 1f) - 1f) <= 0.001f
+            ))
+    }
+    val wobble = rememberLiquidIndicatorWobble(
+        enabled = wobbleEnabled,
+        geometryKey = swapMotionAxes to wobbleLastIndex,
+        canSettle = canRecoil,
+        selectionKey = { wobbleSelection?.invoke() },
+        interactionActive = { isDragging },
+    ) {
+        wobblePosition?.invoke() ?:
+            ((if (swapMotionAxes) indicatorTranslationYPx else indicatorTranslationXPx) / motionExtentPx)
+    }
+    val rawIndicatorLayerTransform: () -> BottomBarIndicatorLayerTransform = {
+        if (effectiveIndicatorEffectsEnabled) {
+            resolveBottomBarIndicatorLayerTransform(
+                motionProgress = motionProgress,
+                velocityItemsPerSecond = velocityItemsPerSecond *
+                    if (glassEnabled && !isDragging) wobble.velocityWeight else 1f,
+                isDragging = isDragging,
+                dragScaleProgress = indicatorLayerScaleProgress,
+                dragScaleTransform = indicatorLayerScaleTransform,
+                dragScaleTarget = dragScaleTarget,
+                motionSpec = bottomBarMotionSpec,
+            )
+        } else {
+            BottomBarIndicatorLayerTransform(scaleX = 1f, scaleY = 1f)
+        }
+    }
+    val indicatorLayerTransform: () -> BottomBarIndicatorLayerTransform = {
+        val rawTransform = rawIndicatorLayerTransform()
+        if (swapMotionAxes) {
+            BottomBarIndicatorLayerTransform(
+                scaleX = rawTransform.scaleY,
+                scaleY = rawTransform.scaleX,
+            )
+        } else {
+            rawTransform
+        }
+    }
+    val recoilStretch: () -> Float = {
+        com.android.purebilibili.core.ui.animation.resolveLiquidIndicatorRecoilStretch(
+            wobble.value, canRecoil(),
         )
-    } else {
-        rawIndicatorLayerTransform
+    }
+    val layerScaleX: () -> Float = {
+        if (!glassEnabled) indicatorLayerTransform().scaleX
+        else if (swapMotionAxes) liquidWobbleScaleY(indicatorLayerTransform().scaleX, recoilStretch())
+        else liquidWobbleScaleX(indicatorLayerTransform().scaleX, recoilStretch())
+    }
+    val layerScaleY: () -> Float = {
+        if (!glassEnabled) indicatorLayerTransform().scaleY
+        else if (swapMotionAxes) liquidWobbleScaleX(indicatorLayerTransform().scaleY, recoilStretch())
+        else liquidWobbleScaleY(indicatorLayerTransform().scaleY, recoilStretch())
+    }
+    val opticalProgressProvider: () -> Float = {
+        if (wobble.enabled) maxOf(
+            opticalProgress,
+            com.android.purebilibili.core.ui.animation.liquidIndicatorShapeProgress(
+                layerScaleX(), layerScaleY(), dragScaleTarget,
+            ),
+        ) else opticalProgress
     }
     val pillHighlight = if (glassEnabled) {
         rememberBiliPaiGravityHighlight(
@@ -4385,9 +4550,17 @@ internal fun BoxScope.BiliPaiMiuixBottomBarIndicatorLayer(
             .graphicsLayer {
                 translationX = indicatorTranslationXPx + indicatorPanelOffsetPx
                 translationY = indicatorTranslationYPx + indicatorPanelOffsetYPx
+                if (glassEnabled && wobbleLastIndex >= 0) {
+                    val shift = com.android.purebilibili.core.ui.animation.liquidWobbleEdgeTranslationPx(
+                        recoilStretch(), wobblePosition?.invoke() ?: 0f, wobbleLastIndex,
+                        if (swapMotionAxes) size.height else size.width, 4.dp.toPx(),
+                        baseScale = if (swapMotionAxes) indicatorLayerTransform().scaleY else indicatorLayerTransform().scaleX,
+                    )
+                    if (swapMotionAxes) translationY += shift else translationX += shift
+                }
                 if (indicatorBackdrop == null && effectiveIndicatorEffectsEnabled) {
-                    scaleX = indicatorLayerTransform.scaleX
-                    scaleY = indicatorLayerTransform.scaleY
+                    scaleX = layerScaleX()
+                    scaleY = layerScaleY()
                 }
             }
             .width(indicatorWidth)
@@ -4404,29 +4577,34 @@ internal fun BoxScope.BiliPaiMiuixBottomBarIndicatorLayer(
                             if (shouldUseBottomBarIndicatorLens(liquidGlassPreset)) {
                                 homeIndicatorLens(
                                     restHeightDp = indicatorHeight.value,
-                                    progress = opticalProgress,
+                                    progress = opticalProgressProvider(),
                                     tuning = liquidGlassTuning,
-                                    indicatorScaleY = indicatorLayerTransform.scaleY,
+                                    indicatorScaleY = layerScaleY(),
                                 )
                             }
                         },
                         highlight = {
-                            pillHighlight?.value?.copy(alpha = opticalProgress)
+                            if (glassEnabled) pillHighlight?.value?.copy(alpha = effectivePressProgress)
+                            else if (isDragging) pillHighlight?.value?.copy(alpha = opticalProgress) else null
                         },
                         onDrawSurface = {
-                            drawHomeIndicatorSurface(opticalProgress, isDarkTheme, indicatorIdleSurfaceColor)
+                            drawHomeIndicatorSurface(opticalProgressProvider(), isDarkTheme, indicatorIdleSurfaceColor)
                         },
                         layerBlock = {
                             if (effectiveIndicatorEffectsEnabled) {
-                                scaleX = indicatorLayerTransform.scaleX
-                                scaleY = indicatorLayerTransform.scaleY
+                                scaleX = layerScaleX()
+                                scaleY = layerScaleY()
                             }
                         }
                     ).miuixInnerShadow(shape = shellShape) {
                         MiuixInnerShadow(
-                            radius = 8.dp * homeIndicatorOpticalScale(indicatorHeight.value) * opticalProgress,
+                            offset = if (glassEnabled) androidx.compose.ui.unit.DpOffset.Zero else
+                                androidx.compose.ui.unit.DpOffset(
+                                    0.dp, 8.dp * homeIndicatorOpticalScale(indicatorHeight.value) * opticalProgressProvider(),
+                                ),
+                            radius = 8.dp * homeIndicatorOpticalScale(indicatorHeight.value) * opticalProgressProvider(),
                             color = OpticalContrastPalette.Shadow.copy(alpha = 0.15f),
-                            alpha = opticalProgress
+                            alpha = opticalProgressProvider()
                         )
                     }
                 } else {
@@ -5091,11 +5269,13 @@ private fun BottomBarBlendedMaterialIcon(
             AppIcon(
                 imageVector = resolveMaterialBottomBarIcon(item, selected = false),
                 contentDescription = contentDescription,
+                tint = contentColor,
                 modifier = Modifier.alpha(1f - clampedSelectedAlpha)
             )
             AppIcon(
                 imageVector = resolveMaterialBottomBarIcon(item, selected = true),
                 contentDescription = null,
+                tint = contentColor,
                 modifier = Modifier.alpha(clampedSelectedAlpha)
             )
         }

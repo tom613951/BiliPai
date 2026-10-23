@@ -9,13 +9,30 @@ plugins {
 dependencies {
     compileOnly("com.android.tools.build:gradle-api:${libs.versions.agp.get()}")
     implementation("org.ow2.asm:asm:9.8")
+    implementation("org.ow2.asm:asm-commons:9.8")
 }
 
 gradlePlugin {
     plugins {
+        create("navigationEventDisposalGuard") {
+            id = "com.android.bilipai.navigationevent-disposal-guard"
+            implementationClass = "com.android.purebilibili.build.NavigationEventDisposalGuardPlugin"
+        }
+        create("composeDragStartGuard") {
+            id = "com.android.bilipai.compose-drag-start-guard"
+            implementationClass = "com.android.purebilibili.build.ComposeDragStartGuardPlugin"
+        }
         create("composeDetachedOwnerGuard") {
             id = "com.android.bilipai.compose-detached-owner-guard"
             implementationClass = "com.android.purebilibili.build.ComposeDetachedOwnerGuardPlugin"
+        }
+        create("workManagerNamespaceGuard") {
+            id = "com.android.bilipai.workmanager-namespace-guard"
+            implementationClass = "com.android.purebilibili.build.WorkManagerNamespaceGuardPlugin"
+        }
+        create("miuixMaterialKolorCompat") {
+            id = "com.android.bilipai.miuix-materialkolor-compat"
+            implementationClass = "com.android.purebilibili.build.MiuixMaterialKolorCompatPlugin"
         }
     }
 }

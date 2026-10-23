@@ -1,8 +1,12 @@
 package com.android.purebilibili.feature.settings.screen
 
+import com.android.purebilibili.feature.settings.SettingsFunctionIcon
+import com.android.purebilibili.core.theme.LocalAppUiStyle
+import com.android.purebilibili.core.theme.AppUiStyle
 import com.android.purebilibili.core.ui.AppContentColors
 
 import android.os.Build
+import com.android.purebilibili.core.ui.globalWallpaperAwareBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,6 +64,8 @@ import com.android.purebilibili.feature.settings.rememberSettingsSiblingIconTint
 import com.android.purebilibili.feature.settings.resolveSettingsRootCategoryOrder
 import com.android.purebilibili.feature.settings.resolveSettingsTabletLayoutPolicy
 import com.android.purebilibili.feature.settings.resolveSettingsVisualSpec
+import com.android.purebilibili.feature.settings.subtitleResource
+import com.android.purebilibili.feature.settings.titleResource
 import com.android.purebilibili.feature.settings.shouldRenderSettingsTabletDetailPane
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
@@ -96,7 +102,7 @@ fun SettingsTabletShell(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AppSurfaceTokens.groupedListContainer())
+                .globalWallpaperAwareBackground(AppSurfaceTokens.groupedListContainer())
                 .padding(layoutPolicy.detailPanePaddingDp.dp),
             contentAlignment = Alignment.Center,
         ) {
@@ -121,7 +127,7 @@ fun SettingsTabletShell(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(AppSurfaceTokens.groupedListContainer())
+                .globalWallpaperAwareBackground(AppSurfaceTokens.groupedListContainer())
                 .padding(horizontal = layoutPolicy.detailPanePaddingDp.dp),
         ) {
             rightPane()
@@ -138,7 +144,7 @@ fun SettingsTabletShell(
             modifier = Modifier
                 .preferredWidth(layoutPolicy.primaryRatio)
                 .fillMaxHeight()
-                .background(AppSurfaceTokens.groupedListContainer()),
+                .globalWallpaperAwareBackground(AppSurfaceTokens.groupedListContainer()),
         ) {
                 val config = LocalAppThemeConfig.current
                 val progressive = shouldUseBiliPaiProgressiveTopBlur(
@@ -217,9 +223,9 @@ fun SettingsTabletShell(
                             AppNavigationDrawerItem(
                                 label = {
                                     Column {
-                                        AppText(category.title, fontWeight = FontWeight.Medium)
+                                        AppText(stringResource(category.titleResource()), fontWeight = FontWeight.Medium)
                                         AppText(
-                                            text = category.subtitle,
+                                            text = stringResource(category.subtitleResource()),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = AppContentColors.secondaryText(),
                                             maxLines = 2,
@@ -233,7 +239,13 @@ fun SettingsTabletShell(
                                     }
                                 },
                                 icon = {
-                                    Box(
+                                    if (LocalAppUiStyle.current == AppUiStyle.MIUIX || com.android.purebilibili.core.ui.components.useColorfulPreferenceIcons()) {
+                                        SettingsFunctionIcon(
+                                            title = category.title,
+                                            imageVector = visual.icon,
+                                            painter = visual.iconResId?.let { androidx.compose.ui.res.painterResource(it) },
+                                        )
+                                    } else Box(
                                         modifier = Modifier
                                             .size(resolveSettingsVisualSpec().categoryIconBubbleSize)
                                             .clip(AppShapes.container(ContainerLevel.Field))
@@ -262,17 +274,19 @@ fun SettingsTabletShell(
             modifier = Modifier
                 .preferredWidth(0.35f)
                 .fillMaxSize()
-                .background(AppSurfaceTokens.groupedListContainer())
+                .globalWallpaperAwareBackground(AppSurfaceTokens.groupedListContainer())
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             AppText(
-                text = selectedCategory?.title ?: stringResource(R.string.settings_title),
+                text = selectedCategory?.let { stringResource(it.titleResource()) }
+                    ?: stringResource(R.string.settings_title),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             AppText(
-                text = selectedCategory?.subtitle ?: "选择左侧分类以查看设置",
+                text = selectedCategory?.let { stringResource(it.subtitleResource()) }
+                    ?: stringResource(R.string.settings_category_select_hint),
                 style = MaterialTheme.typography.bodyLarge,
                 color = AppContentColors.secondaryText(),
             )

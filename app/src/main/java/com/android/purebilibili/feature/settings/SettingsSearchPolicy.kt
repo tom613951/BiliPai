@@ -625,6 +625,15 @@ private val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
         focusId = SettingsSearchFocusIds.APPEARANCE_THEME
     ),
     SettingsSearchEntry(
+        settingId = "appearance.dark_theme_schedule",
+        target = SettingsSearchTarget.APPEARANCE,
+        title = "定时深色模式",
+        subtitle = "自选开始和结束时间，支持跨午夜自动切换",
+        section = settingsDestinationCopy(SettingsSearchTarget.APPEARANCE).title,
+        aliases = listOf("自动深色", "夜间模式", "深色时间", "定时夜间", "深色定时"),
+        focusId = "appearance.dark_theme_schedule",
+    ),
+    SettingsSearchEntry(
         settingId = "legacy.038",
         target = SettingsSearchTarget.APPEARANCE,
         title = "界面风格与明暗模式",
@@ -862,6 +871,9 @@ private val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
             "选中图标 1.10 倍",
             "视频小横条联动",
             "底栏收拢",
+            "滚动时收成当前入口",
+            "底栏圆形图标",
+            "下滑收缩上滑展开",
             "列表精简搜索",
             "精简搜索",
             "隐藏列表搜索栏",
@@ -984,6 +996,7 @@ internal fun resolveSettingsSearchResults(
                 "playback.next_watch_hint_enabled" -> listOf("下一集", "相关推荐", "倒计时", "接下来观看", "片尾提示")
                 "playback.image_preview3d_page_enabled" -> listOf("图片立体翻页3D", "3D翻页")
                 "playback.comment_fraud_detection_enabled" -> listOf("发评反诈", "评论检测", "评论检查")
+                "playback.comment_avatar_push_enabled" -> listOf("头像碰撞", "头像吸附", "头像推挤", "评论动效")
                 "playback.comment_member_decorations_enabled" -> listOf("评论装扮", "个性装扮")
                 "playback.image_preview_long_press_save_enabled" -> listOf("图片长按保存", "长按保存图片")
                 "playback.video_info_default_expanded" -> listOf("简介默认展开")

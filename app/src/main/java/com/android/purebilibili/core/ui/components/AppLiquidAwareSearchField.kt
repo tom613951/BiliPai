@@ -44,6 +44,11 @@ fun AppLiquidAwareSearchField(
     presentation: AppSearchFieldPresentation = AppSearchFieldPresentation.STANDARD,
     compactHeight: Dp = Dp.Unspecified,
 ) {
+    val liquidHeight = if (compactHeight.isSpecified && compactHeight > 0.dp) {
+        compactHeight
+    } else {
+        AppChromeSizeTokens.LiquidSearchFieldHeightDp.dp
+    }
     BottomBarMatchedReusableLiquidDock(
         shape = CircleShape,
         modifier = modifier,
@@ -54,16 +59,17 @@ fun AppLiquidAwareSearchField(
         useNeutralLiquidContainer = true,
         drawShellLens = true,
         shellLensIntensity = resolveFloatingDockGeometryScale(
-            AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.toFloat()
+            liquidHeight.value
         ),
         isScrollInProgressProvider = isScrollInProgressProvider,
     ) { liquidChromeActive ->
-        if (compactHeight.isSpecified) {
+        if (liquidChromeActive) {
             CompactLiquidSearchInput(
                 query = query,
                 onQueryChange = onQueryChange,
                 placeholder = placeholder,
-                height = compactHeight,
+                height = liquidHeight,
+                showClearAction = presentation != AppSearchFieldPresentation.TOP_BAR,
                 onSearch = onSearch,
                 onClear = onClear,
                 focusRequester = focusRequester,
@@ -72,23 +78,29 @@ fun AppLiquidAwareSearchField(
                 leadingIconHorizontalOffset = leadingIconHorizontalOffset,
             )
         } else {
-            AppSearchField(
-                query = query,
-                onQueryChange = onQueryChange,
+            // All three materials now share compact inline geometry. Theme colors and
+            // native MD3/Miuix shapes remain owned by the compact input renderer.
+            AppCompactInputField(
+                value = query,
+                onValueChange = onQueryChange,
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = placeholder,
-                onSearch = onSearch,
-                onClear = onClear,
-                presentation = presentation,
-                autoFocusEnabled = autoFocusEnabled,
+                height = liquidHeight,
+                containerColor = com.android.purebilibili.core.ui.AppSurfaceTokens.searchContainer(),
                 focusRequester = focusRequester,
+                autoFocusEnabled = autoFocusEnabled,
                 interactionSource = interactionSource,
-                leadingIconHorizontalOffset = leadingIconHorizontalOffset,
-                containerColor = if (liquidChromeActive) {
-                    liquidContentContainerColor
-                } else {
-                    Color.Unspecified
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+                leadingIcon = {
+                    AppIcon(Icons.Default.Search, contentDescription = null,
+                        modifier = Modifier.padding(start = leadingIconHorizontalOffset).size(22.dp))
                 },
+                trailingIcon = if (presentation != AppSearchFieldPresentation.TOP_BAR && query.isNotEmpty()) {
+                    { AppIconButton(onClick = onClear, modifier = Modifier.size(32.dp)) {
+                        AppIcon(Icons.Default.Clear, contentDescription = "清除搜索内容")
+                    } }
+                } else null,
             )
         }
     }
@@ -100,6 +112,7 @@ private fun CompactLiquidSearchInput(
     onQueryChange: (String) -> Unit,
     placeholder: String,
     height: Dp,
+    showClearAction: Boolean,
     onSearch: () -> Unit,
     onClear: () -> Unit,
     focusRequester: FocusRequester?,
@@ -114,7 +127,10 @@ private fun CompactLiquidSearchInput(
     val contentColor = com.android.purebilibili.core.ui.AppContentColors.primaryText()
     val hintColor = com.android.purebilibili.core.ui.AppContentColors.secondaryText()
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = height).padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = height)
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -149,7 +165,7 @@ private fun CompactLiquidSearchInput(
                 }
             },
         )
-        if (query.isNotEmpty()) {
+        if (showClearAction && query.isNotEmpty()) {
             AppIconButton(onClick = onClear, modifier = Modifier.size(32.dp)) {
                 AppIcon(Icons.Default.Clear, contentDescription = "清除搜索内容", tint = hintColor)
             }

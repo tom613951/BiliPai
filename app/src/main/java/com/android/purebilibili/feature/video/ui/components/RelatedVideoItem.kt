@@ -11,7 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,7 +40,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -81,6 +79,7 @@ import com.android.purebilibili.core.ui.transition.shouldUseVideoCardShellShared
 import com.android.purebilibili.core.ui.transition.videoCardShellSharedBoundsOrEmpty
 import com.android.purebilibili.core.ui.transition.withMeasuredCoverDecodeSize
 import com.android.purebilibili.core.util.CardPositionManager
+import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.util.HapticType
 import com.android.purebilibili.core.util.rememberHapticFeedback
@@ -186,7 +185,7 @@ fun RelatedVideoItem(
     video: RelatedVideo,
     isFollowed: Boolean = false,
     showUpBadge: Boolean = true,
-    coverAspectRatio: Float = RELATED_VIDEO_CARD_COVER_ASPECT_RATIO,
+    coverAspectRatio: Float = com.android.purebilibili.core.ui.videoCardCoverAspectRatio(),
     stacked: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -231,7 +230,10 @@ fun RelatedVideoItem(
     )
     val cardCoordinatesRef = remember { object { var value: LayoutCoordinates? = null } }
     val coverCoordinatesRef = remember { object { var value: LayoutCoordinates? = null } }
-    val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(video.bvid)
+    val infoCoordinatesRef = remember { object { var value: LayoutCoordinates? = null } }
+    val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(
+        video.bvid, enabled = sharedTransitionEnabled,
+    )
     val cardShape = AppShapes.container(ContainerLevel.Card)
     val cardCornerRadiusDp = AppShapes.containerCornerDp(ContainerLevel.Card).value.roundToInt()
     val context = LocalContext.current
@@ -250,11 +252,11 @@ fun RelatedVideoItem(
     val triggerRelatedVideoClick = {
         cardCoordinatesRef.value
             ?.takeIf { it.isAttached }
-            ?.boundsInRoot()
+            ?.videoCardSourceBoundsInRoot()
             ?.let { bounds ->
                 val sourceCoverBounds = coverCoordinatesRef.value
                     ?.takeIf { it.isAttached }
-                    ?.boundsInRoot()
+                    ?.videoCardSourceBoundsInRoot()
                 CardPositionManager.recordVideoCardPosition(
                     bvid = video.bvid,
                     sourceRoute = sourceRoute,
@@ -269,6 +271,9 @@ fun RelatedVideoItem(
                     } else {
                         VideoCardSourceLayout.SIDE_BY_SIDE
                     },
+                    infoBounds = infoCoordinatesRef.value
+                        ?.takeIf { it.isAttached }
+                        ?.videoCardSourceBoundsInRoot(),
                     sourceChromeSnapshot = VideoCardSourceChromeSnapshot(
                         title = video.title,
                         ownerName = video.owner.name,
@@ -297,9 +302,7 @@ fun RelatedVideoItem(
         Unit
     }
     // 排版对齐首页单列卡片:标题用 feed 紧凑级,统计用 labelSmall。
-    val contentTypography = com.android.purebilibili.core.ui.feedContentTypography(
-        com.android.purebilibili.core.ui.FeedTitleHierarchy.Standard,
-    )
+    val contentTypography = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography()
     val moreHaptic = rememberHapticFeedback()
 
     Box(
@@ -319,8 +322,8 @@ fun RelatedVideoItem(
                 clipShape = cardShape,
                 crossfadeSourceContent = true,
             )
-            .clip(cardShape)
             .then(nativeCardSnapshot.modifier)
+            .clip(cardShape)
             .background(AppSurfaceTokens.cardContainer())
             .clickable(onClick = triggerRelatedVideoClick)
     ) {
@@ -329,6 +332,9 @@ fun RelatedVideoItem(
             stacked = stacked,
             coverModifier = Modifier.onGloballyPositioned { coordinates ->
                 coverCoordinatesRef.value = coordinates
+            },
+            infoModifier = Modifier.onGloballyPositioned { coordinates ->
+                infoCoordinatesRef.value = coordinates
             },
             coverOverlayModifier = nativeCardSnapshot.coverOverlayModifier,
             coverContent = {
@@ -341,20 +347,9 @@ fun RelatedVideoItem(
                 )
             },
             coverOverlayContent = {
-                AppText(
+                com.android.purebilibili.feature.home.components.cards.VideoCardCoverDurationText(
                     text = FormatUtils.formatDuration(video.duration),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        shadow = Shadow(
-                            color = Color.Black.copy(alpha = 0.6f),
-                            blurRadius = 4f,
-                            offset = Offset(0f, 1f),
-                        ),
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(6.dp),
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
                 )
             },
             infoContent = {
@@ -450,7 +445,6 @@ fun RelatedVideoItem(
                 {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.BottomEnd)
                             .size(48.dp)
                             .clip(CircleShape)
                             .clickable(
@@ -479,7 +473,7 @@ fun RelatedVideoItem(
 internal fun RelatedVideoGridRow(
     videos: List<RelatedVideo>,
     cardLayout: HomeFeedCardLayout,
-    cardPresentation: RelatedVideoCardLayout? = null,
+    cardPresentation: RelatedVideoCardLayout,
     followingMids: Set<Long> = emptySet(),
     showUpBadge: Boolean = true,
     onVideoClick: (RelatedVideo) -> Unit,
@@ -493,26 +487,22 @@ internal fun RelatedVideoGridRow(
     }
     var isBlockingCreator by remember { mutableStateOf(false) }
     val blockedUpRepository = remember { BlockedUpRepository.getInstance(context) }
-    BoxWithConstraints(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = cardLayout.outerPaddingDp.dp, vertical = 2.dp)
     ) {
-        val resolvedCardPresentation = cardPresentation
-            ?: resolveRelatedVideoCardLayout(maxWidth.value.toInt())
-        Row(modifier = Modifier.fillMaxWidth()) {
         videos.firstOrNull()?.let { video ->
             RelatedVideoItem(
                 video = video,
                 isFollowed = video.owner.mid in followingMids,
                 showUpBadge = showUpBadge,
                 coverAspectRatio = cardLayout.coverAspectRatio,
-                stacked = resolvedCardPresentation == RelatedVideoCardLayout.STACKED,
+                stacked = cardPresentation == RelatedVideoCardLayout.STACKED,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = { onVideoClick(video) },
                 onMoreClick = { actionVideo = video }
             )
-        }
         }
     }
 

@@ -33,6 +33,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
+import com.android.purebilibili.feature.video.ui.gesture.PlayerGestureInputSurface
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -95,6 +96,7 @@ import com.android.purebilibili.core.ui.blur.BlurSurfaceType
 import com.android.purebilibili.core.ui.blur.rememberRecoverableHazeState
 import com.android.purebilibili.core.ui.blur.unifiedBlur
 import com.android.purebilibili.feature.video.ui.gesture.GestureLevelOverlayContent
+import com.android.purebilibili.feature.video.ui.gesture.detectPlayerTapGestures
 import com.android.purebilibili.feature.video.ui.gesture.GestureLevelOverlayStyle
 import com.android.purebilibili.feature.video.ui.gesture.resolveGestureLevelOverlaySpec
 import com.android.purebilibili.feature.video.ui.gesture.resolveGestureLevelKind
@@ -109,7 +111,6 @@ import com.android.purebilibili.feature.video.ui.gesture.GestureMode
 import com.android.purebilibili.feature.video.ui.gesture.GestureIndicator
 import com.android.purebilibili.feature.video.ui.gesture.rememberPlayerGestureState
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -343,23 +344,14 @@ fun FullscreenPlayerOverlay(
     var seekCancelPending by remember { mutableStateOf(false) }
     var swipeExitAccumulatedY by remember { mutableFloatStateOf(0f) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    // Default to 15s so seek UI/haptics work immediately before prefs load (null blocked delta).
-    val fullscreenSwipeSeekSeconds by produceState(initialValue = 0, context) {
-        SettingsManager.getFullscreenSwipeSeekSeconds(context)
-            .collectLatest { value = it }
-    }
-    val doubleTapSeekEnabled by SettingsManager
-        .getDoubleTapSeekEnabled(context)
-        .collectAsStateWithLifecycle(initialValue = false
+    val playerInteractionSettings by SettingsManager
+        .getPlayerInteractionSettings(context)
+        .collectAsStateWithLifecycle(
+            initialValue = com.android.purebilibili.core.store.PlayerInteractionSettings()
         )
-    val seekForwardSeconds by SettingsManager
-        .getSeekForwardSeconds(context)
-        .collectAsStateWithLifecycle(initialValue = 10
-        )
-    val seekBackwardSeconds by SettingsManager
-        .getSeekBackwardSeconds(context)
-        .collectAsStateWithLifecycle(initialValue = 10
-        )
+    val doubleTapSeekEnabled = playerInteractionSettings.doubleTapSeekEnabled
+    val seekForwardSeconds = playerInteractionSettings.seekForwardSeconds
+    val seekBackwardSeconds = playerInteractionSettings.seekBackwardSeconds
 
     // 亮度状态
     var currentBrightness by remember {
@@ -738,7 +730,8 @@ fun FullscreenPlayerOverlay(
 
                 val screenWidth = size.width.toFloat()
 
-                detectTapGestures(
+                detectPlayerTapGestures(
+                    doubleTapSlopPx = android.view.ViewConfiguration.get(context).scaledDoubleTapSlop.toFloat(),
                     onTap = {
                         showControls = !showControls
                         if (showControls) lastInteractionTime = System.currentTimeMillis()
@@ -784,7 +777,11 @@ fun FullscreenPlayerOverlay(
                     }
                 )
             }
-            .pointerInput(gesturesEnabled, fullscreenSwipeSeekSeconds, showControls) {
+            .pointerInput(player, gesturesEnabled, playerInteractionSettings, showControls) {
+                if (gestureMode == FullscreenGestureMode.Seek) {
+                    gestureMode = FullscreenGestureMode.None
+                    seekCancelPending = false
+                }
                 if (!gesturesEnabled) {
                     return@pointerInput
                 }
@@ -911,12 +908,15 @@ fun FullscreenPlayerOverlay(
                             FullscreenGestureMode.Seek -> {
                                 val seekDelta = resolveHorizontalSeekDeltaMs(
                                     isFullscreen = true,
-                                    fullscreenSwipeSeekEnabled = true,
+                                    fullscreenSwipeSeekEnabled = playerInteractionSettings.fullscreenSwipeSeekEnabled,
                                     totalDragDistanceX = dragDelta,
                                     containerWidthPx = screenWidth,
-                                    fullscreenSwipeSeekSeconds = fullscreenSwipeSeekSeconds,
-                                    inlineSwipeSeekSeconds = 0,
-                                    gestureSensitivity = 1f
+                                    fullscreenSwipeSeekSeconds = playerInteractionSettings.fullscreenSwipeSeekSeconds,
+                                    inlineSwipeSeekSeconds = playerInteractionSettings.inlineSwipeSeekSeconds,
+                                    gestureSensitivity = playerInteractionSettings.gestureSensitivity,
+                                    durationMs = duration,
+                                    useRelativeDuration = playerInteractionSettings.swipeSeekUseRelativeDuration,
+                                    relativeSeekPercent = playerInteractionSettings.swipeSeekRelativePercent
                                 )
                                 if (seekDelta != null) {
                                     seekPreviewPosition = (gestureSeekStartPosition + seekDelta).coerceIn(0L, duration)
@@ -1056,6 +1056,9 @@ fun FullscreenPlayerOverlay(
 
         // 视频播放器
         player?.let { exoPlayer ->
+            val useTextureSurface = com.android.purebilibili.feature.video.ui.components.rememberCompatibleVideoTextureSurface(
+                exoPlayer, miniPlayerManager.cachedUiState?.currentQuality ?: 0,
+            )
             BoxWithConstraints(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -1077,9 +1080,10 @@ fun FullscreenPlayerOverlay(
                         )
                 }
 
+                key(exoPlayer, useTextureSurface) {
                 AndroidView(
                     factory = { ctx ->
-                        PlayerView(ctx).apply {
+                        com.android.purebilibili.feature.video.ui.components.createVideoPlayerView(ctx, useTextureSurface).apply {
                             this.player = exoPlayer
                             useController = false
                             keepScreenOn = keepFullscreenPlaybackAwake
@@ -1094,8 +1098,13 @@ fun FullscreenPlayerOverlay(
                         playerView.resizeMode = aspectRatio.playerResizeMode
                         playerViewRef = playerView
                     },
+                    onRelease = { view ->
+                        if (playerViewRef === view) playerViewRef = null
+                        view.player = null
+                    },
                     modifier = viewportModifier
                 )
+                }
 
                 if (danmakuEnabled) {
                     key(danmakuManager) {
@@ -1127,6 +1136,9 @@ fun FullscreenPlayerOverlay(
                 }
             }
         }
+
+        // Same stable hit surface as inline/fullscreen detail playback; controls stay above it.
+        PlayerGestureInputSurface(modifier = Modifier.matchParentSize())
 
         // 手势指示器（SwipeToExit 无需指示器）
         if (gestureMode != FullscreenGestureMode.None &&

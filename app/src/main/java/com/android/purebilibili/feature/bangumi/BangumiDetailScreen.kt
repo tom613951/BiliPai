@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -88,6 +89,11 @@ fun BangumiDetailScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     // Keep the entering container stable while bounds animate. Never replace loaded content on return.
     val detailState = if (contentTransitionReady) uiState.detailState else BangumiDetailState.Loading
+    val contentRevealAlpha = com.android.purebilibili.core.ui.transition.rememberSharedCardDetailRevealAlpha(
+        entryKey = seasonId,
+        contentTransitionReady = contentTransitionReady,
+        contentLoaded = detailState !is BangumiDetailState.Loading,
+    )
 
     // 加载详情
     LaunchedEffect(seasonId, epId, mediaId) {
@@ -115,70 +121,74 @@ fun BangumiDetailScreen(
             )
         }
     ) { paddingValues ->
-        when (val state = detailState) {
-            is BangumiDetailState.Loading -> {
-                PosterDetailSkeleton(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                )
-            }
-            is BangumiDetailState.Error -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        AppText(
-                            text = state.message,
-                            color = AppContentColors.error()
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        AppButton(
-                            onClick = {
-                                viewModel.loadSeasonDetail(
-                                    seasonId = seasonId,
-                                    epId = epId,
-                                    mediaId = mediaId
-                                )
+        Box(modifier = Modifier.fillMaxSize().graphicsLayer {
+            alpha = if (detailState is BangumiDetailState.Loading) 1f else contentRevealAlpha.value
+        }) {
+            when (val state = detailState) {
+                is BangumiDetailState.Loading -> {
+                    PosterDetailSkeleton(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(paddingValues),
+                    )
+                }
+                is BangumiDetailState.Error -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(paddingValues),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            AppText(
+                                text = state.message,
+                                color = AppContentColors.error()
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            AppButton(
+                                onClick = {
+                                    viewModel.loadSeasonDetail(
+                                        seasonId = seasonId,
+                                        epId = epId,
+                                        mediaId = mediaId
+                                    )
+                                }
+                            ) {
+                                AppText("重试")
                             }
-                        ) {
-                            AppText("重试")
                         }
                     }
                 }
-            }
-            is BangumiDetailState.Success -> {
-                val actionSeasonId = resolveBangumiActionSeasonId(
-                    routeSeasonId = seasonId,
-                    detailSeasonId = state.detail.seasonId
-                )
-                if (LocalWindowSizeClass.current.shouldUseSplitLayout) {
-                    TabletBangumiDetailContent(
-                        detail = state.detail,
-                        paddingValues = paddingValues,
-                        onEpisodeClick = { episode -> onEpisodeClick(actionSeasonId, episode) },
-                        onSeasonClick = onSeasonClick,
-                        onFollowStatusSelect = { status ->
-                            viewModel.updateFollowStatus(actionSeasonId, status)
-                        },
-                        onReviewsClick = onReviewsClick,
-                        onUserClick = onUserClick
+                is BangumiDetailState.Success -> {
+                    val actionSeasonId = resolveBangumiActionSeasonId(
+                        routeSeasonId = seasonId,
+                        detailSeasonId = state.detail.seasonId
                     )
-                } else {
-                    MobileBangumiDetailContent(
-                        detail = state.detail,
-                        paddingValues = paddingValues,
-                        onEpisodeClick = { episode -> onEpisodeClick(actionSeasonId, episode) },
-                        onSeasonClick = onSeasonClick,
-                        onFollowStatusSelect = { status ->
-                            viewModel.updateFollowStatus(actionSeasonId, status)
-                        },
-                        onReviewsClick = onReviewsClick,
-                        onUserClick = onUserClick
-                    )
+                    if (LocalWindowSizeClass.current.shouldUseSplitLayout) {
+                        TabletBangumiDetailContent(
+                            detail = state.detail,
+                            paddingValues = paddingValues,
+                            onEpisodeClick = { episode -> onEpisodeClick(actionSeasonId, episode) },
+                            onSeasonClick = onSeasonClick,
+                            onFollowStatusSelect = { status ->
+                                viewModel.updateFollowStatus(actionSeasonId, status)
+                            },
+                            onReviewsClick = onReviewsClick,
+                            onUserClick = onUserClick
+                        )
+                    } else {
+                        MobileBangumiDetailContent(
+                            detail = state.detail,
+                            paddingValues = paddingValues,
+                            onEpisodeClick = { episode -> onEpisodeClick(actionSeasonId, episode) },
+                            onSeasonClick = onSeasonClick,
+                            onFollowStatusSelect = { status ->
+                                viewModel.updateFollowStatus(actionSeasonId, status)
+                            },
+                            onReviewsClick = onReviewsClick,
+                            onUserClick = onUserClick
+                        )
+                    }
                 }
             }
         }
@@ -742,8 +752,11 @@ private fun MobileBangumiDetailContent(
         orderBangumiEpisodes(detail.episodes.orEmpty(), episodesDescending)
     }
 
+    val detailListState = androidx.compose.foundation.lazy.rememberLazyListState()
+    val heroHeight = 320.dp
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
+            state = detailListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
@@ -752,29 +765,36 @@ private fun MobileBangumiDetailContent(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(320.dp)  //  [修复] 增大高度防止文字被裁切
+                        .height(heroHeight)
                 ) {
-                    // 封面背景（模糊）
-                    AsyncImage(
-                        model = coverUrl,
-                        contentDescription = null,
+                    BangumiDetailHeroBackdrop(
+                        listState = detailListState,
+                        height = heroHeight,
+                        topInset = paddingValues.calculateTopPadding(),
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                    ) {
+                        // 封面背景（模糊）
+                        AsyncImage(
+                            model = coverUrl,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
 
-                    // 渐变遮罩
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Black.copy(alpha = 0.3f),
-                                        Color.Black.copy(alpha = 0.8f)
+                        // 渐变遮罩
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Black.copy(alpha = 0.3f),
+                                            Color.Black.copy(alpha = 0.8f)
+                                        )
                                     )
                                 )
-                            )
-                    )
+                        )
+                    }
 
                     // 信息区域
                     Row(

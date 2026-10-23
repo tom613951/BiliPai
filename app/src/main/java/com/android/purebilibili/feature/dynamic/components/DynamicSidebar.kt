@@ -3,8 +3,6 @@ package com.android.purebilibili.feature.dynamic.components
 
 import com.android.purebilibili.core.ui.AppContentColors
 
-import coil3.request.crossfade
-
 import com.android.purebilibili.core.ui.AppChromeSizeTokens
 import com.android.purebilibili.core.ui.AppSpacingTokens
 
@@ -26,6 +24,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 //  Material Icons
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Person
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppTextButton
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +38,8 @@ import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.LocalAppTopBarIconDecorationEnabled
 import com.android.purebilibili.core.ui.components.LocalAppTopBarIconBackdrop
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,8 +66,13 @@ import com.android.purebilibili.core.ui.rememberAppBackIcon
 import com.android.purebilibili.core.ui.rememberAppChevronDownIcon
 import com.android.purebilibili.core.ui.rememberAppChevronUpIcon
 import com.android.purebilibili.core.ui.rememberAppVisibilityOffIcon
+import com.android.purebilibili.core.ui.rememberAppDynamicIcon
+import com.android.purebilibili.feature.dynamic.isDynamicUpPanelAllShortcut
 import com.android.purebilibili.core.ui.rememberAppVisibilityOnIcon
 import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
+import com.android.purebilibili.core.ui.LocalAppThemeConfig
+import com.android.purebilibili.core.ui.wallpaper.LocalGlobalWallpaperBackdropSource
+import com.android.purebilibili.core.ui.wallpaper.sharedGlobalWallpaperBackground
 import com.android.purebilibili.core.ui.resolveGlobalWallpaperProtectiveColor
 import com.android.purebilibili.core.ui.blur.BlurStyles
 import com.android.purebilibili.core.ui.blur.currentUnifiedBlurIntensity
@@ -71,6 +80,10 @@ import com.android.purebilibili.feature.dynamic.isDynamicUpPanelItemSelected
 import com.android.purebilibili.feature.dynamic.isDynamicUpPanelShortcut
 import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarWidth
 import com.android.purebilibili.core.ui.blur.rememberRecoverableHazeState
+import com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource
+import com.android.purebilibili.core.ui.blur.recoverableBlurEnabled
+import com.android.purebilibili.feature.home.components.BiliPaiImmersiveTopBar
+import com.android.purebilibili.feature.home.components.shouldUseBiliPaiProgressiveTopBlur
 import com.android.purebilibili.core.ui.blur.unifiedBlur
 import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarDividerTopOffset
 import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarReturnHeaderHeightDp
@@ -82,7 +95,7 @@ import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.runtime.derivedStateOf
-import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarAvatarPrefetchUrls
+import com.android.purebilibili.feature.dynamic.prefetchDynamicSidebarNeighborAvatars
 import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarFlingDampingFactor
 import com.android.purebilibili.feature.dynamic.resolveDynamicSidebarUserAvatarUrl
 import com.android.purebilibili.feature.dynamic.shouldAnimateSidebarItemCascade
@@ -184,6 +197,23 @@ fun DynamicSidebar(
     val backgroundAlpha = BlurStyles.getBackgroundAlpha(blurIntensity)
     val returnHeaderHeight = resolveDynamicSidebarReturnHeaderHeightDp().dp
     val globalWallpaperVisible = LocalGlobalWallpaperBackdropVisible.current
+    val themeConfig = LocalAppThemeConfig.current
+    val glassWallpaperSidebar = themeConfig.liquidGlassEnabled && globalWallpaperVisible
+    // 独立记录列表，顶部效果只读取它，不记录返回按钮，避免反馈采样。
+    val progressiveRequested = themeConfig.progressiveTopBlurEnabled && !themeConfig.headerBlurEnabled
+    val sidebarBackdropSource = if (
+        themeConfig.liquidGlassEnabled ||
+        shouldUseBiliPaiProgressiveTopBlur(progressiveRequested, hasBackdrop = true)
+    ) rememberChromeBackdropSource() else null
+    val sidebarBackdrop = sidebarBackdropSource?.takeIf { it.isReady }?.backdrop
+    val headerBlurActive = themeConfig.headerBlurEnabled && !glassWallpaperSidebar &&
+        recoverableBlurEnabled(sidebarHazeState)
+    val wallpaperSource = LocalGlobalWallpaperBackdropSource.current
+    val returnIconBackdrop = if (themeConfig.liquidGlassEnabled) {
+        // Sample the sidebar list so avatars behind the back button remain visible
+        // through its glass. The wallpaper source alone does not contain page content.
+        sidebarBackdrop ?: wallpaperSource?.takeIf { it.isReady }?.backdrop ?: chromeBackdrop
+    } else chromeBackdrop
     val sidebarContainerColor = resolveDynamicSidebarContainerColor(
         surfaceColor = AppSurfaceTokens.surface(),
         globalWallpaperVisible = globalWallpaperVisible
@@ -197,7 +227,7 @@ fun DynamicSidebar(
         users.filter { it.isLive && !isDynamicUpPanelShortcut(it.uid, selfUid) }
     }
     val shortcutUsers = remember(users, selfUid) {
-        users.filter { isDynamicUpPanelShortcut(it.uid, selfUid) }
+        users.filter { isDynamicUpPanelShortcut(it.uid, selfUid) && !isDynamicUpPanelAllShortcut(it.uid) }
     }
     val restUsers = remember(users, selfUid) {
         users.filter { !it.isLive && !isDynamicUpPanelShortcut(it.uid, selfUid) }
@@ -224,38 +254,24 @@ fun DynamicSidebar(
     val flingBehavior = rememberDynamicSidebarFlingBehavior()
 
     val context = LocalContext.current
-    // 初始加载时提前加载数倍视口高度的 UP 主头像
-    LaunchedEffect(visibleUsers) {
-        val initialUrls = resolveDynamicSidebarAvatarPrefetchUrls(visibleUsers)
-        if (initialUrls.isNotEmpty()) {
-            val imageLoader = coil3.SingletonImageLoader.get(context)
-            initialUrls.forEach { url ->
-                imageLoader.enqueue(
-                    coil3.request.ImageRequest.Builder(context)
-                        .data(url)
-                        .build()
-                )
-            }
-        }
-    }
-
-    // 随滑动位置动态预加载接下来数倍高度的 UP 主头像，避免快速滑动时空白
-    val firstVisibleIndex = userListState.firstVisibleItemIndex
-    LaunchedEffect(firstVisibleIndex, visibleUsers) {
-        val scrollUrls = resolveDynamicSidebarAvatarPrefetchUrls(
+    val avatarDecodeSizePx = rememberDynamicUserAvatarDecodeSizePx()
+    val pageImageLoadingAllowed = LocalPageImageLoadingAllowed.current
+    // Observe scrolling inside the effect: scrolling does not recompose the whole sidebar.
+    // Only one small decode runs at a time, and a new viewport or inactive page cancels it.
+    LaunchedEffect(userListState, visibleUsers, context, avatarDecodeSizePx, pageImageLoadingAllowed) {
+        if (!pageImageLoadingAllowed) return@LaunchedEffect
+        val imageLoader = coil3.SingletonImageLoader.get(context)
+        prefetchDynamicSidebarNeighborAvatars(
             users = visibleUsers,
-            startIndex = firstVisibleIndex,
-            limit = 20
-        )
-        if (scrollUrls.isNotEmpty()) {
-            val imageLoader = coil3.SingletonImageLoader.get(context)
-            scrollUrls.forEach { url ->
-                imageLoader.enqueue(
-                    coil3.request.ImageRequest.Builder(context)
-                        .data(url)
-                        .build()
-                )
-            }
+            visibleUserIds = snapshotFlow {
+                if (userListState.isScrollInProgress) emptyList() else {
+                    userListState.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                        (item.key as? String)?.removePrefix("sidebar_")?.toLongOrNull()
+                    }
+                }
+            },
+        ) { url ->
+            imageLoader.execute(buildDynamicUserAvatarRequest(context, url, avatarDecodeSizePx))
         }
     }
 
@@ -265,8 +281,22 @@ fun DynamicSidebar(
             .width(animatedWidth.dp)
             .fillMaxHeight()
             .clip(androidx.compose.ui.graphics.RectangleShape) // [修复] 直角
-            .background(
-                sidebarContainerColor
+            // Glass GLOBAL mode replays the same full-window wallpaper as the feed. Keep
+            // the native sidebar's protective fill and header blur when glass is disabled.
+            .then(
+                if (glassWallpaperSidebar) {
+                    Modifier
+                        .then(
+                            if (wallpaperSource != null) {
+                                Modifier.sharedGlobalWallpaperBackground(AppSurfaceTokens.surface())
+                            } else {
+                                // Animated wallpapers stay in the full-window root player.
+                                // Reveal it directly rather than painting a separate panel.
+                                Modifier
+                            }
+                        )
+                        .background(AppSurfaceTokens.surface().copy(alpha = 0.12f))
+                } else Modifier.background(sidebarContainerColor)
             )
     ) {
         // 内容层 - 使用 Box 重新组织布局以支持模糊
@@ -282,8 +312,37 @@ fun DynamicSidebar(
                 ),
                 modifier = Modifier
                     .fillMaxSize()
-                    .hazeSourceCompat(sidebarHazeState) // 设置模糊源
+                    .then(sidebarBackdropSource?.modifier ?: Modifier)
+                    .then(
+                        if (sidebarBackdropSource != null) {
+                            // 将壁纸一起录入背景；玻璃关闭时仍使用原生侧栏底色。
+                            if (glassWallpaperSidebar && wallpaperSource != null) {
+                                Modifier.sharedGlobalWallpaperBackground(AppSurfaceTokens.surface())
+                                    .background(AppSurfaceTokens.surface().copy(alpha = 0.12f))
+                            } else Modifier.background(
+                                if (glassWallpaperSidebar) Color.Transparent else sidebarContainerColor
+                            )
+                        } else Modifier
+                    )
+                    .then(
+                        if (glassWallpaperSidebar) Modifier
+                        else Modifier.hazeSourceCompat(sidebarHazeState)
+                    )
             ) {
+                users.firstOrNull { isDynamicUpPanelAllShortcut(it.uid) }?.let { allUser ->
+                    item(key = "all_dynamics") {
+                        SidebarUserItem(
+                            user = allUser,
+                            selfUid = selfUid,
+                            isSelected = selectedUserId == null,
+                            showLabel = isExpanded,
+                            allowManageMenu = false,
+                            onClick = { onUserClick(allUser.uid) },
+                            onTogglePin = { onTogglePin(allUser.uid) },
+                            onToggleHidden = { onToggleHidden(allUser.uid) }
+                        )
+                    }
+                }
                 // 隐藏用户切换按钮 (胶囊样式)
                 if (hiddenCount > 0 || showHiddenUsers) {
                     item(key = "hidden_toggle") {
@@ -366,6 +425,7 @@ fun DynamicSidebar(
                             val isShortcut = isDynamicUpPanelShortcut(user.uid, selfUid)
                             SidebarUserItem(
                                 user = user,
+                                selfUid = selfUid,
                                 isSelected = isDynamicUpPanelItemSelected(selectedUserId, user.uid),
                                 showLabel = isExpanded,
                                 showUnreadBadge = user.uid in uplistUpdateMids,
@@ -379,13 +439,28 @@ fun DynamicSidebar(
                 }
             }
 
-            // 顶部返回按钮区域 - 应用模糊效果
-            Box(
+            // 与动态顶栏共用渐进模糊 / 纯色渐变设置，不改变原生按钮和区域尺寸。
+            BiliPaiImmersiveTopBar(
+                backdrop = sidebarBackdrop,
+                enabled = progressiveRequested,
+                headerBlurActive = headerBlurActive,
+                liquidGlassActive = themeConfig.liquidGlassEnabled,
+                fadeEnabled = themeConfig.progressiveTopFadeEnabled && !themeConfig.headerBlurEnabled,
+                surfaceColor = AppSurfaceTokens.surface(),
+                opaqueBackgroundFallback = false,
+                extendBelowBounds = false,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(topPadding + returnHeaderHeight)
-                    .unifiedBlur(sidebarHazeState) // 应用模糊
-                    .background(returnHeaderColor)
+                    .then(
+                        if (headerBlurActive) Modifier.unifiedBlur(sidebarHazeState)
+                        else Modifier
+                    )
+                    .background(
+                        if (glassWallpaperSidebar || progressiveRequested ||
+                            (themeConfig.progressiveTopFadeEnabled && !themeConfig.headerBlurEnabled)
+                        ) Color.Transparent else returnHeaderColor
+                    )
                     .align(Alignment.TopCenter)
             ) {
                 Box(
@@ -397,7 +472,7 @@ fun DynamicSidebar(
                 ) {
                     CompositionLocalProvider(
                         LocalAppTopBarIconDecorationEnabled provides true,
-                        LocalAppTopBarIconBackdrop provides chromeBackdrop,
+                        LocalAppTopBarIconBackdrop provides returnIconBackdrop,
                     ) {
                         AppIconButton(onClick = onBackClick) {
                             AppIcon(
@@ -521,12 +596,44 @@ fun SidebarItem(
     }
 }
 
+@Composable
+internal fun DynamicSelfAvatar(face: String, isSelected: Boolean) {
+    val faceUrl = remember(face) { resolveDynamicSidebarUserAvatarUrl(face) }
+    var avatarLoaded by remember(faceUrl) { mutableStateOf(false) }
+    val request = rememberDynamicUserAvatarRequest(face)
+    Box(
+        modifier = Modifier.fillMaxSize().semantics { contentDescription = "我" },
+        contentAlignment = Alignment.Center
+    ) {
+        // 本地图标仅作加载/失败占位，资料刷新后以真实头像替换。
+        if (!avatarLoaded) {
+            AppIcon(
+                imageVector = Icons.Outlined.Person,
+                contentDescription = null,
+                tint = if (isSelected) AppContentColors.accent() else AppContentColors.secondaryText(),
+                modifier = Modifier.size(AppSpacingTokens.ExtraLarge)
+            )
+        }
+        if (faceUrl.isNotEmpty()) {
+            PageAwareAsyncImage(
+                model = request,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().clip(CircleShape),
+                contentScale = ContentScale.Crop,
+                onSuccess = { avatarLoaded = true },
+                onError = { avatarLoaded = false }
+            )
+        }
+    }
+}
+
 /**
  *  侧边栏用户项（头像 + 在线状态）
  */
 @Composable
 fun SidebarUserItem(
     user: SidebarUser,
+    selfUid: Long,
     isSelected: Boolean,
     showLabel: Boolean,
     showUnreadBadge: Boolean = false,
@@ -564,10 +671,6 @@ fun SidebarUserItem(
         ) {
             Box {
                 // 头像
-                val faceUrl = remember(user.face) {
-                    resolveDynamicSidebarUserAvatarUrl(user.face)
-                }
-
                 Box(
                     modifier = Modifier
                         .size(AppSpacingTokens.DoubleExtraLarge + AppSpacingTokens.Medium)
@@ -580,17 +683,25 @@ fun SidebarUserItem(
                         .padding(AppSpacingTokens.Micro),
                     contentAlignment = Alignment.Center
                 ) {
-                    PageAwareAsyncImage(
-                        model = coil3.request.ImageRequest.Builder(LocalContext.current)
-                            .data(faceUrl.ifEmpty { null })
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = user.name,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
+                    if (isDynamicUpPanelAllShortcut(user.uid)) {
+                        AppIcon(
+                            imageVector = rememberAppDynamicIcon(),
+                            contentDescription = user.name,
+                            tint = if (isSelected) AppContentColors.accent() else AppContentColors.secondaryText(),
+                            modifier = Modifier.size(AppSpacingTokens.ExtraLarge)
+                        )
+                    } else if (selfUid > 0L && user.uid == selfUid) {
+                        DynamicSelfAvatar(face = user.face, isSelected = isSelected)
+                    } else {
+                        PageAwareAsyncImage(
+                            model = rememberDynamicUserAvatarRequest(user.face),
+                            contentDescription = user.name,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
                 if (showUnreadBadge) {
                     Box(

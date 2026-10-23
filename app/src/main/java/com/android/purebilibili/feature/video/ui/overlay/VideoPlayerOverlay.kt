@@ -1,6 +1,7 @@
 // 文件路径: feature/video/VideoPlayerOverlay.kt
 package com.android.purebilibili.feature.video.ui.overlay
 
+import com.android.purebilibili.core.ui.components.rememberFollowActionWithConfirmation
 import com.android.purebilibili.core.ui.MediaContrastPalette
 
 import com.android.purebilibili.core.ui.AppContentColors
@@ -38,6 +39,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.android.purebilibili.feature.video.subtitle.rememberPiliSubtitleTools
+import com.android.purebilibili.feature.video.subtitle.PiliExternalSubtitleOverlay
+import com.android.purebilibili.feature.video.player.rememberPiliVideoContentActions
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -51,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import kotlin.math.roundToInt
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import androidx.media3.common.Player
 import com.android.purebilibili.core.store.DanmakuSettingsScope
@@ -73,9 +81,10 @@ import com.android.purebilibili.feature.video.ui.components.LandscapeDanmakuComp
 import com.android.purebilibili.feature.video.ui.components.VideoAspectRatio
 import com.android.purebilibili.feature.video.ui.components.AspectRatioMenu
 import com.android.purebilibili.feature.video.ui.components.VideoSettingsPanel
-import com.android.purebilibili.feature.video.ui.components.PagesSelector
+import com.android.purebilibili.feature.video.ui.components.PlayerEpisodeMenu
 import com.android.purebilibili.feature.video.ui.components.resolveCurrentUgcEpisodeLazyListIndex
 import com.android.purebilibili.feature.video.ui.components.LandscapeSidePanel
+import com.android.purebilibili.feature.video.ui.components.landscapeControlCenterGroup
 import com.android.purebilibili.feature.video.ui.components.landscapeEndDrawerPadding
 import com.android.purebilibili.feature.video.ui.components.LandscapeSidePanelEdge
 import com.android.purebilibili.data.model.response.SponsorProgressMarker
@@ -185,33 +194,6 @@ internal fun shouldShowEpisodeEntryFromVideoData(
     return pagesCount > 1 || hasSeasonEpisodes || hasFavoritePlaylist
 }
 
-internal data class NextEpisodeTarget(
-    val nextPageIndex: Int? = null,
-    val nextBvid: String? = null
-)
-
-internal fun resolveNextEpisodeTarget(
-    pagesCount: Int,
-    currentPageIndex: Int,
-    seasonEpisodeBvids: List<String>,
-    currentBvid: String,
-    relatedBvids: List<String>
-): NextEpisodeTarget? {
-    if (pagesCount > 1 && currentPageIndex in 0 until (pagesCount - 1)) {
-        return NextEpisodeTarget(nextPageIndex = currentPageIndex + 1)
-    }
-    if (seasonEpisodeBvids.isNotEmpty()) {
-        val currentIndex = seasonEpisodeBvids.indexOf(currentBvid)
-        if (currentIndex in 0 until seasonEpisodeBvids.lastIndex) {
-            return NextEpisodeTarget(nextBvid = seasonEpisodeBvids[currentIndex + 1])
-        }
-    }
-    val nextRelated = relatedBvids.firstOrNull { it != currentBvid }
-    if (!nextRelated.isNullOrBlank()) {
-        return NextEpisodeTarget(nextBvid = nextRelated)
-    }
-    return null
-}
 
 internal fun shouldConsumeBackgroundGesturesForEndDrawer(
     endDrawerVisible: Boolean
@@ -405,22 +387,28 @@ internal fun resolveFullscreenLockButtonVisualState(
     }
 }
 
-internal fun resolvePageSelectorSheetOuterBottomPaddingDp(
-    isFullscreen: Boolean
-): Int {
-    return if (isFullscreen) 0 else 8
+/** 非玻璃播放器的侧边锁定入口；玻璃布局使用自己的独立实现。 */
+@Composable
+internal fun FullscreenLockButton(
+    visualState: FullscreenLockButtonVisualState,
+    onClick: () -> Unit,
+    cornerRadiusDp: Int,
+    iconSizeDp: Int,
+    modifier: Modifier = Modifier,
+) {
+    NativePlayerSideButton(
+        icon = when (visualState.icon) {
+            FullscreenLockButtonIcon.LOCKED -> Icons.Outlined.Lock
+            FullscreenLockButtonIcon.UNLOCKED -> Icons.Outlined.LockOpen
+        },
+        contentDescription = visualState.contentDescription,
+        onClick = onClick,
+        modifier = modifier,
+        cornerRadiusDp = cornerRadiusDp,
+        iconSizeDp = iconSizeDp,
+    )
 }
 
-internal fun resolvePageSelectorSheetMaxWidthDp(
-    windowWidthDp: Int,
-    isFullscreen: Boolean
-): Int? {
-    return if (isFullscreen || windowWidthDp >= 600) {
-        640
-    } else {
-        null
-    }
-}
 
 internal fun shouldShowPersistentBottomProgressBar(
     controlsVisible: Boolean,
@@ -493,6 +481,11 @@ fun VideoPlayerOverlay(
     state: VideoPlayerOverlayState,
     actions: VideoPlayerOverlayActions,
 ) {
+    // 液态玻璃保留独立控制栏与布局；关闭后沿用统一的原生控制栏及默认参数。
+    if (com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
+        com.android.purebilibili.feature.video.ui.overlay.glass.VideoPlayerOverlay(state, actions)
+        return
+    }
     // Keep the non-inline backdrop slot small. Capturing this screen's locals
     // here exceeds DEX's 255 argument-register limit in synthetic constructors.
     PlayerControlsBackdropHost(
@@ -631,8 +624,13 @@ private fun VideoPlayerOverlayContent(
     val onPortraitDanmakuDisplayAreaModeChange = actions.onPortraitDanmakuDisplayAreaModeChange
     val onDanmakuCloudSyncEnabledChange = actions.onDanmakuCloudSyncEnabledChange
     val onDanmakuSyncNowClick = actions.onDanmakuSyncNowClick
-    val subtitleControlState = state.subtitleControlState
-    val subtitleControlCallbacks = actions.subtitleControlCallbacks
+    val subtitleTools = rememberPiliSubtitleTools(
+        bvid, cid, player, state.subtitleControlState, actions.subtitleControlCallbacks,
+        nativeTracks = state.subtitleTracks, isFullscreen = isFullscreen,
+        acquireNativeSubtitles = state.acquireNativeSubtitles,
+    )
+    val subtitleControlState = subtitleTools.controls
+    val subtitleControlCallbacks = subtitleTools.callbacks
     val doubleTapLikeEnabled = state.doubleTapLikeEnabled
     val onDoubleTapLike = actions.onDoubleTapLike
     val currentAspectRatio = state.currentAspectRatio
@@ -662,7 +660,6 @@ private fun VideoPlayerOverlayContent(
     val viewPoints = state.viewPoints
     val sponsorMarkers = state.sponsorMarkers
     val pbpRidgeSamples = state.pbpRidgeSamples
-    val isVerticalVideo = state.isVerticalVideo
     val onPortraitFullscreen = actions.onPortraitFullscreen
     val onPipClick = actions.onPipClick
     val onSeekStart = actions.onSeekStart
@@ -737,8 +734,16 @@ private fun VideoPlayerOverlayContent(
     val ambientVideoBoundsInWindow = state.ambientVideoBoundsInWindow
     val onShowDanmakuPool = actions.onShowDanmakuPool
 
+    val actionAnchorBounds = remember(bvid, cid, isFullscreen) {
+        mutableStateMapOf<PlayerControlAnchor, IntRect>()
+    }
+    var playerBoundsInWindow by remember(bvid, cid) { mutableStateOf<IntRect?>(null) }
+    var showHeatmap by remember(bvid, cid) { mutableStateOf(true) }
+    var showViewPointMarkers by remember(bvid, cid) { mutableStateOf(true) }
+    var showSponsorSegments by remember(bvid, cid) { mutableStateOf(false) }
+    var showPlayerInformation by remember(bvid, cid) { mutableStateOf(false) }
+
     var showQualityMenu by remember { mutableStateOf(false) }
-    var showAudioQualityMenu by remember { mutableStateOf(false) }
     var showSpeedMenu by remember { mutableStateOf(false) }
     var showRatioMenu by remember { mutableStateOf(false) }
     var showDanmakuSettings by remember { mutableStateOf(false) }
@@ -775,20 +780,18 @@ private fun VideoPlayerOverlayContent(
             snapshot.isActive to snapshot.isPlaying
         }
     }
-    var showPlaybackOrderSheet by remember { mutableStateOf(false) }
-    var showPageSelectorSheet by remember { mutableStateOf(false) }
+    var showEpisodeMenu by remember { mutableStateOf(false) }
     var bottomControlFloatingPanelVisible by remember { mutableStateOf(false) }
     var showCdnDiagnostics by remember { mutableStateOf(false) }
     // 换集后强制关掉分集/菜单等全屏遮罩，避免 Dialog/Sheet 残留挡触摸。
-    LaunchedEffect(bvid, cid) {
-        showPageSelectorSheet = false
+    LaunchedEffect(bvid, cid, isFullscreen) {
+        showEpisodeMenu = false
+        showVideoSettings = false
         showQualityMenu = false
-        showAudioQualityMenu = false
         showSpeedMenu = false
         showRatioMenu = false
         showDanmakuSettings = false
         showChapterList = false
-        showPlaybackOrderSheet = false
         showCastDialog = false
         showCdnDiagnostics = false
     }
@@ -810,6 +813,55 @@ private fun VideoPlayerOverlayContent(
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val contentActions = rememberPiliVideoContentActions(
+        bvid, currentAid, cid, title, coverUrl, pages, player, isLoggedIn,
+    )
+    val menuSession = rememberPiliPlayerMenuSession(
+        player as? androidx.media3.exoplayer.ExoPlayer, bvid, currentAid, cid, title,
+        currentVideoUrl, currentAudioUrl,
+        actions.menuActions.copy(
+            onWatchLater = actions.menuActions.onWatchLater ?: contentActions.onWatchLater,
+            onShowNotes = actions.menuActions.onShowNotes ?: contentActions.onShowNotes,
+            onDownloadVideo = actions.menuActions.onDownloadVideo ?: contentActions.onDownloadVideo,
+        ),
+    )
+    val collectionSession = rememberPiliCollectionMenuSession(
+        ugcSeason, bvid, cid, loadSubscription = showEpisodeMenu && isLoggedIn, isParts = pages.size > 1,
+    )
+    val sponsorSession = rememberPiliSponsorMenuSession(bvid)
+    val navigationPages = remember(pages, bvid) {
+        if (pages.size > 1) pages.mapIndexed { index, page ->
+            PiliEpisodeNavigationEntry(bvid, page.cid, index)
+        } else emptyList()
+    }
+    val navigationPlaylist = if (hasFavoritePlaylist) {
+        com.android.purebilibili.feature.video.player.PlaylistManager.playlist.collectAsStateWithLifecycle().value
+    } else emptyList()
+    val navigationOuter = remember(ugcSeason, hasFavoritePlaylist, navigationPlaylist) {
+        if (hasFavoritePlaylist) navigationPlaylist.map { PiliEpisodeNavigationEntry(it.bvid, it.cid) }
+        else ugcSeason?.sections?.flatMap { section ->
+            section.episodes.map { PiliEpisodeNavigationEntry(it.bvid, it.cid) }
+        }.orEmpty()
+    }
+    val navigationRelated = remember(relatedVideos) {
+        relatedVideos.map { PiliEpisodeNavigationEntry(it.bvid, 0L) }
+    }
+    val outerReversed = if (hasFavoritePlaylist) false else if (pages.size > 1 && ugcSeason != null) {
+        val sort by remember(context, ugcSeason) {
+            SettingsManager.getCollectionSortMode(
+                context, com.android.purebilibili.feature.video.ui.components.resolveCollectionSubscriptionId(ugcSeason),
+            )
+        }.collectAsStateWithLifecycle(
+            initialValue = com.android.purebilibili.feature.video.ui.components.CollectionSortMode.ASCENDING,
+        )
+        sort == com.android.purebilibili.feature.video.ui.components.CollectionSortMode.DESCENDING
+    } else collectionSession.isReversed
+    val inlineDanmakuFontScale by remember(context) {
+        SettingsManager.getDanmakuFontScale(context, DanmakuSettingsScope.PORTRAIT)
+    }.collectAsStateWithLifecycle(initialValue = 1f)
+    val fullscreenDanmakuFontScale by remember(context) {
+        SettingsManager.getDanmakuFontScale(context, DanmakuSettingsScope.LANDSCAPE)
+    }.collectAsStateWithLifecycle(initialValue = 1.2f)
     val fullscreenLockButtonState = remember(isScreenLocked) {
         resolveFullscreenLockButtonVisualState(isScreenLocked = isScreenLocked)
     }
@@ -823,7 +875,23 @@ private fun VideoPlayerOverlayContent(
     val lifecycleState by lifecycleOwner.lifecycle.currentStateAsState()
     val hostLifecycleStarted = lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
     val configuration = LocalConfiguration.current
-    val effectiveDebugInfo = remember(
+    var showInsightDetails by remember(player, bvid, cid) { mutableStateOf(false) }
+    val visualWorkActive = com.android.purebilibili.core.ui.rememberVisualWorkActive()
+    // The HUD needs only the existing decoder/error summary to decide whether it is visible.
+    // Network/display queries and formatted detail rows belong to the visible diagnostics.
+    val insightLevel = remember(debugInfo) {
+        resolvePlaybackInsightLevel(debugInfo)
+    }
+    val insightUiRequested = showInsightDetails || (insightMode != PlayerSettingsStore.PlayerInsightMode.OFF &&
+        shouldShowPlaybackInsightHud(
+            mode = insightMode,
+            hasMeasuredData = true,
+            controlsVisible = isVisible,
+            screenLocked = isScreenLocked,
+            level = insightLevel,
+        ))
+    val sampleInsightDetails = visualWorkActive && insightUiRequested
+    val effectiveDebugInfo = if (!sampleInsightDetails) debugInfo else remember(
         debugInfo,
         realResolution,
         playerViewportSize,
@@ -855,14 +923,17 @@ private fun VideoPlayerOverlayContent(
             } ?: debugInfo.lastLoadError
         )
     }
-    val panelFrameRateLabel = rememberPanelFrameRateLabel()
-    val debugRows = remember(effectiveDebugInfo, panelFrameRateLabel) {
-        resolvePlaybackDebugRows(effectiveDebugInfo)
+    val panelFrameRateLabel = rememberPanelFrameRateLabel(active = sampleInsightDetails)
+    val debugRows = remember(sampleInsightDetails, effectiveDebugInfo, panelFrameRateLabel) {
+        if (!sampleInsightDetails) emptyList() else resolvePlaybackDebugRows(effectiveDebugInfo)
             .plus(DebugStatRow("Panel rate", panelFrameRateLabel))
             .filter { it.value.isNotBlank() }
     }
-    val insightPresentation = remember(effectiveDebugInfo) {
-        resolvePlaybackInsightPresentation(effectiveDebugInfo)
+    val insightPresentation = remember(sampleInsightDetails, effectiveDebugInfo) {
+        if (sampleInsightDetails) resolvePlaybackInsightPresentation(effectiveDebugInfo)
+        else PlaybackInsightPresentation(
+            summary = "", level = PlaybackInsightLevel.UNAVAILABLE, statusText = "", sections = emptyMap(),
+        )
     }
     val insightPanelLayoutPolicy = remember(
         configuration.screenWidthDp,
@@ -873,7 +944,6 @@ private fun VideoPlayerOverlayContent(
             screenHeightDp = configuration.screenHeightDp
         )
     }
-    var showInsightDetails by remember(player, bvid, cid) { mutableStateOf(false) }
     var bufferingStartedAtMs by remember(player) { mutableLongStateOf(0L) }
     var waitingFirstFrameStartedAtMs by remember(player, bvid, cid) { mutableLongStateOf(0L) }
     var playbackIssueSignal by remember(player, bvid, cid) { mutableStateOf<PlaybackIssueSignal?>(null) }
@@ -887,12 +957,22 @@ private fun VideoPlayerOverlayContent(
         bvid,
         cid,
         effectiveDebugInfo,
+        realResolution,
+        playerViewportSize,
+        currentVideoUrl,
+        currentCdnIndex,
+        cdnCount,
         diagnosticEvents,
         pendingUserAction,
         playerDiagnosticLoggingEnabled
     ) {
         { issue ->
             val liveDebugInfo = effectiveDebugInfo.copy(
+                resolution = effectiveDebugInfo.resolution.ifBlank { realResolution },
+                playerViewport = playerViewportSize.takeIf { it.width > 0 && it.height > 0 }
+                    ?.let { "${it.width} x ${it.height}" }.orEmpty(),
+                cdnHost = runCatching { android.net.Uri.parse(currentVideoUrl).host.orEmpty() }.getOrDefault(""),
+                cdnIndex = "${currentCdnIndex + 1}/${cdnCount.coerceAtLeast(1)}",
                 networkType = NetworkUtils.getNetworkTypeLabel(context),
                 forwardBuffer = "${(player.bufferedPosition - player.currentPosition).coerceAtLeast(0L)} ms",
                 lastLoadError = player.playerError?.let { error ->
@@ -1042,18 +1122,17 @@ private fun VideoPlayerOverlayContent(
         .collectAsStateWithLifecycle(
             initialValue = com.android.purebilibili.core.store.PlayerControlVisibilitySettings()
         )
-    val progressPlacement by SettingsManager
-        .getPlayerProgressPlacement(context)
-        .collectAsStateWithLifecycle(
-            initialValue = com.android.purebilibili.core.store.PlayerProgressPlacement.ABOVE_CONTROLS
-        )
     val displayedOnlineCount = remember(onlineCount, showOnlineCount) {
         resolveDisplayedOnlineCount(
             onlineCount = onlineCount,
             showOnlineCount = showOnlineCount
         )
     }
-    val hasEpisodeEntry = remember(relatedVideos, ugcSeason) {
+    val landscapeSidePanelsAvailable = isFullscreen && bvid.isNotBlank() &&
+        (state.playerViewportSize.takeIf { it.width > 0 && it.height > 0 }
+            ?.let { it.width > it.height }
+            ?: (configuration.screenWidthDp > configuration.screenHeightDp))
+    val hasEpisodeEntry = remember(pages, ugcSeason, hasFavoritePlaylist) {
         shouldShowEpisodeEntryFromVideoData(
             relatedVideosCount = relatedVideos.size,
             hasSeasonEpisodes = ugcSeason?.sections?.any { section ->
@@ -1063,28 +1142,16 @@ private fun VideoPlayerOverlayContent(
             hasFavoritePlaylist = hasFavoritePlaylist
         )
     }
-    val nextEpisodeTarget = remember(
-        pages,
-        currentPageIndex,
-        ugcSeason,
-        bvid,
-        relatedVideos
-    ) {
-        resolveNextEpisodeTarget(
-            pagesCount = pages.size,
-            currentPageIndex = currentPageIndex,
-            seasonEpisodeBvids = ugcSeason?.sections
-                ?.flatMap { section -> section.episodes }
-                ?.map { episode -> episode.bvid }
-                .orEmpty(),
-            currentBvid = bvid,
-            relatedBvids = relatedVideos.map { it.bvid }
-        )
-    }
     val playbackCompletionBehavior by SettingsManager
         .getPlaybackCompletionBehavior(context)
         .collectAsStateWithLifecycle(initialValue = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC
         )
+    val completionOptions = remember {
+        listOf(PlaybackCompletionBehavior.STOP_AFTER_CURRENT, PlaybackCompletionBehavior.PLAY_IN_ORDER,
+            PlaybackCompletionBehavior.REPEAT_ONE, PlaybackCompletionBehavior.LOOP_PLAYLIST,
+            PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC)
+    }
+    val completionLabels = remember { completionOptions.map { it.label } }
     // The legacy preference key now enables the inline-player Haze status-bar backdrop.
     val immersiveVideoPageStatusBar by SettingsManager
         .getHideVideoPageStatusBar(context)
@@ -1098,15 +1165,6 @@ private fun VideoPlayerOverlayContent(
         isScreenActive = true,
         isPortraitFullscreen = false,
     ).hideStatusBars
-    val effectiveProgressPlacement = remember(
-        progressPlacement,
-        isFullscreen
-    ) {
-        resolveVideoDetailProgressPlacement(
-            requestedPlacement = progressPlacement,
-            isFullscreen = isFullscreen
-        )
-    }
 
     DisposableEffect(player) {
         currentSpeed = player.playbackParameters.speed
@@ -1130,7 +1188,7 @@ private fun VideoPlayerOverlayContent(
         resolveVideoPlayerOverlayVisualPolicy(
             widthDp = configuration.screenWidthDp,
             compact = playerControlVisibility.compactPlayerChrome
-        ).copy(lockButtonSizeDp = 48, lockIconSizeDp = 24)
+        ).copy(lockButtonSizeDp = PlayerChromeLayout.CircularButtonSizeDp, lockIconSizeDp = 24)
     }
     val landscapeCommentReservedWidth = if (landscapeCommentPanelVisible && !state.landscapeCommentViewportAlreadyReserved) {
         resolveLandscapeEndDrawerLayoutPolicy(configuration.screenWidthDp).drawerWidthDp.dp
@@ -1211,19 +1269,20 @@ private fun VideoPlayerOverlayContent(
         )
     }
 
-    val currentChapterState = remember(effectiveProgressState, viewPoints) {
-        derivedStateOf {
-            val position = effectiveProgressState.value.current
-            viewPoints.lastOrNull { position >= it.fromMs }?.content
-        }
-    }
-    val currentChapterProvider = remember(currentChapterState) { { currentChapterState.value } }
+    val playerMenuVisible = bottomControlFloatingPanelVisible || showQualityMenu ||
+        showSpeedMenu || showRatioMenu || showEpisodeMenu ||
+        showChapterList || showDanmakuSettings || showVideoSettings || showCastDialog ||
+        showSponsorSegments || showPlayerInformation || danmakuComposerVisible ||
+        endDrawerVisible || landscapeCommentPanelVisible
+    val latestPanelVisibility by rememberUpdatedState(actions.onFloatingPanelVisibilityChange)
+    LaunchedEffect(playerMenuVisible) { latestPanelVisibility(playerMenuVisible) }
+    DisposableEffect(Unit) { onDispose { latestPanelVisibility(false) } }
 
     LaunchedEffect(
         isVisible,
         effectiveIsPlaying,
         isSeekScrubbing,
-        bottomControlFloatingPanelVisible,
+        playerMenuVisible,
         showCdnDiagnostics,
         danmakuComposerVisible,
         levelGestureActive,
@@ -1233,7 +1292,7 @@ private fun VideoPlayerOverlayContent(
                 controlsVisible = isVisible,
                 isPlaying = effectiveIsPlaying,
                 isSeekScrubbing = isSeekScrubbing,
-                floatingPanelVisible = bottomControlFloatingPanelVisible
+                floatingPanelVisible = playerMenuVisible
             )
         ) {
             delay(4000)
@@ -1242,7 +1301,7 @@ private fun VideoPlayerOverlayContent(
                     controlsVisible = isVisible,
                     isPlaying = effectiveIsPlaying,
                     isSeekScrubbing = isSeekScrubbing,
-                    floatingPanelVisible = bottomControlFloatingPanelVisible
+                    floatingPanelVisible = playerMenuVisible
                 )
             ) {
                 onToggleVisible()
@@ -1334,8 +1393,52 @@ private fun VideoPlayerOverlayContent(
             onSeekTo?.invoke(safePosition) ?: seekPlayerFromUserAction(player, safePosition)
         }
     }
+    fun navigateEpisode(forward: Boolean) {
+        val target = resolvePiliEpisodeNavigation(
+            pages = navigationPages,
+            outer = navigationOuter,
+            related = navigationRelated,
+            currentBvid = bvid,
+            currentCid = cid.takeIf { it > 0 } ?: pages.getOrNull(currentPageIndex)?.cid ?: 0L,
+            forward = forward,
+            reversePages = pages.size > 1 && collectionSession.isReversed,
+            reverseOuter = outerReversed,
+            loop = playbackCompletionBehavior == PlaybackCompletionBehavior.LOOP_PLAYLIST,
+            autoContinue = playbackCompletionBehavior == PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC,
+        )
+        if (target == null) {
+            android.widget.Toast.makeText(context, if (forward) "已经是最后一集了" else "已经是第一集了",
+                android.widget.Toast.LENGTH_SHORT).show()
+        } else {
+            onDismissEndDrawer()
+            if (target.pageIndex != null) onPageSelect(target.pageIndex)
+            else onDrawerVideoClick(target.bvid,
+                com.android.purebilibili.feature.video.screen.buildVideoNavigationOptions(targetCid = target.cid))
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().playerActionBounds { playerBoundsInWindow = it }) {
+        val subtitleChromeHeightSeed = with(androidx.compose.ui.platform.LocalDensity.current) {
+            piliPlayerBottomControlsHeightDp(showViewPointMarkers && viewPoints.isNotEmpty()).dp.roundToPx()
+        }
+        var subtitleChromeHeightPx by remember(subtitleChromeHeightSeed) {
+            mutableIntStateOf(subtitleChromeHeightSeed)
+        }
+        PiliExternalSubtitleOverlay(
+            subtitleTools, isFullscreen,
+            controlsVisible = isVisible && !isScreenLocked && !danmakuComposerVisible,
+            bottomControlsHeightPx = subtitleChromeHeightPx,
+            isPortrait = isFullscreen && state.isVerticalVideo,
+        )
+        if (showPlayerInformation) {
+            PiliPlaybackInformationDialog(
+                player = player,
+                debugInfo = debugInfo,
+                videoUrl = currentVideoUrl,
+                audioUrl = currentAudioUrl,
+                onDismiss = { showPlayerInformation = false },
+            )
+        }
         if (!isFullscreen) {
             ImmersiveStatusBarBackdrop(
                 ambientFrame = statusBarAmbientFrame,
@@ -1434,182 +1537,136 @@ private fun VideoPlayerOverlayContent(
         ) {
             //  [修复] 使用 Box 分别定位顶部和底部控制栏
             Box(modifier = Modifier.fillMaxSize()) {
-                //  顶部控制栏 - 仅在横屏（全屏）模式显示标题和清晰度
-                if (isFullscreen) {
-                    TopControlBar(
-                        backButtonStartPaddingDp = overlayVisualPolicy.lockButtonEndPaddingDp,
-                        actionEndPaddingDp = overlayVisualPolicy.lockButtonEndPaddingDp,
-                        title = title,
-                        onlineCount = displayedOnlineCount,
-                        isFullscreen = isFullscreen,
-                        statusBarVisible = playerChromeStatusBarVisible,
-                        showBatteryLevel = showFullscreenBatteryLevel,
-                        showCurrentTime = showFullscreenTime,
-                        showInteractiveActions = showFullscreenActionItems,
-                        onBack = onBack,
-                        // Interactions
-                        isLiked = isLiked,
-                        likeStatusKnown = likeStatusKnown,
-                        isCoined = isCoined,
-                        allowDislikeAction = showDislikeAction,
-                        onLikeClick = onToggleLike,
-                        onDislikeClick = onDislike,
-                        onCoinClick = onCoin,
-                        onShareClick = {
-                            if (onShare != null) {
-                                onShare()
-                            } else {
-                                openVideoShareSheet()
-                            }
-                        },
-                        onCommentClick = onLandscapeCommentClick,
-                        isLoggedIn = isLoggedIn,
-                        onDanmakuInputClick = onDanmakuInputClick,
-                        onCastClick = onCastClickAction,
-                        showCastButton = playerControlVisibility.showCastButton,
-                        onMoreClick = {
-                            onShowEndDrawer(0)
-                        },
-                        modifier = Modifier.align(Alignment.TopCenter)
-                    )
-                } else {
-                    //  [新增] 竖屏模式顶部栏（返回 + 画质 + 设置 + 分享按钮）
-                    val context = LocalContext.current
-                    PortraitTopBar(
-                        onlineCount = displayedOnlineCount,
-                        viewportWidthDpOverride = viewportWidthDpOverride,
-                        onBack = onBack,
-                        onHome = onHomeClick,
-                        onSettings = { showVideoSettings = true },
-                        onShare = onShare ?: {
-                            openVideoShareSheet()
-                        },
-                        onAudioMode = onAudioOnlyToggle,
-                        isAudioOnly = isAudioOnly,
-                        onNotInterested = onDislike,
-                        sleepTimerMinutes = sleepTimerMinutes,
-                        onSleepTimerChange = onSleepTimerChange,
-                        //  [新增] 投屏按钮
-                        onCastClick = onCastClickAction,
-                        showCastButton = playerControlVisibility.showCastButton,
-                        compactPlayerChrome = playerControlVisibility.compactPlayerChrome,
-                        statusBarVisible = playerChromeStatusBarVisible,
-                        modifier = Modifier.align(Alignment.TopStart)
-                    )
-                }
-
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .onSizeChanged { onBottomControlsSizeChanged(it.height) }
-                ) {
-                    key(player, bvid, cid) {
-                    BottomControlBar(
-                    viewportWidthDpOverride = viewportWidthDpOverride,
-                    isPlaying = effectiveIsPlaying,
-                    progressProvider = progressProvider,
+                TopControlBar(
+                    title = if (pages.size > 1) pages.getOrNull(currentPageIndex)?.part?.ifBlank { title } ?: title else title,
+                    onlineCount = displayedOnlineCount,
                     isFullscreen = isFullscreen,
-                    danmakuSendInTopBar = isFullscreen,
-                    compactPlayerChrome = playerControlVisibility.compactPlayerChrome,
-                    currentSpeed = currentSpeed,
-                    currentRatio = currentAspectRatio,
-                    onPlayPauseClick = {
-                        togglePlayPause()
-                    },
-                    onSeek = commitSeek,
-                    onSeekStart = onSeekStart,  //  拖动进度条开始时清除弹幕
-                    onSeekDragStart = onSeekDragStart,
-                    onSeekDragUpdate = onSeekDragUpdate,
-                    onSeekDragCancel = onSeekDragCancel,
-                    seekPositionProvider = seekPositionProvider,
-                    isSeekScrubbing = isSeekScrubbing,
-                    onSpeedClick = { showSpeedMenu = true },
-                    onRatioClick = { showRatioMenu = true },
-                    onNextEpisodeClick = {
-                        onDismissEndDrawer()
-                        val target = nextEpisodeTarget
-                        when {
-                            target?.nextPageIndex != null -> onPageSelect(target.nextPageIndex)
-                            !target?.nextBvid.isNullOrBlank() -> onDrawerVideoClick(target.nextBvid, null)
-                        }
-                    },
-                    hasNextEpisode = nextEpisodeTarget != null,
-                    onEpisodeClick = {
-                        if (pages.size > 1) {
-                            showPageSelectorSheet = true
-                        } else if (ugcSeason?.sections?.any { it.episodes.isNotEmpty() } == true) {
-                            onShowEndDrawer(1)
-                        } else if (hasFavoritePlaylist) {
-                            onFavoritePlaylistClick()
-                        } else {
-                            onShowEndDrawer(0)
-                        }
-                    },
-                    hasEpisodeEntry = hasEpisodeEntry,
-                    onToggleFullscreen = onToggleFullscreen,
-                    //  [新增] 竖屏模式弹幕和清晰度控制
-                    sponsorContributionAvailable = sponsorContributionAvailable,
-                    sponsorContributionMarking = sponsorContributionMarking,
-                    onSponsorContributionMarkBoundary = onSponsorContributionMarkBoundary,
-                    onSponsorContributionMarkWholeVideo = onSponsorContributionMarkWholeVideo,
-                    onSponsorContributionCancel = onSponsorContributionCancel,
+                    statusBarVisible = playerChromeStatusBarVisible,
+                    showBatteryLevel = showFullscreenBatteryLevel,
+                    showCurrentTime = showFullscreenTime,
+                    showInteractiveActions = showFullscreenActionItems,
+                    onBack = onBack,
+                    onHomeClick = onHomeClick,
+                    onAudioClick = onAudioOnlyToggle,
+                    onSendDanmakuClick = onDanmakuInputClick,
                     danmakuEnabled = danmakuEnabled,
                     onDanmakuToggle = onDanmakuToggle,
                     onDanmakuSettingsClick = { showDanmakuSettings = true },
-                    onDanmakuInputClick = onDanmakuInputClick,
-                    isLoggedIn = isLoggedIn,
-                    subtitleControlState = subtitleControlState,
-                    subtitleControlCallbacks = subtitleControlCallbacks,
-                    anime4kEnabled = anime4kEnabled,
-                    anime4kAvailable = anime4kAvailable,
-                    videoEnhancementAlgorithm = videoEnhancementAlgorithm,
-                    anime4kPreset = anime4kPreset,
-                    fsrSharpness = fsrSharpness,
-                    onAnime4kToggle = onAnime4kToggle,
-                    onVideoEnhancementAlgorithmChange = onVideoEnhancementAlgorithmChange,
-                    onAnime4kPresetChange = onAnime4kPresetChange,
-                    onFsrSharpnessChange = onFsrSharpnessChange,
-                    currentAudioQualityLabel = audioQualityPresentation.label,
-                    isHiResAudioSelected = audioQualityPresentation.showHiResBadge,
-                    isDolbyAudioSelected = audioQualityPresentation.showDolbyBadge,
-                    onAudioQualityClick = { showAudioQualityMenu = true },
-                    currentQualityLabel = currentQualityLabel,
-                    onQualityClick = { showQualityMenu = true },
-                    // 🖼️ [新增] 视频预览图数据
-                    videoshotData = videoshotData,
-                    // 📖 [新增] 视频章节数据
-                    viewPoints = viewPoints,
-                    sponsorMarkers = sponsorMarkers,
-                    pbpRidgeSamples = pbpRidgeSamples,
-                    currentChapterProvider = currentChapterProvider,
-                    onChapterClick = { showChapterList = true },
-                    // 📱 [新增] 竖屏全屏模式
-                    isVerticalVideo = isVerticalVideo,
-                    onPortraitFullscreen = onPortraitFullscreen,
-                    // 📲 [新增] 小窗模式
+                    showPipButton = true,
                     onPipClick = onPipClick,
-                    cdnDiagnosticsAvailable = cdnCount > 0,
-                    onCdnDiagnosticsClick = { showCdnDiagnostics = true },
-                    onPlayerSettingsClick = { showVideoSettings = true },
-                    // 🔁 [新增] 播放模式
-                    currentPlayMode = currentPlayMode,
-                    onPlayModeClick = onPlayModeClick,
-                    playbackOrderLabel = resolvePlaybackOrderDisplayLabel(
-                        behavior = playbackCompletionBehavior,
-                        compact = !isFullscreen
-                    ),
-                    onPlaybackOrderClick = { showPlaybackOrderSheet = true },
-                    onFloatingPanelVisibilityChange = { visible ->
-                        bottomControlFloatingPanelVisible = visible
+                    isLiked = isLiked,
+                    likeStatusKnown = likeStatusKnown,
+                    isCoined = isCoined,
+                    isFavorited = isFavorited,
+                    isDisliked = state.isDisliked,
+                    onFavoriteClick = onToggleFavorite,
+                    onFavoriteLongClick = actions.onQuickFavorite,
+                    allowDislikeAction = showDislikeAction,
+                    onLikeClick = onToggleLike,
+                    onLikeLongClick = actions.onTripleAction,
+                    onDislikeClick = onDislike,
+                    onCoinClick = onCoin,
+                    onShareClick = { onShare?.invoke() ?: openVideoShareSheet() },
+                    onCastClick = onCastClickAction,
+                    showCastButton = playerControlVisibility.showCastButton,
+                    onCommentClick = if (landscapeSidePanelsAvailable) ({
+                        onDismissEndDrawer()
+                        onLandscapeCommentClick()
+                    }) else null,
+                    onRelatedVideosClick = if (landscapeSidePanelsAvailable && relatedVideos.isNotEmpty()) ({
+                        if (landscapeCommentPanelVisible) onLandscapeCommentClick()
+                        if (endDrawerVisible && endDrawerInitialTab == 0) onDismissEndDrawer()
+                        else onShowEndDrawer(0)
+                    }) else null,
+                    commentsVisible = landscapeCommentPanelVisible,
+                    relatedVideosVisible = endDrawerVisible && endDrawerInitialTab == 0,
+                    onMoreClick = {
+                        onDismissEndDrawer()
+                        if (landscapeCommentPanelVisible) onLandscapeCommentClick()
+                        showEpisodeMenu = false
+                        showVideoSettings = true
                     },
-                    progressPlacement = effectiveProgressPlacement
+                    showSponsorSubmitButton = sponsorContributionAvailable,
+                    onSponsorSubmitClick = onSponsorContributionMarkBoundary,
+                    showSponsorSegmentsButton = sponsorMarkers.isNotEmpty(),
+                    onSponsorSegmentsClick = { showSponsorSegments = true },
+                    modifier = Modifier.align(Alignment.TopCenter),
                 )
+                Column(
+                    modifier = Modifier.align(Alignment.BottomStart)
+                        .onSizeChanged {
+                            subtitleChromeHeightPx = it.height
+                            onBottomControlsSizeChanged(it.height)
+                        },
+                ) {
+                    key(player, bvid, cid) {
+                        BottomControlBar(
+                            onActionBoundsChanged = { action, bounds -> actionAnchorBounds[action] = bounds },
+                            viewportWidthDpOverride = viewportWidthDpOverride,
+                            viewportIsLandscape = playerBoundsInWindow?.let { it.width > it.height }
+                                ?: (configuration.screenWidthDp > configuration.screenHeightDp),
+                            isPlaying = effectiveIsPlaying,
+                            progressProvider = progressProvider,
+                            isFullscreen = isFullscreen,
+                            currentSpeed = currentSpeed,
+                            currentRatio = currentAspectRatio,
+                            onPlayPauseClick = { togglePlayPause() },
+                            onSeek = commitSeek,
+                            onSeekStart = onSeekStart,
+                            onSeekDragStart = onSeekDragStart,
+                            onSeekDragUpdate = onSeekDragUpdate,
+                            onSeekDragCancel = onSeekDragCancel,
+                            seekPositionProvider = seekPositionProvider,
+                            isSeekScrubbing = isSeekScrubbing,
+                            onSpeedClick = { showSpeedMenu = true },
+                            onRatioClick = { showRatioMenu = true },
+                            onPreviousEpisodeClick = { navigateEpisode(forward = false) },
+                            onNextEpisodeClick = { navigateEpisode(forward = true) },
+                            onEpisodeClick = {
+                                if (pages.size > 1 || ugcSeason?.sections?.any { it.episodes.isNotEmpty() } == true) {
+                                    onDismissEndDrawer()
+                                    if (landscapeCommentPanelVisible) onLandscapeCommentClick()
+                                    showVideoSettings = false
+                                    showEpisodeMenu = true
+                                } else if (hasFavoritePlaylist) {
+                                    onFavoritePlaylistClick()
+                                }
+                            },
+                            hasEpisodeEntry = hasEpisodeEntry,
+                            onToggleFullscreen = onToggleFullscreen,
+                            subtitleControlState = subtitleControlState,
+                            subtitleControlCallbacks = subtitleControlCallbacks,
+                            aiAudioInfo = aiAudioInfo,
+                            currentAudioLang = currentAudioLang,
+                            onAudioLangChange = onAudioLangChange,
+                            anime4kEnabled = anime4kEnabled,
+                            // This detail/pager entry hosts UGC. PiliPlus reserves the footer
+                            // shader shortcut for animated PGC (types 1/4); UGC keeps it in More.
+                            anime4kAvailable = false,
+                            videoEnhancementAlgorithm = videoEnhancementAlgorithm,
+                            anime4kPreset = anime4kPreset,
+                            onAnime4kToggle = onAnime4kToggle,
+                            onVideoEnhancementAlgorithmChange = onVideoEnhancementAlgorithmChange,
+                            onAnime4kPresetChange = onAnime4kPresetChange,
+                            currentQualityLabel = currentQualityLabel,
+                            onQualityClick = { showQualityMenu = true },
+                            videoshotData = videoshotData,
+                            viewPoints = viewPoints,
+                            sponsorMarkers = sponsorMarkers,
+                            pbpRidgeSamples = pbpRidgeSamples,
+                            heatmapEnabled = showHeatmap,
+                            onHeatmapToggle = { showHeatmap = !showHeatmap },
+                            showViewPoints = showViewPointMarkers,
+                            onViewPointsToggle = { showViewPointMarkers = !showViewPointMarkers },
+                            onChapterClick = { showChapterList = true },
+                            onFloatingPanelVisibilityChange = { bottomControlFloatingPanelVisible = it },
+                        )
                     }
                 }
             }
         }
 
-        if (isFullscreen && danmakuComposerVisible) {
+        if (danmakuComposerVisible) {
             LandscapeDanmakuComposer(
                 visible = true,
                 onDismiss = onDismissDanmakuComposer,
@@ -1625,18 +1682,6 @@ private fun VideoPlayerOverlayContent(
             )
         }
 
-        CenterPlaybackControl(
-            visible = isVisible &&
-                (pluginPlaybackStatus.first || player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_ENDED) &&
-                centerLoadingUiState == null &&
-                !isScreenLocked && !isSeekScrubbing && !danmakuComposerVisible &&
-                !endDrawerVisible && !landscapeCommentPanelVisible && !showInsightDetails,
-            isPlaying = effectiveIsPlaying,
-            onPlayPause = { togglePlayPause() },
-            diameter = if (isFullscreen) 72.dp else 56.dp,
-            modifier = Modifier.align(Alignment.Center),
-        )
-
         // --- 3.5 🔒 [新增] 屏幕锁定按钮 (仅全屏模式) ---
         if (isFullscreen && showFullscreenLockButton) {
             AnimatedVisibility(
@@ -1644,33 +1689,16 @@ private fun VideoPlayerOverlayContent(
                 enter = fadeIn(OverlayControlFadeSpec),
                 exit = fadeOut(OverlayControlFadeSpec),
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = overlayVisualPolicy.lockButtonEndPaddingDp.dp)
+                    .align(Alignment.CenterStart)
+                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Start))
+                    .padding(start = 4.dp)
             ) {
-                PlayerControlGlassDock(enabled = true, shape = androidx.compose.foundation.shape.CircleShape) {
-                    AppSurface(
-                        onClick = onLockToggle,
-                        color = Color.Transparent,
-                        shape = RoundedCornerShape(overlayVisualPolicy.lockButtonCornerRadiusDp.dp),
-                        modifier = Modifier.size(PlayerChromeLayout.CircularButtonSizeDp.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            AppIcon(
-                                when (fullscreenLockButtonState.icon) {
-                                    FullscreenLockButtonIcon.LOCKED -> Icons.Outlined.Lock
-                                    FullscreenLockButtonIcon.UNLOCKED -> Icons.Outlined.LockOpen
-                                },
-                                contentDescription = fullscreenLockButtonState.contentDescription,
-                                tint = if (fullscreenLockButtonState.highlighted) {
-                                    AppContentColors.accent()
-                                } else {
-                                    Color.White
-                                },
-                                modifier = Modifier.size(overlayVisualPolicy.lockIconSizeDp.dp)
-                            )
-                        }
-                    }
-                }
+                FullscreenLockButton(
+                    visualState = fullscreenLockButtonState,
+                    onClick = onLockToggle,
+                    cornerRadiusDp = 8,
+                    iconSizeDp = 15,
+                )
             }
         }
 
@@ -1680,26 +1708,15 @@ private fun VideoPlayerOverlayContent(
                 enter = fadeIn(OverlayControlFadeSpec),
                 exit = fadeOut(OverlayControlFadeSpec),
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = overlayVisualPolicy.lockButtonEndPaddingDp.dp)
+                    .align(Alignment.CenterEnd)
+                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.End))
+                    .padding(end = 4.dp)
             ) {
-                PlayerControlGlassDock(enabled = true, shape = androidx.compose.foundation.shape.CircleShape) {
-                    AppSurface(
-                        onClick = onCaptureScreenshot,
-                        color = Color.Transparent,
-                        shape = RoundedCornerShape(overlayVisualPolicy.lockButtonCornerRadiusDp.dp),
-                        modifier = Modifier.size(PlayerChromeLayout.CircularButtonSizeDp.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                            AppIcon(
-                                imageVector = Icons.Outlined.Camera,
-                                contentDescription = "截图",
-                                tint = Color.White,
-                                modifier = Modifier.size(overlayVisualPolicy.lockIconSizeDp.dp)
-                            )
-                        }
-                    }
-                }
+                NativePlayerSideButton(
+                    icon = Icons.Outlined.Camera,
+                    contentDescription = "截图",
+                    onClick = onCaptureScreenshot,
+                )
             }
         }
 
@@ -1971,6 +1988,8 @@ private fun VideoPlayerOverlayContent(
             }
         }
 
+        // Glass is confined to the chrome's individual buttons; every menu is native.
+        com.android.purebilibili.feature.video.ui.components.PlayerNativeMenuTheme {
         VideoShareSheetHost(
             payload = pendingVideoShare,
             onDismiss = { pendingVideoShare = null },
@@ -1991,22 +2010,11 @@ private fun VideoPlayerOverlayContent(
                 },
                 onDismiss = { showQualityMenu = false },
                 useDialog = true,
-                placement = if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
+                placement = PlayerListPopupPlacement.ANCHOR_END,
+                anchorBounds = actionAnchorBounds[PlayerControlAnchor.QUALITY],
             )
         }
 
-        if (showAudioQualityMenu) {
-            AudioQualitySelectionMenuDialog(
-                options = availableAudioQualities,
-                requestedAudioQuality = currentAudioQuality,
-                onAudioQualitySelected = { preferenceId ->
-                    onAudioQualityChange(preferenceId)
-                    showAudioQualityMenu = false
-                },
-                onDismiss = { showAudioQualityMenu = false },
-                placement = if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
-            )
-        }
 
         // --- 7.  [新增] 倍速选择菜单 ---
         if (showSpeedMenu) {
@@ -2021,35 +2029,23 @@ private fun VideoPlayerOverlayContent(
                     showSpeedMenu = false
                 },
                 onDismiss = { showSpeedMenu = false },
-                placement = if (isFullscreen) {
-                    SpeedSelectionMenuPlacement.RIGHT_SIDE
-                } else {
-                    SpeedSelectionMenuPlacement.CENTER
-                }
+                placement = SpeedSelectionMenuPlacement.ANCHOR_END,
+                anchorBounds = actionAnchorBounds[PlayerControlAnchor.SPEED],
             )
         }
 
         // --- 7.5  [新增] 视频比例选择菜单 ---
         if (showRatioMenu) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { showRatioMenu = false },
-                contentAlignment = Alignment.Center
-            ) {
-                AspectRatioMenu(
-                    currentRatio = currentAspectRatio,
-                    onRatioSelected = { ratio ->
-                        onAspectRatioChange(ratio)
-                        showRatioMenu = false
-                    },
-                    onDismiss = { showRatioMenu = false }
-                )
-            }
+            AspectRatioMenu(
+                currentRatio = currentAspectRatio,
+                onRatioSelected = { ratio ->
+                    onAspectRatioChange(ratio)
+                    showRatioMenu = false
+                },
+                onDismiss = { showRatioMenu = false },
+                placement = PlayerListPopupPlacement.ANCHOR_END,
+                anchorBounds = actionAnchorBounds[PlayerControlAnchor.RATIO],
+            )
         }
 
         // --- 8.  [新增] 弹幕设置面板 ---
@@ -2059,6 +2055,14 @@ private fun VideoPlayerOverlayContent(
                 settingsScope = danmakuSettingsScope,
                 opacity = danmakuOpacity,
                 fontScale = danmakuFontScale,
+                inlineFontScale = inlineDanmakuFontScale,
+                fullscreenFontScale = fullscreenDanmakuFontScale,
+                onInlineFontScaleChange = { value ->
+                    scope.launch { SettingsManager.setDanmakuFontScale(context, value, DanmakuSettingsScope.PORTRAIT) }
+                },
+                onFullscreenFontScaleChange = { value ->
+                    scope.launch { SettingsManager.setDanmakuFontScale(context, value, DanmakuSettingsScope.LANDSCAPE) }
+                },
                 showAdvancedSection = true,
                 fontWeight = danmakuFontWeight,
                 speed = danmakuSpeed,
@@ -2133,7 +2137,6 @@ private fun VideoPlayerOverlayContent(
             AppModalBottomSheet(
                 onDismissRequest = { showCdnDiagnostics = false },
                 presentationOverride = AppModalPresentation.BottomSheet,
-                backgroundBlurBehind = true,
             ) {
                 AppSurface(
                     modifier = Modifier.fillMaxWidth(),
@@ -2163,8 +2166,14 @@ private fun VideoPlayerOverlayContent(
 
         if (showVideoSettings) {
             VideoSettingsPanel(
-                sleepTimerMinutes = sleepTimerMinutes,
-                onSleepTimerChange = onSleepTimerChange,
+                isFullscreen = isFullscreen,
+                playerBounds = playerBoundsInWindow,
+                sleepTimerMinutes = menuSession.sleepTimerMinutes,
+                onSleepTimerChange = menuSession.onSleepTimerChange,
+                sleepWaitForVideoEnd = menuSession.sleepWaitForVideoEnd,
+                onSleepWaitForVideoEndChange = menuSession.onSleepWaitForVideoEndChange,
+                sleepExitApp = menuSession.sleepExitApp,
+                onSleepExitAppChange = menuSession.onSleepExitAppChange,
                 onReload = onReloadVideo,
                 onDanmakuSettingsClick = {
                     showVideoSettings = false
@@ -2183,8 +2192,7 @@ private fun VideoPlayerOverlayContent(
                 isLoggedIn = isLoggedIn,
                 isVip = isVip,
                 onQualitySelected = { index ->
-                    val id = qualityIds.getOrNull(index) ?: 0
-                    onQualityChange(id)
+                    onQualitySelected(index)
                     showVideoSettings = false
                 },
                 currentSpeed = currentSpeed,
@@ -2212,8 +2220,13 @@ private fun VideoPlayerOverlayContent(
                     showVideoSettings = false
                 },
                 onProbeCdnCandidates = onProbeCdnCandidates,
+                cdnServiceLabels = menuSession.cdnServiceLabels,
+                currentCdnServiceIndex = menuSession.currentCdnServiceIndex,
+                onCdnServiceSelected = menuSession.onCdnServiceSelected,
                 // [New] Codec & Audio
                 currentCodec = currentCodec,
+                playingVideoCodec = menuSession.playingVideoCodec,
+                availableCodecIds = state.availableCodecIds,
                 onCodecChange = { codec ->
                     onCodecChange(codec)
                     showVideoSettings = false
@@ -2223,7 +2236,8 @@ private fun VideoPlayerOverlayContent(
                     onSecondCodecChange(codec)
                     showVideoSettings = false
                 },
-                currentAudioQuality = selectedAudioQuality,
+                currentAudioQuality = currentAudioQuality,
+                selectedAudioQuality = selectedAudioQuality,
                 availableAudioQualities = availableAudioQualities,
                 onAudioQualityChange = { quality ->
                     onAudioQualityChange(quality)
@@ -2259,23 +2273,34 @@ private fun VideoPlayerOverlayContent(
                 onDownloadAudio = {
                     onDownloadAudio()
                 },
+                onWatchLater = menuSession.onWatchLater,
+                onShowNotes = menuSession.onShowNotes,
+                onDownloadVideo = menuSession.onDownloadVideo,
+                onEditPlayUrl = menuSession.onEditPlayUrl,
+                onReport = menuSession.onReport,
+                onSubtitleSettings = subtitleTools.onSubtitleSettings,
+                onLoadSubtitle = subtitleTools.onLoadSubtitle,
+                onSaveSubtitle = subtitleTools.onSaveSubtitle.takeIf { subtitleControlState.trackAvailable },
+                onShowPlaybackInfo = { showPlayerInformation = true },
+                onCast = onCastClickAction,
+                onEnterPip = onPipClick,
+                onShare = { onShare?.invoke() ?: openVideoShareSheet() },
+                playerVolume = menuSession.playerVolume,
+                onPlayerVolumeChange = menuSession.onPlayerVolumeChange,
+                playerVolumeUnavailableReason = menuSession.playerVolumeUnavailableReason,
+                isBackgroundPlaybackEnabled = menuSession.isBackgroundPlaybackEnabled,
+                onBackgroundPlaybackChange = menuSession.onBackgroundPlaybackChange,
+                playbackOrderLabel = playbackCompletionBehavior.label,
+                playbackOrderOptions = completionLabels,
+                onPlaybackOrderChange = { index ->
+                    completionOptions.getOrNull(index)?.let { behavior ->
+                        scope.launch { SettingsManager.setPlaybackCompletionBehavior(context, behavior) }
+                    }
+                },
                 onDismiss = { showVideoSettings = false }
             )
         }
 
-        if (showPlaybackOrderSheet) {
-            PlaybackOrderSelectionSheet(
-                currentBehavior = playbackCompletionBehavior,
-                isFullscreen = isFullscreen,
-                onSelect = { behavior ->
-                    scope.launch {
-                        SettingsManager.setPlaybackCompletionBehavior(context, behavior)
-                    }
-                    showPlaybackOrderSheet = false
-                },
-                onDismiss = { showPlaybackOrderSheet = false }
-            )
-        }
 
         // --- 10. 📖 [新增] 章节列表面板 ---
         if (showChapterList && viewPoints.isNotEmpty()) {
@@ -2283,71 +2308,63 @@ private fun VideoPlayerOverlayContent(
                 viewPoints = viewPoints,
                 progressProvider = displayedProgressProvider,
                 onSeek = commitSeek,
-                onDismiss = { showChapterList = false }
+                onDismiss = { showChapterList = false },
+                isFullscreen = isFullscreen,
+                playerBounds = playerBoundsInWindow,
+                showViewPoints = showViewPointMarkers,
+                onShowViewPointsChange = { showViewPointMarkers = it },
             )
         }
 
-        if (showPageSelectorSheet && pages.size > 1) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) {
-                        showPageSelectorSheet = false
-                    },
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                val pageSelectorMaxWidthDp = remember(configuration.screenWidthDp, isFullscreen) {
-                    resolvePageSelectorSheetMaxWidthDp(
-                        windowWidthDp = configuration.screenWidthDp,
-                        isFullscreen = isFullscreen
-                    )
-                }
-                AppSurface(
-                    shape = AppShapes.container(ContainerLevel.Sheet),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .then(
-                            if (pageSelectorMaxWidthDp != null) {
-                                Modifier.widthIn(max = pageSelectorMaxWidthDp.dp)
-                            } else {
-                                Modifier.fillMaxWidth()
-                            }
-                        )
-                        .padding(
-                            start = 8.dp,
-                            top = 8.dp,
-                            end = 8.dp,
-                            bottom = resolvePageSelectorSheetOuterBottomPaddingDp(isFullscreen).dp
-                        )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) {}
-                    ) {
-                        PagesSelector(
-                            pages = pages,
-                            coverUrl = coverUrl,
-                            currentPageIndex = currentPageIndex,
-                            forceGridMode = true,
-                            blockParentVerticalScroll = true,
-                            onDismissRequest = { showPageSelectorSheet = false },
-                            onPageSelect = { index ->
-                                showPageSelectorSheet = false
-                                onPageSelect(index)
-                            }
-                        )
+        if (showEpisodeMenu) {
+            PlayerEpisodeMenu(
+                pages = pages,
+                currentPageIndex = currentPageIndex,
+                ugcSeason = ugcSeason,
+                currentBvid = bvid,
+                currentCid = cid,
+                anchorBounds = actionAnchorBounds[PlayerControlAnchor.EPISODES],
+                isFullscreen = isFullscreen,
+                playerBounds = playerBoundsInWindow,
+                cover = coverUrl,
+                isReversed = collectionSession.isReversed,
+                onReverse = collectionSession.onReverse?.let { reverse ->
+                    {
+                        if (hasFavoritePlaylist && pages.size <= 1) {
+                            android.widget.Toast.makeText(context, "当前为播放全部，合集不支持倒序", android.widget.Toast.LENGTH_SHORT).show()
+                        } else reverse()
                     }
-                }
-            }
+                },
+                isSubscribed = collectionSession.isSubscribed,
+                onSubscriptionChange = collectionSession.onSubscriptionChange,
+                onCoverLongPress = contentActions.onSaveCollectionCover,
+                onDismiss = { showEpisodeMenu = false },
+                onPageSelect = { index ->
+                    showEpisodeMenu = false
+                    onPageSelect(index)
+                },
+                onEpisodeSelect = { episode ->
+                    showEpisodeMenu = false
+                    onDrawerVideoClick(
+                        episode.bvid,
+                        com.android.purebilibili.feature.video.screen.buildVideoNavigationOptions(
+                            targetCid = episode.cid,
+                        ),
+                    )
+                },
+            )
+        }
+
+        if (showSponsorSegments && sponsorSession.configReady) {
+            PlayerSponsorSegmentsPanel(
+                markers = sponsorMarkers,
+                behaviorForCategory = sponsorSession.behaviorForCategory,
+                categoryColors = sponsorSession.categoryColors,
+                onSeek = commitSeek,
+                onVote = sponsorSession.onVote,
+                onChangeCategory = sponsorSession.onChangeCategory,
+                onDismiss = { showSponsorSegments = false },
+            )
         }
 
         if (shouldConsumeBackgroundGesturesForEndDrawer(endDrawerVisible)) {
@@ -2483,238 +2500,10 @@ private fun VideoPlayerOverlayContent(
                 ).show()
             }
         }
-    }
-}
-
-/**
- *  竖屏模式顶部控制栏
- *
- * 包含返回首页按钮、听视频/投屏与更多菜单；经典布局另有分享按钮
- */
-@Composable
-private fun PortraitTopBar(
-    onlineCount: String = "",
-    onBack: () -> Unit,
-    onHome: () -> Unit,
-    onSettings: () -> Unit,
-    onShare: () -> Unit,
-    onAudioMode: () -> Unit,
-    isAudioOnly: Boolean,
-    onNotInterested: () -> Unit = {},
-    sleepTimerMinutes: Int? = null,
-    onSleepTimerChange: (Int?) -> Unit = {},
-    viewportWidthDpOverride: Int? = null,
-    // 📺 [新增] 投屏
-    onCastClick: () -> Unit = {},
-    showCastButton: Boolean = true,
-    /** 紧凑布局隐藏顶栏分享，并收紧按钮间距。 */
-    compactPlayerChrome: Boolean = false,
-    /** 系统状态栏可见时为顶栏加 statusBarsPadding，避免与系统图标重叠。 */
-    statusBarVisible: Boolean = true,
-    modifier: Modifier = Modifier
-) {
-    var showMoreMenu by remember { mutableStateOf(false) }
-    val useMiuixNonGlassChrome = isMiuixNonGlassEnabled()
-    val configuration = LocalConfiguration.current
-    val uiLayoutWidthDp = remember(configuration.screenWidthDp, viewportWidthDpOverride) {
-        (viewportWidthDpOverride ?: configuration.screenWidthDp).coerceAtLeast(1)
-    }
-    val moreIcon = rememberAppMoreIcon()
-    val shareIcon = rememberAppShareIcon()
-    val layoutPolicy = remember(uiLayoutWidthDp, compactPlayerChrome) {
-        resolvePortraitTopBarLayoutPolicy(
-            widthDp = uiLayoutWidthDp,
-            compact = compactPlayerChrome
-        )
-    }
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .then(
-                if (shouldApplyStatusBarPaddingToPortraitTopBar(statusBarVisible = statusBarVisible)) {
-                    Modifier.statusBarsPadding()
-                } else {
-                    Modifier
-                }
-            )
-            .padding(
-                horizontal = layoutPolicy.horizontalPaddingDp.dp,
-                vertical = layoutPolicy.verticalPaddingDp.dp
-            ),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // 左侧：返回按钮 + 在线人数
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(layoutPolicy.leftSectionSpacingDp.dp)
-        ) {
-            // 独立导航使用圆形玻璃，原生按钮保留点击行为。
-            PlayerControlGlassDock(enabled = true, shape = CircleShape) {
-                AppIconButton(
-                    onClick = onBack,
-                    modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
-                ) {
-                    AppIcon(
-                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
-                        contentDescription = "返回",
-                        tint = Color.White,
-                        modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                    )
-                }
-            }
-
-            PlayerControlGlassDock(enabled = true, shape = CircleShape) {
-                AppIconButton(
-                    onClick = onHome,
-                    modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
-                ) {
-                    AppIcon(
-                        imageVector = Icons.Outlined.Home,
-                        contentDescription = "主界面",
-                        tint = Color.White,
-                        modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                    )
-                }
-
-            }
-
-            // 👀 在线人数
-            if (onlineCount.isNotEmpty()) {
-                AppText(
-                    text = onlineCount,
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = layoutPolicy.onlineCountFontSp.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // 相关操作共享一个 Dock。
-        PlayerControlGlassDock(enabled = true) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(layoutPolicy.rightSectionSpacingDp.dp)
-            ) {
-                //  听视频模式按钮 - 激活时保留背景色
-                AppIconButton(
-                    onClick = onAudioMode,
-                    modifier = Modifier
-                        .size(layoutPolicy.buttonSizeDp.dp)
-                        .then(
-                            if (isAudioOnly) Modifier.background(AppContentColors.accent(), CircleShape)
-                            else Modifier
-                        )
-                ) {
-                    AppIcon(
-                        imageVector = Icons.Outlined.Headphones,
-                        contentDescription = "听视频",
-                        tint = if (isAudioOnly) AppContentColors.onAccent() else Color.White,
-                        modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                    )
-                }
-
-                if (showCastButton) {
-                    AppIconButton(
-                        onClick = onCastClick,
-                        modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
-                    ) {
-                        AppIcon(
-                            imageVector = Icons.Outlined.Tv,
-                            contentDescription = "投屏",
-                            tint = Color.White,
-                            modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                        )
-                    }
-                }
-
-                //  设置按钮 - 无背景
-                AppIconButton(
-                    onClick = { showMoreMenu = true },
-                    modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
-                ) {
-                    AppIcon(
-                        imageVector = moreIcon,
-                        contentDescription = "设置",
-                        tint = Color.White,
-                        modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                    )
-                }
-
-                if (useMiuixNonGlassChrome) {
-                    AppDropdownMenu(
-                        expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false },
-                    ) {
-                        AppDropdownMenuItem(
-                            text = { AppText("播放设置") },
-                            onClick = { showMoreMenu = false; onSettings() },
-                        )
-                        AppDropdownMenuItem(
-                            text = { AppText(if (sleepTimerMinutes == null) "定时关闭" else "取消定时关闭（${sleepTimerMinutes}分钟）") },
-                            onClick = {
-                                showMoreMenu = false
-                                onSleepTimerChange(if (sleepTimerMinutes == null) 30 else null)
-                            },
-                        )
-                        AppDropdownMenuItem(
-                            text = { AppText("不感兴趣") },
-                            onClick = { showMoreMenu = false; onNotInterested() },
-                        )
-                        if (compactPlayerChrome) {
-                            AppDropdownMenuItem(
-                                text = { AppText("分享") },
-                                onClick = { showMoreMenu = false; onShare() },
-                            )
-                        }
-                    }
-                } else {
-                    AppDropdownMenu(
-                        expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false }
-                    ) {
-                        AppDropdownMenuItem(
-                            text = { AppText("播放设置") },
-                            onClick = { showMoreMenu = false; onSettings() }
-                        )
-                        AppDropdownMenuItem(
-                            text = { AppText(if (sleepTimerMinutes == null) "定时关闭" else "取消定时关闭（${sleepTimerMinutes}分钟）") },
-                            onClick = {
-                                showMoreMenu = false
-                                onSleepTimerChange(if (sleepTimerMinutes == null) 30 else null)
-                            }
-                        )
-                        AppDropdownMenuItem(
-                            text = { AppText("不感兴趣") },
-                            onClick = { showMoreMenu = false; onNotInterested() }
-                        )
-                        if (compactPlayerChrome) {
-                            AppDropdownMenuItem(
-                                text = { AppText("分享") },
-                                onClick = { showMoreMenu = false; onShare() }
-                            )
-                        }
-                    }
-                }
-
-                if (!compactPlayerChrome) {
-                    // 分享按钮 - 无背景
-                    AppIconButton(
-                        onClick = onShare,
-                        modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
-                    ) {
-                        AppIcon(
-                            imageVector = shareIcon,
-                            contentDescription = "分享",
-                            tint = Color.White,
-                            modifier = Modifier.size(layoutPolicy.iconSizeDp.dp)
-                        )
-                    }
-                }
-            }
         }
     }
 }
+
 
 
 @Composable
@@ -2935,6 +2724,7 @@ fun LandscapeEndDrawer(
                 edge = LandscapeSidePanelEdge.End,
                 width = layoutPolicy.drawerWidthDp.dp,
                 closeProgress = closeProgress,
+                enableControlCenterMotion = true,
                 onDismiss = onDismiss,
                 modifier = Modifier.fillMaxHeight(),
             ) { requestDismiss ->
@@ -2963,6 +2753,7 @@ fun LandscapeEndDrawer(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .landscapeControlCenterGroup(index = 0)
                             .padding(layoutPolicy.headerPaddingDp.dp)
                     ) {
                         // Row 1: UP主头像、名字、关注按钮
@@ -2998,7 +2789,12 @@ fun LandscapeEndDrawer(
 
                             // 关注按钮 (放在右上角)
                             AppButton(
-                                onClick = onToggleFollow,
+                                onClick = rememberFollowActionWithConfirmation(
+                                    targetKey = currentBvid,
+                                    userName = ownerName,
+                                    isFollowing = isFollowed,
+                                    onFollowClick = onToggleFollow,
+                                ),
                                 enabled = followStatusKnown,
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isFollowed) AppContentColors.primaryText().copy(0.2f) else AppContentColors.accent(),
@@ -3032,6 +2828,8 @@ fun LandscapeEndDrawer(
 
                     if (hasSeason) {
                         AppThemeAdaptiveTabRow(
+                            // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                             role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
                             options = listOf(
                                 AppSegmentOption(0, "推荐视频"),
@@ -3041,6 +2839,7 @@ fun LandscapeEndDrawer(
                             onSelectionChange = { selectedTab = it },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .landscapeControlCenterGroup(index = 1)
                                 .padding(horizontal = layoutPolicy.listContentPaddingDp.dp),
                             labelFontSize = layoutPolicy.followButtonFontSp.sp,
                             dragSelectionEnabled = false,
@@ -3051,12 +2850,13 @@ fun LandscapeEndDrawer(
                             text = "推荐视频",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(layoutPolicy.listContentPaddingDp.dp)
+                            modifier = Modifier.landscapeControlCenterGroup(index = 1)
+                                .padding(layoutPolicy.listContentPaddingDp.dp)
                         )
                     }
 
                     // 3. 列表内容
-                    Box(modifier = Modifier.weight(1f)) {
+                    Box(modifier = Modifier.weight(1f).landscapeControlCenterGroup(index = 2)) {
                         if (selectedTab == 0) {
                             // 推荐视频列表（滚动位置跨抽屉开关保留）
                             val relatedListState = rememberSaveable(
@@ -3473,6 +3273,10 @@ private fun LandscapeEpisodeItem(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
+                com.android.purebilibili.feature.video.ui.components.CollectionAccessBadge(
+                    episode = episode,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                )
                 com.android.purebilibili.feature.home.components.cards.VideoCardCoverDurationText(
                     text = FormatUtils.formatDuration(checkedEpisodeArc.duration),
                     modifier = Modifier
@@ -3506,6 +3310,9 @@ private fun LandscapeEpisodeItem(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             verticalArrangement = Arrangement.SpaceAround // 分散对齐
         ) {
+            if (episode.arc?.pic.isNullOrBlank()) {
+                com.android.purebilibili.feature.video.ui.components.CollectionAccessBadge(episode = episode)
+            }
             // 标题
             AppText(
                 text = episode.title,

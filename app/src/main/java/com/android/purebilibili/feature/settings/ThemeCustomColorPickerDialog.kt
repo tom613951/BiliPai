@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -42,6 +43,7 @@ import com.android.purebilibili.core.ui.components.*
 import com.android.purebilibili.core.util.HapticType
 import com.android.purebilibili.core.util.rememberHapticFeedback
 import kotlin.math.roundToInt
+import com.materialkolor.Contrast
 import com.materialkolor.PaletteStyle
 import com.materialkolor.dynamiccolor.ColorSpec
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -55,6 +57,12 @@ internal fun ThemeCustomColorPickerDialog(
     roleTarget: ThemeRoleColorTarget? = null,
     paletteStyle: PaletteStyle = PaletteStyle.TonalSpot,
     colorSpec: ColorSpec.SpecVersion = ColorSpec.SpecVersion.SPEC_2025,
+    colorContrast: Contrast = Contrast.Default,
+    seedPaletteStyle: SeedPaletteStyle = SeedPaletteStyle.Standard,
+    previewConfiguration: ThemePreviewConfiguration? = null,
+    themeSeed: Color? = null,
+    exactRoleTitle: String? = null,
+    onReset: (() -> Unit)? = null,
 ) {
     val initialHsv = remember(initialHex) {
         FloatArray(3).also { android.graphics.Color.colorToHSV(parseMd3CustomColorHex(initialHex).toArgb(), it) }
@@ -70,31 +78,45 @@ internal fun ThemeCustomColorPickerDialog(
     val haptic = rememberHapticFeedback()
     val color = Color.hsv(hue, saturation, brightness)
     val colorHex = formatMd3CustomColorHex(color)
+    val roleTargetLabel = roleTarget?.let { stringResource(it.labelRes) }
     val validHex = isValidMd3CustomColorHex(pendingHex)
     val foreground = resolveReadableForeground(color)
-    val previewDark = when (roleTarget) {
-        ThemeRoleColorTarget.LIGHT_CONTROL -> false
-        ThemeRoleColorTarget.DARK_CONTROL -> true
+    val previewDark = when {
+        roleTarget?.name?.startsWith("LIGHT_") == true -> false
+        roleTarget?.name?.startsWith("DARK_") == true -> true
         else -> AppSurfaceTokens.background().luminance() < 0.5f
     }
-    val previewScheme = remember(color, previewDark, paletteStyle, colorSpec) {
-        createBiliPaiStyleColorScheme(color, previewDark, false, paletteStyle, colorSpec)
+    val hostConfig = LocalAppThemeConfig.current
+    val previewUiStyle = LocalAppUiStyle.current
+    val configuration = (previewConfiguration ?: ThemePreviewConfiguration(
+        uiStyle = previewUiStyle, liquidGlassEnabled = hostConfig.liquidGlassEnabled,
+    )).let { current ->
+        current.copy(
+            source = Md3ColorSource.CUSTOM,
+            roleOverrides = if (roleTarget != null) roleTarget.write(current.roleOverrides, colorHex) else current.roleOverrides,
+            syncControlAccentToSeed = roleTarget == null,
+        )
     }
-    val previewMiuixController = remember(previewScheme, previewDark) {
-        val colors = resolveNativeMiuixColors(previewScheme, previewDark)
+    val previewSeed = if (roleTarget == null) color else themeSeed ?: color
+    val previewPalette = remember(previewSeed, previewDark, paletteStyle, colorSpec, colorContrast, seedPaletteStyle, configuration) {
+        resolveThemePreviewPalette(previewSeed, previewDark, paletteStyle, colorSpec, colorContrast, seedPaletteStyle, configuration)
+    }
+    val previewScheme = previewPalette.material
+    val previewIssues = remember(previewScheme) { assessThemeContrast(previewScheme).filterNot { it.passes } }
+    val previewMiuixController = remember(previewPalette, previewDark) {
         ThemeController(
             colorSchemeMode = resolveMiuixColorSchemeMode(
                 if (previewDark) AppThemeMode.DARK else AppThemeMode.LIGHT,
                 dynamicColorEnabled = false,
             ),
-            lightColors = colors,
-            darkColors = colors,
+            lightColors = previewPalette.miuix,
+            darkColors = previewPalette.miuix,
             isDark = previewDark,
         )
     }
-    val previewConfig = LocalAppThemeConfig.current.copy(liquidControlsUseThemeColor = true)
+    val previewConfig = hostConfig.copy(liquidControlsUseThemeColor = true)
     val previewUsesLiquidControls = previewConfig.liquidGlassEnabled && Build.VERSION.SDK_INT >= 33
-    val previewTrackColor = if (previewUsesLiquidControls) color else previewScheme.primary
+    val previewTrackColor = if (previewUsesLiquidControls) previewPalette.liquidAccent else previewScheme.primary
     val controlColorPreview = roleTarget == null || roleTarget == ThemeRoleColorTarget.LIGHT_CONTROL ||
         roleTarget == ThemeRoleColorTarget.DARK_CONTROL
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.86f).dp
@@ -131,7 +153,7 @@ internal fun ThemeCustomColorPickerDialog(
         ) {
             Column {
                 Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp)) {
-                    AppText(roleTarget?.label ?: "自定义主题颜色", style = MaterialTheme.typography.titleLarge)
+                    AppText(exactRoleTitle ?: roleTargetLabel ?: "自定义主题颜色", style = MaterialTheme.typography.titleLarge)
                     AppText("先预览，再保存", style = MaterialTheme.typography.bodySmall,
                         color = AppContentColors.secondaryText(), modifier = Modifier.padding(top = 4.dp))
                 }
@@ -150,11 +172,19 @@ internal fun ThemeCustomColorPickerDialog(
                                     .border(1.dp, AppSurfaceTokens.divider(), CircleShape))
                                 Column(Modifier.weight(1f)) {
                                     AppText(colorHex, style = MaterialTheme.typography.titleMedium)
-                                    AppText(if (controlColorPreview) "输入颜色（精确值）" else roleTarget?.label.orEmpty(), style = MaterialTheme.typography.bodySmall,
+                                    AppText(if (exactRoleTitle != null) "角色颜色（精确值）" else if (controlColorPreview) "输入颜色（精确值）" else roleTargetLabel.orEmpty(), style = MaterialTheme.typography.bodySmall,
                                         color = AppContentColors.secondaryText())
                                 }
                             }
-                            if (controlColorPreview) {
+                            if (exactRoleTitle != null) {
+                                AppSurface(color = color, contentColor = foreground,
+                                    shape = AppShapes.container(ContainerLevel.Field)) {
+                                    AppText("Aa 示例文字", color = foreground,
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp))
+                                }
+                                AppText("按所选色值应用，配套文字自动匹配明暗。",
+                                    style = MaterialTheme.typography.bodySmall, color = AppContentColors.secondaryText())
+                            } else if (controlColorPreview) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Box(Modifier.size(28.dp).background(previewTrackColor, CircleShape)
                                         .border(1.dp, AppSurfaceTokens.divider(), CircleShape))
@@ -170,12 +200,12 @@ internal fun ThemeCustomColorPickerDialog(
                                 }
                                 AppText(
                                     if (previewUsesLiquidControls) "液态控件跟随主题色时使用输入颜色。"
-                                    else "输入颜色用于生成浅深主题色板；控件使用当前主题生成的颜色。",
+                                    else "主色使用输入色值；容器保留主题层级，配套文字自动匹配明暗。",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AppContentColors.secondaryText(),
                                 )
                                 CompositionLocalProvider(
-                                    LocalLiquidControlThemeColor provides color,
+                                    LocalLiquidControlThemeColor provides previewPalette.liquidAccent,
                                     LocalAppThemeConfig provides previewConfig,
                                 ) {
                                     MiuixTheme(controller = previewMiuixController) {
@@ -190,17 +220,27 @@ internal fun ThemeCustomColorPickerDialog(
                                     }
                                 }
                             } else {
-                                val backgroundRole = roleTarget == ThemeRoleColorTarget.LIGHT_BACKGROUND ||
-                                    roleTarget == ThemeRoleColorTarget.DARK_BACKGROUND
                                 AppSurface(
-                                    color = if (backgroundRole) color else AppSurfaceTokens.surface(),
+                                    color = previewScheme.surface,
                                     shape = AppShapes.container(ContainerLevel.Field),
                                 ) {
-                                    AppText("Aa 示例文字", color = if (backgroundRole) foreground else color,
+                                    androidx.compose.material3.Text("Aa 示例文字", color = if (
+                                        roleTarget == ThemeRoleColorTarget.LIGHT_SECONDARY_TEXT ||
+                                        roleTarget == ThemeRoleColorTarget.DARK_SECONDARY_TEXT
+                                    ) previewScheme.onSurfaceVariant else previewScheme.onSurface,
                                         modifier = Modifier.fillMaxWidth().padding(12.dp),
                                         style = MaterialTheme.typography.titleMedium)
                                 }
                             }
+                        }
+                    }
+                    if (exactRoleTitle == null) {
+                        AppText("预览已应用当前高级覆盖色、表面与文字可读性修正。",
+                            style = MaterialTheme.typography.bodySmall, color = AppContentColors.secondaryText())
+                        if (previewIssues.isNotEmpty()) {
+                            AppText("最终配色有 ${previewIssues.size} 组配对低于目标：" +
+                                previewIssues.take(3).joinToString("；") { "${it.label} %.2f:1（目标 %.1f:1）".format(it.ratio, it.required) },
+                                style = MaterialTheme.typography.bodySmall, color = AppContentColors.error())
                         }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -255,6 +295,11 @@ internal fun ThemeCustomColorPickerDialog(
                     Spacer(Modifier.height(4.dp))
                 }
                 AppHorizontalDivider(modifier = Modifier.padding(top = 12.dp))
+                if (onReset != null) {
+                    AppTextButton(onClick = onReset, modifier = Modifier.fillMaxWidth()) {
+                        AppText("恢复此项壁纸配色")
+                    }
+                }
                 Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     AppTextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { AppText("取消") }

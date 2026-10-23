@@ -8,7 +8,7 @@
 
 <p>
   <a href="https://github.com/tom613951/BiliPai/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v0.3.9--personal-007AFF?style=for-the-badge&logo=github" alt="最新 Release" />
+    <img src="https://img.shields.io/badge/Release-v0.5.5--personal-007AFF?style=for-the-badge&logo=github" alt="最新 Release" />
   </a>
   <a href="https://github.com/jay3-yy/BiliPai">
     <img src="https://img.shields.io/badge/Upstream-jay3--yy%2FBiliPai-FF9500?style=for-the-badge&logo=github" alt="官方 Upstream" />
@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁后自行打包发布。
 
-当前基于官方 **v0.3.9**（`20b05863c`，versionCode 465）源码构建。
+当前基于官方 **v0.5.5**（`5aa2621d0`，versionCode 510）源码构建。
 
 ---
 
@@ -89,7 +89,7 @@ keytool -genkeypair -v -keystore release.jks -alias bilipai \
 ./gradlew :app:assembleRelease
 ```
 
-产物位于 `app/build/outputs/apk/release/`。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
+产物位于 `app/build/outputs/bilipai/release/BiliPai-<version>.apk`（上游自 0.4.x 起改由 export task 输出规范名）。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
 
 > ⚠️ 项目路径**不能包含非 ASCII 字符**（含中文的目录会导致 AGP 直接拒绝构建）。
 

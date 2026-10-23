@@ -77,7 +77,7 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         BiliPaiNavKey.Favorite -> ScreenRoutes.Favorite.route
         BiliPaiNavKey.FavoriteSubscribed -> "favorite_subscribed"
         is BiliPaiNavKey.FavoriteSearch ->
-            "favorite_search?query=${encodeRouteValue(query)}&scope=${scope.name}"
+            "favorite_search?query=${encodeRouteValue(query)}&scope=${scope.name}&subscribed=$subscribed"
         is BiliPaiNavKey.LikedVideos -> if (mid > 0L) {
             ScreenRoutes.LikedVideos.createRoute(mid, ownerName, isCoinArchive)
         } else {
@@ -87,7 +87,7 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         BiliPaiNavKey.WatchLater -> ScreenRoutes.WatchLater.route
         is BiliPaiNavKey.WatchLaterSearch -> "watch_later_search?query=${encodeRouteValue(query)}"
         BiliPaiNavKey.Onboarding -> ScreenRoutes.Onboarding.route
-        is BiliPaiNavKey.Following -> ScreenRoutes.Following.createRoute(mid)
+        is BiliPaiNavKey.Following -> if (fans) "fans/$mid" else ScreenRoutes.Following.createRoute(mid)
         is BiliPaiNavKey.UpowerRank -> "upower_rank?mid=${mid}&name=${encodeRouteValue(name)}&count=$count"
         BiliPaiNavKey.UpowerRank -> "upower_rank"
         is BiliPaiNavKey.MemberGuard -> "member_guard?mid=${mid}&name=${encodeRouteValue(name)}&count=$count"
@@ -229,6 +229,7 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
             scope = com.android.purebilibili.data.model.response.FavoriteSearchScope.entries
                 .firstOrNull { it.name == query["scope"] }
                 ?: com.android.purebilibili.data.model.response.FavoriteSearchScope.CURRENT_FOLDER,
+            subscribed = query["subscribed"].toBoolean(),
         )
         routeBase == ScreenRoutes.LikedVideos.route || normalized == ScreenRoutes.LikedVideos.route -> {
             val mid = query["mid"]?.toLongOrNull() ?: 0L
@@ -247,8 +248,11 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
         normalized == ScreenRoutes.WatchLater.route -> BiliPaiNavKey.WatchLater
         routeBase == "watch_later_search" -> BiliPaiNavKey.WatchLaterSearch(query["query"].orEmpty())
         normalized == ScreenRoutes.Onboarding.route -> BiliPaiNavKey.Onboarding
-        segments.firstOrNull() == "following" && segments.size >= 2 -> {
-            BiliPaiNavKey.Following(mid = segments[1].toLongOrNull() ?: 0L)
+        segments.firstOrNull() in setOf("following", "fans") && segments.size >= 2 -> {
+            BiliPaiNavKey.Following(
+                mid = segments[1].toLongOrNull() ?: 0L,
+                fans = segments.first() == "fans",
+            )
         }
         routeBase == "upower_rank" -> BiliPaiNavKey.UpowerRank(
             mid = query["mid"]?.toLongOrNull() ?: 0L,

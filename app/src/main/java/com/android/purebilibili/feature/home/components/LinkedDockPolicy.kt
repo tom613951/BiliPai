@@ -2,6 +2,12 @@ package com.android.purebilibili.feature.home.components
 
 import kotlin.math.roundToInt
 
+/** Shared alpha handoff for the overlapping glass navigation and compact button. */
+internal fun resolveLinkedDockGlassHandoffProgress(mergeProgress: Float): Float {
+    val progress = (mergeProgress / 0.34f).coerceIn(0f, 1f)
+    return progress * progress * progress
+}
+
 enum class LinkedDockPhase { Expanded, Playback, Compact, Search }
 
 /** Search owns the first tap on the compact artwork target. */
@@ -13,6 +19,20 @@ internal fun shouldExpandPlaybackFromSearch(
 /** Accumulate one direction before changing chrome; tiny reversals must not cause flicker. */
 internal fun accumulateDockScroll(previous: Float, delta: Float): Float =
     if (previous * delta < 0f) delta else previous + delta
+
+/** Retained playback owns the dock until its exit animation has released the slot. */
+internal fun shouldUseScrollCompactNavigation(
+    enabled: Boolean,
+    hasAudio: Boolean,
+    retainingAudio: Boolean,
+): Boolean = enabled && !hasAudio && !retainingAudio
+
+/** Positive offset browses down; a full opposite-direction threshold expands again. */
+internal fun resolveScrollCompactIntent(accumulatedPx: Float, thresholdPx: Float): Boolean? = when {
+    accumulatedPx >= thresholdPx -> true
+    accumulatedPx <= -thresholdPx -> false
+    else -> null
+}
 
 internal fun resolveLinkedDockRestingPhase(
     collapseRequested: Boolean,

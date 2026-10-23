@@ -254,6 +254,8 @@ internal fun ListenVideoScreen(
                     .padding(horizontal = 20.dp, vertical = 12.dp)
             )
             BottomBarLiquidSegmentedControl(
+                // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                 items = sectionLabels,
                 selectedIndex = pagerState.currentPage,
                 onSelected = { index ->
@@ -264,6 +266,8 @@ internal fun ListenVideoScreen(
                     .padding(horizontal = 20.dp),
                 height = AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
                 indicatorHeight = AppChromeSizeTokens.BottomBarMatchedSegmentedIndicatorHeightDp.dp,
+                // Center only the compact glass rail; native tabs retain their layout.
+                centerGlassContent = true,
                 preferInlineContentStyle = false,
                 miuixBackdrop = listenBackdrop,
                 liquidGlassEffectsEnabled = true,

@@ -12,6 +12,8 @@ import com.android.purebilibili.core.ui.OpticalContrastPalette
 
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,10 +43,10 @@ import com.android.purebilibili.core.ui.components.AppExactTouchTargets
 import com.android.purebilibili.core.ui.components.AppNativeSegmentedControl
 import com.android.purebilibili.core.ui.components.AppTabRowIndicatorPresentation
 import com.android.purebilibili.core.ui.components.rememberMeasuredTabMinWidth
+import com.android.purebilibili.core.ui.components.resolveLiquidGlassTabSlotHorizontalPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -60,7 +62,6 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -69,15 +70,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
-import com.android.purebilibili.core.store.SettingsManager
-import com.android.purebilibili.core.store.HomeSettings
 import com.android.purebilibili.core.ui.rememberAppSemanticVisualPolicy
 import com.android.purebilibili.core.ui.AppSurfaceTokens
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.input.pointer.pointerInput
-import kotlinx.coroutines.flow.map
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import com.android.purebilibili.core.ui.animation.DampedDragAnimationState
 import com.android.purebilibili.core.ui.animation.DampedDragTrackingMode
@@ -406,7 +403,7 @@ fun BottomBarLiquidSegmentedControl(
     containerHorizontalPadding: Dp = AppSpacingTokens.ExtraSmall,
     containerVerticalPadding: Dp = AppSpacingTokens.ExtraSmall,
     liquidGlassEffectsEnabled: Boolean = true,
-    // Kept for source compatibility; shared floating docks always allow enabled multi-item drag.
+    // False reserves horizontal gestures for the scrollable rail; taps still select a tab.
     dragSelectionEnabled: Boolean = true,
     // Compatibility alias for drag enablement; indicators now always start dragging directly.
     longPressDragSelectionEnabled: Boolean = false,
@@ -432,12 +429,45 @@ fun BottomBarLiquidSegmentedControl(
     externalPagerMotionEffectsEnabled: Boolean = false,
     liquidGlassTuningOverride: LiquidGlassTuning? = null,
     geometryMode: FloatingBottomBarGeometryMode = FloatingBottomBarGeometryMode.Segmented,
+    centerGlassContent: Boolean = false,
+    // Applied below the native renderer returns; native indicator geometry stays unchanged.
+    liquidGlassAdaptIndicatorToLabel: Boolean = true,
+    liquidGlassLabelHorizontalPadding: Dp? = null,
+    // Geometry-only labels for asynchronous badges. Native renderers and visible text ignore them.
+    liquidGlassMeasurementLabels: List<String>? = null,
+    liquidGlassAnimateLabelWidthChanges: Boolean = false,
+    // Explicit native placement opt-in, independent from glass-only geometry and shared defaults.
+    centerNativeContent: Boolean = false,
 ): Unit = AppExactTouchTargets {
     if (items.isEmpty()) return@AppExactTouchTargets
-    val effectiveLabelFontSize = if (labelFontSize.isSpecified) {
-        labelFontSize
-    } else {
-        com.android.purebilibili.core.ui.appTabLabelFontSize()
+    val effectiveLabelFontSize = com.android.purebilibili.core.ui.appTabLabelFontSize(labelFontSize)
+    if (com.android.purebilibili.core.ui.isMiuixNonGlassEnabled()) {
+        val nativeOptions = remember(items) {
+            items.mapIndexed { index, label -> AppSegmentOption(index, label) }
+        }
+        // Fixed liquid slots and capture heights are visual hints, not native
+        // content constraints. Let the opaque renderer fit labels and font scale.
+        AppNativeTabRow(
+            options = nativeOptions,
+            selectedValue = selectedIndex.coerceIn(0, items.lastIndex),
+            onSelectionChange = onSelected,
+            modifier = modifier,
+            enabled = enabled,
+            centerContent = centerNativeContent,
+            scrollable = !nativeSegmentedControl && !forceEqualWidth &&
+                (scrollState != null || items.size > 2),
+            forceEqualWidth = forceEqualWidth,
+            minTabWidth = AppChromeSizeTokens.MinimumTouchTarget,
+            labelFontSize = effectiveLabelFontSize,
+            containerHorizontalPadding = containerHorizontalPadding,
+            compactMiuixWhenTwoOptions = compactMiuixWhenTwoOptions,
+            indicatorPositionProvider = indicatorPositionProvider,
+            miuixNonGlassItemWidthMode = if (equalizeMiuixNonGlassItemWidths) {
+                MiuixNonGlassTabItemWidthMode.EQUAL_TO_LONGEST_LABEL
+            } else MiuixNonGlassTabItemWidthMode.CONTENT,
+            drawMiuixNonGlassTrack = drawMiuixNonGlassTrack,
+        )
+        return@AppExactTouchTargets
     }
     val shellHeight = height.coerceAtLeast(0.dp)
     val horizontalPadding = containerHorizontalPadding.coerceAtLeast(0.dp)
@@ -447,7 +477,7 @@ fun BottomBarLiquidSegmentedControl(
     } else {
         modifier.fillMaxWidth()
     }
-    // Geometry exists even while material preferences load. Sampling and press
+    // Geometry is independent from material sampling. Sampling and press
     // bloom are draw-only children and cannot change this layout or hit viewport.
     BoxWithConstraints(modifier = shellModifier.height(shellHeight)) {
         val renderedItemWidth = fixedItemWidth ?: if (!constraints.hasBoundedWidth) {
@@ -462,23 +492,18 @@ fun BottomBarLiquidSegmentedControl(
         } else {
             null
         }
-        val context = LocalContext.current
         val visualPolicy = rememberAppSemanticVisualPolicy()
-        val homeSettings by SettingsManager
-            .getHomeSettings(context)
-            .map { it as HomeSettings? }
-            .collectAsStateWithLifecycle(
-                initialValue = null,
-                context = kotlin.coroutines.EmptyCoroutineContext,
-            )
-        val resolvedHomeSettings = homeSettings ?: return@BoxWithConstraints
-        if (!resolvedHomeSettings.androidNativeLiquidGlassEnabled) {
+        // Material selection shares the same resolved theme as its parent and glass child.
+        val androidNativeLiquidGlassEnabled =
+            com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+        if (!androidNativeLiquidGlassEnabled) {
             val nativeOptions = remember(items) {
                 items.mapIndexed { index, label -> AppSegmentOption(index, label) }
             }
             val nativeItemWidth = renderedItemWidth ?:
                 (maxWidth - horizontalPadding * 2).coerceAtLeast(0.dp) / items.size
-            val nativeModifier = if (renderedItemWidth == null) Modifier.fillMaxWidth() else Modifier
+            val nativeModifier = (if (renderedItemWidth == null) Modifier.fillMaxWidth() else Modifier)
+                .then(if (centerNativeContent) Modifier.align(Alignment.Center) else Modifier)
             if (nativeSegmentedControl) {
                 AppNativeSegmentedControl(
                     options = nativeOptions,
@@ -499,6 +524,7 @@ fun BottomBarLiquidSegmentedControl(
                     onSelectionChange = onSelected,
                     modifier = nativeModifier,
                     enabled = enabled,
+                    centerContent = centerNativeContent,
                     scrollable = scrollState != null,
                     forceEqualWidth = forceEqualWidth,
                     fixedItemWidth = nativeItemWidth,
@@ -522,7 +548,7 @@ fun BottomBarLiquidSegmentedControl(
         val chromeStyle = resolveSegmentedControlChromeStyle(
             uiStyle = LocalAppUiStyle.current,
             prefersNativeChrome = visualPolicy.prefersNativeChrome,
-            androidNativeLiquidGlassEnabled = resolvedHomeSettings.androidNativeLiquidGlassEnabled,
+            androidNativeLiquidGlassEnabled = androidNativeLiquidGlassEnabled,
             preferInlineContentStyle = preferInlineContentStyle,
         )
         if (chromeStyle == SegmentedControlChromeStyle.ANDROID_NATIVE_UNDERLINE) {
@@ -543,13 +569,47 @@ fun BottomBarLiquidSegmentedControl(
             )
             return@BoxWithConstraints
         }
+        // Material boundary: only tune glass sizing below the native-renderer returns above.
+        // Direct consumers (search, listen-video, settings and page filters) bypass
+        // AppLiquidAwareTabRow. Give them the same measured compact slots here.
+        val glassMeasurementLabels = liquidGlassMeasurementLabels
+            ?.takeIf { it.size == items.size } ?: items
+        val measuredLiquidItemWidth = renderedItemWidth ?: if (
+            !forceEqualWidth && geometryMode == FloatingBottomBarGeometryMode.Segmented
+        ) {
+            rememberMeasuredTabMinWidth(
+                requestedMinWidth = AppChromeSizeTokens.MinimumTouchTarget,
+                labels = glassMeasurementLabels,
+                textStyle = MaterialTheme.typography.labelLarge.copy(
+                    fontSize = effectiveLabelFontSize,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                horizontalPadding = liquidGlassLabelHorizontalPadding ?: resolveLiquidGlassTabSlotHorizontalPadding(items.size),
+            )
+        } else null
+        val animateLabelWidths = liquidGlassAnimateLabelWidthChanges &&
+            com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
+            !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+        // Native paths have already returned. Retarget only data-driven glass geometry.
+        val liquidItemWidth = if (animateLabelWidths && renderedItemWidth == null && measuredLiquidItemWidth != null) {
+            animateDpAsState(
+                targetValue = measuredLiquidItemWidth,
+                animationSpec = tween(180, easing = FastOutSlowInEasing),
+                label = "glassAsyncBadgeSlotWidth",
+            ).value
+        } else measuredLiquidItemWidth
         BottomBarFloatingSegmentedControl(
+            adaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
             items = items,
+            liquidGlassMeasurementLabels = glassMeasurementLabels,
+            liquidGlassAnimateLabelWidthChanges = liquidGlassAnimateLabelWidthChanges,
+            liquidGlassLabelHorizontalPadding = liquidGlassLabelHorizontalPadding,
             selectedIndex = selectedIndex,
             onSelected = onSelected,
-            modifier = Modifier,
+            // Only the glass child is centered; native branches keep their established placement.
+            modifier = if (centerGlassContent) Modifier.align(Alignment.Center) else Modifier,
             enabled = enabled,
-            itemWidth = renderedItemWidth,
+            itemWidth = liquidItemWidth,
             height = shellHeight,
             indicatorHeight = indicatorHeight,
             labelFontSize = effectiveLabelFontSize,

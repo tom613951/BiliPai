@@ -30,6 +30,9 @@ import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.geometry.Offset
@@ -49,6 +52,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -68,6 +72,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import com.android.purebilibili.core.ui.motion.AppMotionTokens
+import com.android.purebilibili.core.ui.LocalComponentMotionEnabled
+import com.android.purebilibili.core.ui.components.AppIconButton
+import com.android.purebilibili.core.ui.rememberAppChevronDownIcon
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
@@ -204,8 +213,6 @@ import com.android.purebilibili.feature.video.player.PlaylistUiState
 import com.android.purebilibili.feature.video.player.ExternalPlaylistSource
 import com.android.purebilibili.feature.video.player.buildPipPlaybackRemoteActions
 import com.android.purebilibili.core.ui.performance.TrackJankStateFlag
-// 📱 [新增] 竖屏全屏
-import com.android.purebilibili.feature.video.ui.overlay.PortraitFullscreenOverlay
 import com.android.purebilibili.feature.video.ui.overlay.PlayerProgress
 import com.android.purebilibili.feature.video.ui.components.VideoAspectRatio
 import com.android.purebilibili.feature.video.danmaku.rememberDanmakuManager
@@ -228,7 +235,6 @@ import com.android.purebilibili.feature.video.ui.components.DanmakuContextMenu
 import com.android.purebilibili.feature.video.ui.components.DanmakuBlockActionTarget
 import com.android.purebilibili.feature.video.ui.components.resolveDanmakuBlockActionFeedbackMessage
 import com.android.purebilibili.feature.video.danmaku.appendDanmakuKeywordBlockRule
-import com.android.purebilibili.feature.video.danmaku.appendDanmakuUserHashBlockRule
 import com.android.purebilibili.feature.video.ui.components.InteractiveChoiceOverlay
 import com.android.purebilibili.feature.video.ui.feedback.VideoFeedbackAnchor
 import com.android.purebilibili.feature.video.ui.feedback.TripleCelebrationPlacement
@@ -564,16 +570,49 @@ internal fun VideoDetailDanmakuContextMenu(
     val danmakuMenuState by viewModel.danmakuMenuState.collectAsStateWithLifecycle(
         context = kotlin.coroutines.EmptyCoroutineContext
     )
+    val playbackUiState by viewModel.uiState.collectAsStateWithLifecycle(
+        context = kotlin.coroutines.EmptyCoroutineContext
+    )
     if (!danmakuMenuState.visible) return
+    val playback = playbackUiState as? com.android.purebilibili.feature.video.viewmodel.VideoPlaybackUiState.Success
+    val menuIdentity = remember(danmakuMenuState.dmid, danmakuMenuState.text, danmakuMenuState.userHash) {
+        playback?.info?.let { it.bvid to it.cid }
+    }
+    if (menuIdentity == null || playback?.info?.let { it.bvid to it.cid } != menuIdentity) {
+        LaunchedEffect(menuIdentity, playbackUiState) { viewModel.hideDanmakuMenu() }
+        return
+    }
+    val menuDmid = danmakuMenuState.dmid
+    val menuUserHash = danmakuMenuState.userHash
+    val reportWithDetails: (Int, String, Boolean) -> Unit = { reason, explanation, blockUser ->
+        val current = viewModel.uiState.value as? com.android.purebilibili.feature.video.viewmodel.VideoPlaybackUiState.Success
+        if (current?.info?.let { it.bvid to it.cid } == menuIdentity) {
+            sortPreferenceScope.launch {
+                com.android.purebilibili.feature.video.ui.components.submitPiliDanmakuReport(
+                    context = context,
+                    cid = menuIdentity.second,
+                    dmid = menuDmid,
+                    reason = reason,
+                    explanation = explanation,
+                    userHash = menuUserHash,
+                    blockUser = blockUser,
+                    settingsScope = activeDanmakuScope,
+                )
+            }
+        } else {
+            viewModel.toast("视频已切换，请重新选择弹幕")
+        }
+    }
 
     DanmakuContextMenu(
         text = danmakuMenuState.text,
         onDismiss = { viewModel.hideDanmakuMenu() },
         onLike = { viewModel.likeDanmaku(danmakuMenuState.dmid) },
         onRecall = { viewModel.recallDanmaku(danmakuMenuState.dmid) },
-        onReport = { reason ->
-            viewModel.reportDanmaku(danmakuMenuState.dmid, reason)
-        },
+        onReport = { reason -> reportWithDetails(reason, "", false) },
+        onReportWithDetails = reportWithDetails,
+        durationMs = viewModel.getPlayerDuration().takeIf { it > 0L }
+            ?: playback?.videoDurationMs?.coerceAtLeast(0L) ?: 0L,
         voteCount = danmakuMenuState.voteCount,
         hasLiked = danmakuMenuState.hasLiked,
         voteLoading = danmakuMenuState.voteLoading,
@@ -604,27 +643,11 @@ internal fun VideoDetailDanmakuContextMenu(
         },
         canBlockUser = danmakuMenuState.userHash.isNotBlank(),
         onBlockUser = {
-            val userHash = danmakuMenuState.userHash
-            if (userHash.isBlank()) {
-                viewModel.toast("该弹幕缺少发送者标识")
-            } else {
-                val updatedRules = appendDanmakuUserHashBlockRule(
-                    rawRules = activeDanmakuBlockRulesRaw,
-                    userHash = userHash
-                )
-                val changed = updatedRules != activeDanmakuBlockRulesRaw
-                sortPreferenceScope.launch {
-                    com.android.purebilibili.core.store.SettingsManager.setDanmakuBlockRulesRaw(
-                        context,
-                        updatedRules,
-                        activeDanmakuScope
-                    )
-                }
-                viewModel.toast(
-                    resolveDanmakuBlockActionFeedbackMessage(
-                        target = DanmakuBlockActionTarget.USER,
-                        changed = changed
-                    )
+            sortPreferenceScope.launch {
+                com.android.purebilibili.feature.video.ui.components.blockPiliDanmakuSender(
+                    context = context,
+                    userHash = menuUserHash,
+                    settingsScope = activeDanmakuScope,
                 )
             }
         }
@@ -643,7 +666,9 @@ internal fun ExternalPlaylistQueueSheet(
     onDismiss: () -> Unit,
     onVideoSelected: (Int, PlaylistItem) -> Unit
 ) {
-    if (!visible) return
+    // Keep the inline host composed while hidden so its exit can finish and a
+    // quick reopen reverses the current transition instead of remounting it.
+    if (!visible && presentation == ExternalPlaylistQueueSheetPresentation.MODAL) return
 
     com.android.purebilibili.core.ui.LocalNavigationBackHandler(enabled = visible) {
         onDismiss()
@@ -658,55 +683,74 @@ internal fun ExternalPlaylistQueueSheet(
         navigationBarBottomPadding.value.roundToInt()
     ).dp
     val sheetShape = AppShapes.container(ContainerLevel.Sheet)
+    val motionEnabled = LocalComponentMotionEnabled.current
 
     when (presentation) {
         ExternalPlaylistQueueSheetPresentation.INLINE_HAZE -> {
             val interactionSource = remember { MutableInteractionSource() }
             val useHazeEffect = shouldAllowRuntimeShaderBackedHazeEffect(Build.VERSION.SDK_INT)
-            Box(
-                modifier = Modifier.fillMaxSize()
+            AnimatedVisibility(
+                visible = visible,
+                enter = EnterTransition.None,
+                exit = ExitTransition.None,
+                modifier = Modifier.fillMaxSize(),
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.18f))
-                        .clickable(
-                            interactionSource = interactionSource,
-                            indication = null
-                        ) { onDismiss() }
-                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .animateEnterExit(
+                                enter = if (motionEnabled) fadeIn(AppMotionTokens.standardSpec()) else EnterTransition.None,
+                                exit = if (motionEnabled) fadeOut(AppMotionTokens.standardSpec()) else ExitTransition.None,
+                            )
+                            .background(Color.Black.copy(alpha = 0.18f))
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null
+                            ) { onDismiss() }
+                    )
 
-                AppSurface(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .clip(sheetShape)
-                        .then(
-                            if (useHazeEffect) {
-                                Modifier.hazeEffectCompat(
-                                    state = hazeState,
-                                    style = HazeMaterials.ultraThin()
-                                )
-                            } else {
-                                Modifier
-                            }
-                        ),
-                    shape = sheetShape,
-                    color = AppSurfaceTokens.surface().copy(alpha = 0.74f),
-                    tonalElevation = 0.dp,
-                    border = BorderStroke(
-                        width = 0.6.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                    )
-                ) {
-                    ExternalPlaylistQueueSheetContent(
-                        title = title,
-                        playlist = playlist,
-                        currentIndex = currentIndex,
-                        listMaxHeight = listMaxHeight,
-                        bottomSpacerHeight = bottomSpacerHeight,
-                        onVideoSelected = onVideoSelected
-                    )
+                    AppSurface(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .animateEnterExit(
+                                enter = if (motionEnabled) {
+                                    slideInVertically(AppMotionTokens.emphasizedSpec()) { it }
+                                } else EnterTransition.None,
+                                exit = if (motionEnabled) {
+                                    slideOutVertically(AppMotionTokens.standardSpec()) { it }
+                                } else ExitTransition.None,
+                            )
+                            .fillMaxWidth()
+                            .clip(sheetShape)
+                            .then(
+                                if (useHazeEffect) {
+                                    Modifier.hazeEffectCompat(
+                                        state = hazeState,
+                                        style = HazeMaterials.ultraThin()
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            ),
+                        shape = sheetShape,
+                        color = AppSurfaceTokens.surface().copy(alpha = 0.74f),
+                        tonalElevation = 0.dp,
+                        border = BorderStroke(
+                            width = 0.6.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        ExternalPlaylistQueueSheetContent(
+                            title = title,
+                            playlist = playlist,
+                            currentIndex = currentIndex,
+                            listMaxHeight = listMaxHeight,
+                            bottomSpacerHeight = bottomSpacerHeight,
+                            onVideoSelected = onVideoSelected,
+                            onDismiss = onDismiss,
+                        )
+                    }
                 }
             }
         }
@@ -735,7 +779,8 @@ internal fun ExternalPlaylistQueueSheet(
                         currentIndex = currentIndex,
                         listMaxHeight = listMaxHeight,
                         bottomSpacerHeight = bottomSpacerHeight,
-                        onVideoSelected = onVideoSelected
+                        onVideoSelected = onVideoSelected,
+                        onDismiss = onDismiss,
                     )
                 }
             }
@@ -750,10 +795,15 @@ internal fun ExternalPlaylistQueueSheetContent(
     currentIndex: Int,
     listMaxHeight: androidx.compose.ui.unit.Dp,
     bottomSpacerHeight: androidx.compose.ui.unit.Dp,
-    onVideoSelected: (Int, PlaylistItem) -> Unit
+    modifier: Modifier = Modifier,
+    onVideoSelected: (Int, PlaylistItem) -> Unit,
+    onDismiss: () -> Unit,
 ) {
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = currentIndex.coerceIn(0, playlist.lastIndex.coerceAtLeast(0)),
+    )
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(top = 2.dp)
     ) {
@@ -775,6 +825,12 @@ internal fun ExternalPlaylistQueueSheetContent(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium
             )
+            AppIconButton(onClick = onDismiss) {
+                AppIcon(
+                    imageVector = rememberAppChevronDownIcon(),
+                    contentDescription = "收起${title}队列",
+                )
+            }
         }
 
         AppHorizontalDivider(
@@ -782,6 +838,7 @@ internal fun ExternalPlaylistQueueSheetContent(
         )
 
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = listMaxHeight),
@@ -852,6 +909,18 @@ internal fun ExternalPlaylistQueueSheetContent(
                                 )
                             }
                         }
+                        if (item.duration > 0L) {
+                            AppText(
+                                text = FormatUtils.formatDuration(item.duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(3.dp)
+                                    .background(Color.Black.copy(alpha = 0.68f), AppShapes.container(ContainerLevel.Chip))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Column(
@@ -859,16 +928,36 @@ internal fun ExternalPlaylistQueueSheetContent(
                     ) {
                         AppText(
                             text = item.title,
-                            maxLines = 1,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             color = AppContentColors.primaryText()
                         )
+                        Spacer(Modifier.height(4.dp))
                         AppText(
-                            text = item.owner,
+                            text = listOfNotNull(
+                                item.owner.takeIf { it.isNotBlank() },
+                                item.publishedAt?.takeIf { it > 0L }?.let { FormatUtils.formatPublishTime(it) },
+                            ).joinToString(" · "),
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             color = AppContentColors.secondaryText(),
                             style = MaterialTheme.typography.bodySmall
                         )
+                        val stats = listOfNotNull(
+                            item.playCount?.let { "${FormatUtils.formatStat(it)}播放" },
+                            item.commentCount?.let { "${FormatUtils.formatStat(it)}评论" },
+                            "正在播放".takeIf { selected },
+                        ).joinToString(" · ")
+                        if (stats.isNotBlank()) {
+                            AppText(
+                                text = stats,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) AppContentColors.accent() else AppContentColors.secondaryText(),
+                            )
+                        }
                     }
                     if (selected) {
                         AppIcon(
@@ -900,12 +989,14 @@ internal fun DetachedVideoCommentThreadHost(
     onTimestampClick: (Long) -> Unit,
     onBackToTop: () -> Unit = {},
     onCoveredBlurProgressChange: ((Float) -> Unit)? = null,
+    threadListModifier: Modifier = Modifier,
 ) {
     if (!visible) return
 
     val subReplyState by commentViewModel.subReplyState.collectAsStateWithLifecycle()
 
     VideoCommentSheetHost(
+        threadListModifier = threadListModifier,
         mainSheetVisible = resolveVideoDetailCommentThreadHostMainSheetVisible(
             useEmbeddedPresentation = com.android.purebilibili.feature.video.ui.pager
                 .shouldUseEmbeddedVideoSubReplyPresentation(),

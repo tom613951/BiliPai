@@ -87,6 +87,12 @@ fun <T> AppSingleChoicePreference(
     enabled: Boolean = true,
     iconTint: Color = AppContentColors.secondaryText(),
     dialogTitle: String = title,
+    /**
+     * 可选的每项前导视觉（例如色彩风格的三色小样）。
+     * 提供后：下拉项把小样放在 leading 位置、选中勾移到 trailing 位置；
+     * 居中弹窗把小样排在名称之前；Miuix 滚轮只显示文字，忽略该参数。
+     */
+    optionLeading: (@Composable (T) -> Unit)? = null,
     presentation: AppSingleChoicePresentation = LocalAppSingleChoicePresentation.current,
 ) {
     if (presentation == AppSingleChoicePresentation.WINDOW_POPUP &&
@@ -110,14 +116,17 @@ fun <T> AppSingleChoicePreference(
             modifier = modifier.alpha(if (enabled) 1f else 0.6f),
             startAction = icon?.let { imageVector ->
                 {
-                    Icon(
-                        imageVector = imageVector,
-                        contentDescription = null,
-                        // 与其他设置条目一致：MD3 官方推荐预设下为 onSurfaceVariant 单色，
-                        // 其余预设保留多彩语义色（MIUIX 等）。
-                        tint = rememberAdaptivePreferenceIconTint(iconTint),
-                        modifier = Modifier.size(24.dp),
-                    )
+                    if (useColorfulPreferenceIcons() || com.android.purebilibili.core.ui.rememberResolvedAppIconStyle() == com.android.purebilibili.core.ui.AppIconStyle.THEME_CONTAINER) {
+                        AppPreferenceLeadingIcon(title = title, imageVector = imageVector)
+                    } else {
+                        // Keep the original spinner renderer outside Miuix settings.
+                        Icon(
+                            imageVector = imageVector,
+                            contentDescription = null,
+                            tint = rememberAdaptivePreferenceIconTint(iconTint),
+                            modifier = Modifier.size(24.dp),
+                        )
+                    }
                 }
             },
             onSelectedIndexChange = { index ->
@@ -178,12 +187,28 @@ fun <T> AppSingleChoicePreference(
                                         }
                                     }
                                 },
-                                leadingIcon = if (selected) {
+                                leadingIcon = when {
+                                    optionLeading != null -> {
+                                        { optionLeading(option.value) }
+                                    }
+                                    selected -> {
+                                        {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = AppContentColors.link(),
+                                            )
+                                        }
+                                    }
+                                    else -> null
+                                },
+                                // 小样占用 leading 后，选中态改由 trailing 的勾表达，避免信息丢失。
+                                trailingIcon = if (optionLeading != null && selected) {
                                     {
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = null,
-                                            tint = AppContentColors.accent(),
+                                            tint = AppContentColors.link(),
                                         )
                                     }
                                 } else {
@@ -210,6 +235,7 @@ fun <T> AppSingleChoicePreference(
             title = dialogTitle,
             selectedValue = selectedValue,
             options = options,
+            optionLeading = optionLeading,
             onValueSelected = { value ->
                 if (shouldDispatchAppChoiceSelection(selectedValue, value)) {
                     onValueChange(value)
@@ -229,6 +255,7 @@ fun <T> AppSingleChoiceDialog(
     onValueSelected: (T) -> Unit,
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
+    optionLeading: (@Composable (T) -> Unit)? = null,
 ) {
     val configuration = LocalConfiguration.current
     val maxDialogHeight = (configuration.screenHeightDp * 0.8f).dp
@@ -274,6 +301,7 @@ fun <T> AppSingleChoiceDialog(
                             modifier = Modifier
                                 .fillMaxWidth(),
                         ) {
+                            optionLeading?.let { leading -> leading(option.value) }
                             Column(modifier = Modifier.weight(1f)) {
                                 AppText(
                                     text = option.label,
@@ -412,7 +440,7 @@ fun AppSliderDialog(
                 AppText(
                     text = valueFormatter(draftValue),
                     style = MaterialTheme.typography.titleMedium,
-                    color = AppContentColors.accent(),
+                    color = AppContentColors.link(),
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
                 Spacer(modifier = Modifier.height(8.dp))

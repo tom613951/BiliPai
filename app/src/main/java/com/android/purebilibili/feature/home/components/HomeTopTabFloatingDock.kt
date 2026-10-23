@@ -1,6 +1,7 @@
 package com.android.purebilibili.feature.home.components
 
 import com.android.purebilibili.core.ui.AppContentColors
+import com.android.purebilibili.core.ui.components.liquidDockViewport
 import com.android.purebilibili.core.ui.components.appElasticPress
 
 
@@ -79,6 +80,19 @@ internal fun shouldUseOfficialMiuixHomeTopTabs(
     liquidGlassEnabled: Boolean,
 ): Boolean = uiStyle == AppUiStyle.MIUIX && !liquidGlassEnabled
 
+/** Glass exports the selected glyph in the exact accent, matching the bottom dock.
+ * Its translucent shell alone is not the composited backdrop for contrast checks.
+ * Native renderers retain the existing readable-foreground policy.
+ */
+internal fun resolveHomeTopTabSelectedContentColor(
+    accent: Color,
+    shellColor: Color,
+    liquidGlassEnabled: Boolean,
+): Color = if (liquidGlassEnabled) accent else resolveReadableBottomBarSkinForeground(
+    preferredColor = accent,
+    backgroundColor = shellColor,
+)
+
 /** Uses shared dock width policy with the top shell's own corner geometry. */
 internal fun resolveHomeTopTabFloatingDockWidth(
     containerWidth: Dp,
@@ -95,6 +109,15 @@ internal fun resolveHomeTopTabFloatingDockWidth(
     labelMode = labelMode,
     cornerRadius = shellHeight / 2,
 )
+
+/** Glass reserves a horizontal capsule before fitting tabs; native slots retain their own sizing. */
+internal fun resolveHomeTopDockMinimumSlotWidth(
+    shellHeight: Dp,
+    contentMinWidth: Dp,
+    liquidGlassEnabled: Boolean,
+): Dp = if (liquidGlassEnabled) {
+    maxOf(contentMinWidth, resolveBiliPaiBottomBarIndicatorHeight(shellHeight) * FLOATING_DOCK_MIN_INDICATOR_ASPECT)
+} else contentMinWidth
 
 /** Top category navigation matching the active bottom-bar renderer contract. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,6 +149,9 @@ internal fun HomeTopTabFloatingDock(
     modifier: Modifier = Modifier,
     scrollState: androidx.compose.foundation.ScrollState? = null,
     horizontalPadding: Dp = AppSpacingTokens.ExtraSmall,
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
+    isPagerNavigatingProvider: (() -> Boolean)? = null,
 ) {
     if (categories.isEmpty()) return
     val fontScale = LocalDensity.current.fontScale.coerceAtLeast(0.01f)
@@ -166,6 +192,13 @@ internal fun HomeTopTabFloatingDock(
                                 selected = selected,
                             ),
                             contentDescription = if (showText) null else label,
+                            modifier = if (showIcon && !showText) {
+                                Modifier.size(
+                                    resolveHomeTopDockIconSizeDp(1, liquidGlassEnabled = false).dp,
+                                )
+                            } else {
+                                Modifier
+                            },
                         )
                     }
                     val onClick = {
@@ -224,23 +257,41 @@ internal fun HomeTopTabFloatingDock(
         darkTheme = isDarkTheme,
         liquidGlassTuning = liquidGlassTuning,
     )
-    val selectedContentColor = resolveReadableBottomBarSkinForeground(
-        preferredColor = AppContentColors.accent(),
-        backgroundColor = shellColor,
+    val selectedContentColor = resolveHomeTopTabSelectedContentColor(
+        accent = AppContentColors.selectionAccent(liquidGlassEffectsEnabled),
+        shellColor = shellColor,
+        liquidGlassEnabled = liquidGlassEffectsEnabled,
     )
     val unselectedContentColor = resolveReadableBottomBarSkinForeground(
         preferredColor = AppContentColors.secondaryText(),
         backgroundColor = shellColor,
     )
+    // All glass label modes use the full navigation slot and the shell's inset capsule contour.
+    // Native renderers keep their existing TopNavigation geometry and label policy below.
+    val geometryMode = FloatingBottomBarGeometryMode.TopNavigation
+    val viewportModifier = if (liquidGlassEffectsEnabled && scrollState != null) {
+        // Own the optical clip at the page viewport, with the same press/velocity margins
+        // as the renderer. Native toolbar placement and clipping retain their existing path.
+        val captureInsets = resolveFloatingDockCaptureInsets(
+            shellHeightDp = dockHeight.value,
+            requestedIndicatorHeightDp = (dockHeight - AppSpacingTokens.ExtraSmall * 2).coerceAtLeast(0.dp).value,
+            indicatorWidthDp = (itemWidth ?: dockHeight).value,
+            geometryMode = geometryMode,
+        )
+        Modifier.liquidDockViewport(
+            verticalOverflow = captureInsets.verticalDp.dp,
+            horizontalOverflow = captureInsets.horizontalDp.dp,
+        )
+    } else Modifier
     BottomBarFloatingSegmentedControl(
         items = categories,
         selectedIndex = selectedIndex,
         onSelected = onSelected,
-        modifier = modifier,
+        modifier = modifier.then(viewportModifier),
         enabled = true,
         itemWidth = itemWidth,
         height = dockHeight,
-        geometryMode = FloatingBottomBarGeometryMode.TopNavigation,
+        geometryMode = geometryMode,
         indicatorHeight = (dockHeight - AppSpacingTokens.ExtraSmall * 2).coerceAtLeast(0.dp),
         labelFontSize = labelFontSize,
         containerHorizontalPadding = horizontalPadding,
@@ -250,18 +301,34 @@ internal fun HomeTopTabFloatingDock(
         longPressDragSelectionEnabled = scrollState != null,
         miuixBackdrop = miuixBackdrop,
         containerColorOverride = shellColor,
+        // Native Miuix shares the bottom navigation's themed selection fill.
+        // Glass retains its neutral lens and MD3 retains its own renderer defaults.
+        indicatorIdleSurfaceColorOverride = if (
+            LocalAppUiStyle.current == AppUiStyle.MIUIX && !liquidGlassEffectsEnabled
+        ) MaterialTheme.colorScheme.secondaryContainer else null,
         selectedTextColorOverride = selectedContentColor,
         unselectedTextColorOverride = unselectedContentColor,
         indicatorPositionProvider = indicatorPositionProvider,
         externalPagerMotionEffectsEnabled = indicatorPositionProvider != null,
         isScrollInProgressProvider = isScrollInProgressProvider,
+        isPagerDraggingProvider = isPagerDraggingProvider,
+        pagerTargetPositionProvider = pagerTargetPositionProvider,
+        isPagerNavigatingProvider = isPagerNavigatingProvider,
         onIndicatorPositionChanged = null,
         liquidGlassTuningOverride = liquidGlassTuning,
         onItemReselected = onReselected,
         scrollState = scrollState,
+        adaptIndicatorToLabel = if (liquidGlassEffectsEnabled) false else showText,
         itemContent = { index, label, selected ->
             val contentColor = LocalFloatingBottomBarContentColor.current
             val selectionScale = LocalFloatingBottomBarItemSelectionScale.current
+            // Glass renders this slot twice: an idle rail and a lens-clipped active
+            // copy. The active copy must stay filled even before the pager commits
+            // the hovered tab; its visible selection is owned by the moving mask.
+            // Non-glass rails retain the native selected-index contract.
+            val iconSelected = if (liquidGlassEffectsEnabled) {
+                LocalFloatingBottomBarActiveContent.current
+            } else selected
             val categoryKey = categoryKeys.getOrNull(index) ?: label
             if (showIcon) {
                 Box(
@@ -277,10 +344,21 @@ internal fun HomeTopTabFloatingDock(
                         imageVector = resolveTopTabCategoryIcon(
                             categoryKey = categoryKey,
                             iconFamily = iconFamily,
-                            selected = selected,
+                            selected = iconSelected,
                         ),
                         contentDescription = label,
-                        modifier = Modifier.size(resolveTopTabIconSizeDp(if (showText) 0 else 1).dp),
+                        // Standalone glass icons use AppIcon's default dimensions, just
+                        // like the bottom dock. Keep compact icon+text and native sizing.
+                        modifier = if (liquidGlassEffectsEnabled && !showText) {
+                            Modifier
+                        } else {
+                            Modifier.size(
+                                resolveHomeTopDockIconSizeDp(
+                                    if (showText) 0 else 1,
+                                    liquidGlassEnabled = liquidGlassEffectsEnabled,
+                                ).dp,
+                            )
+                        },
                         tint = contentColor,
                     )
                 }
@@ -295,11 +373,15 @@ internal fun HomeTopTabFloatingDock(
                         showIcon = showIcon,
                         fontScale = fontScale,
                     ),
-                    autoSize = TextAutoSize.StepBased(
-                        minFontSize = (9f / fontScale).sp,
-                        maxFontSize = labelFontSize,
-                        stepSize = (0.5f / fontScale).sp,
-                    ),
+                    // Pure text already shares bottom-dock typography and measured slots.
+                    // Glass scrolls overflow instead of shrinking these labels below it.
+                    autoSize = if (liquidGlassEffectsEnabled && !showIcon) null else {
+                        TextAutoSize.StepBased(
+                            minFontSize = (9f / fontScale).sp,
+                            maxFontSize = labelFontSize,
+                            stepSize = (0.5f / fontScale).sp,
+                        )
+                    },
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

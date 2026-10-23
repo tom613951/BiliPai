@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.search
 
+import com.android.purebilibili.core.util.LocalWindowSizeClass
 import com.android.purebilibili.core.ui.AppContentColors
 
 import androidx.compose.foundation.horizontalScroll
@@ -39,6 +40,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import com.android.purebilibili.R
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.Role
@@ -64,7 +67,6 @@ import com.android.purebilibili.core.ui.components.AppFilterChip
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.core.ui.components.AppTextButton
-import com.android.purebilibili.core.ui.components.VideoListLayoutToggle
 import com.android.purebilibili.data.repository.SearchDuration
 import com.android.purebilibili.data.repository.SearchOrder
 import java.text.SimpleDateFormat
@@ -84,12 +86,15 @@ fun SearchVideoFilterBar(
     miuixBackdrop: MiuixBackdrop? = null,
 ): Unit = AppExactTouchTargets {
     val orderOptions = remember { resolveSearchVideoOrderOptions() }
+    val centerWideFilters = LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 4.dp)
             .horizontalScroll(rememberScrollState()),
+        // Row's viewport minimum centers fitting content; overflowing labels still scroll from the start.
+        horizontalArrangement = if (centerWideFilters) Arrangement.Center else Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         orderOptions.forEach { order ->
@@ -106,17 +111,10 @@ fun SearchVideoFilterBar(
                 contentAlignment = Alignment.Center,
             ) {
                 AppText(
-                    text = resolveSearchOrderChipLabel(order),
+                    text = localizedSearchOrderLabel(order),
                     style = MaterialTheme.typography.labelMedium,
                     color = if (selected) {
-                        if (
-                            LocalAppUiStyle.current == com.android.purebilibili.core.theme.AppUiStyle.MIUIX &&
-                            !LocalAppThemeConfig.current.liquidGlassEnabled
-                        ) {
-                            com.android.purebilibili.core.ui.AppSurfaceTokens.onSurface()
-                        } else {
-                            com.android.purebilibili.core.ui.AppSurfaceTokens.primary()
-                        }
+                        com.android.purebilibili.core.ui.AppSurfaceTokens.primary()
                     } else {
                         com.android.purebilibili.core.ui.AppSurfaceTokens.onSurfaceVariantSummary()
                     },
@@ -139,8 +137,6 @@ fun SearchVideoFilterActions(
     onVideoTidChange: (Int) -> Unit,
     onPubTimeTypeChange: (SearchVideoPubTimeType) -> Unit,
     onCustomPubTimeRange: (Long, Long) -> Unit,
-    singleColumn: Boolean,
-    onLayoutToggle: () -> Unit,
     modifier: Modifier = Modifier,
     miuixBackdrop: MiuixBackdrop? = null,
 ) {
@@ -198,22 +194,6 @@ fun SearchVideoFilterActions(
                     modifier = Modifier.size(iconSize)
                 )
             }
-        }
-        BottomBarMatchedReusableLiquidDock(
-            shape = CircleShape,
-            backdrop = miuixBackdrop,
-            reuseEnabled = true,
-            elasticFeedbackEnabled = true,
-            useNeutralLiquidContainer = true,
-            shellLensIntensity = resolveFloatingDockGeometryScale(chromeSpec.clearActionSizeDp.toFloat()),
-            modifier = Modifier.size(actionSize),
-        ) { _ ->
-            VideoListLayoutToggle(
-                singleColumn = singleColumn,
-                onClick = onLayoutToggle,
-                modifier = Modifier.size(actionSize),
-                iconModifier = Modifier.size(iconSize),
-            )
         }
     }
 
@@ -273,7 +253,7 @@ private fun SearchVideoFilterSheetHost(
         )
     }
     AppModalBottomSheet(onDismissRequest = onDismiss) {
-        AppText("筛选", modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
+        AppText(stringResource(R.string.search_filter), modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
         sheetContent()
     }
 }
@@ -309,7 +289,7 @@ private fun SearchVideoFilterSheetContent(
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .padding(bottom = 32.dp)
     ) {
-        SearchFilterSectionTitle(text = "发布时间")
+        SearchFilterSectionTitle(text = stringResource(R.string.search_filter_publish_time))
         Spacer(modifier = Modifier.height(10.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -322,7 +302,7 @@ private fun SearchVideoFilterSheetContent(
                 SearchVideoPubTimeType.HALF_YEAR
             ).forEach { type ->
                 SearchFilterSelectableChip(
-                    label = type.label,
+                    label = localizedSearchPubTimeLabel(type),
                     selected = currentPubTimeType == type,
                     onClick = { onPubTimeTypeChange(type) }
                 )
@@ -342,7 +322,7 @@ private fun SearchVideoFilterSheetContent(
                 center = true
             )
             AppText(
-                text = "至",
+                text = stringResource(R.string.search_filter_to),
                 style = MaterialTheme.typography.bodyMedium,
                 color = AppContentColors.secondaryText()
             )
@@ -356,7 +336,7 @@ private fun SearchVideoFilterSheetContent(
         }
 
         Spacer(modifier = Modifier.height(20.dp))
-        SearchFilterSectionTitle(text = "内容时长")
+        SearchFilterSectionTitle(text = stringResource(R.string.search_filter_duration))
         Spacer(modifier = Modifier.height(10.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -364,7 +344,7 @@ private fun SearchVideoFilterSheetContent(
         ) {
             resolveSearchVideoDurationOptions().forEach { duration ->
                 SearchFilterSelectableChip(
-                    label = resolveSearchDurationChipLabel(duration),
+                    label = localizedSearchDurationLabel(duration),
                     selected = selectedDuration == duration,
                     onClick = { onDurationSelect(duration) }
                 )
@@ -372,7 +352,7 @@ private fun SearchVideoFilterSheetContent(
         }
 
         Spacer(modifier = Modifier.height(20.dp))
-        SearchFilterSectionTitle(text = "内容分区")
+        SearchFilterSectionTitle(text = stringResource(R.string.search_filter_zone))
         Spacer(modifier = Modifier.height(10.dp))
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -380,7 +360,7 @@ private fun SearchVideoFilterSheetContent(
         ) {
             zoneOptions.forEach { zone ->
                 SearchFilterSelectableChip(
-                    label = zone.label,
+                    label = localizedSearchZoneLabel(zone.tid),
                     selected = currentVideoTid == zone.tid,
                     onClick = { onVideoTidChange(zone.tid) }
                 )
@@ -433,6 +413,10 @@ private fun SearchFilterSelectableChip(
     center: Boolean = false
 ) {
     val glassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
+    val selectedColors = resolveSearchSelectionChipColors(
+        isSelected = true,
+        colorScheme = MaterialTheme.colorScheme,
+    )
     AppFilterChip(
         selected = selected,
         onClick = onClick,
@@ -440,6 +424,9 @@ private fun SearchFilterSelectableChip(
         label = {
             AppText(
                 text = label,
+                // Inherit the renderer's paired content color: Miuix owns its native fill,
+                // while MD3 receives the readable selection pair below. An accent override
+                // becomes invisible on Miuix's accent-filled selected chip, in either glass mode.
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
                 textAlign = if (center) TextAlign.Center else TextAlign.Start,
@@ -447,8 +434,8 @@ private fun SearchFilterSelectableChip(
             )
         },
         colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            selectedLabelColor = AppContentColors.primaryText(),
+            selectedContainerColor = selectedColors.backgroundColor,
+            selectedLabelColor = selectedColors.textColor,
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
                 alpha = if (glassEnabled) 0.88f else 0.55f
             ),
@@ -492,3 +479,60 @@ private fun SearchDatePickerDialog(
         DatePicker(state = state)
     }
 }
+
+
+@Composable
+internal fun localizedSearchOrderLabel(order: SearchOrder): String = stringResource(when (order) {
+    SearchOrder.TOTALRANK -> R.string.search_order_default
+    SearchOrder.CLICK -> R.string.search_order_views
+    SearchOrder.PUBDATE -> R.string.search_order_newest
+    SearchOrder.DM -> R.string.search_order_danmaku
+    SearchOrder.STOW -> R.string.search_order_favorites
+    SearchOrder.SCORES -> R.string.search_order_comments
+    SearchOrder.ATTENTION -> R.string.search_order_likes
+})
+
+@Composable
+private fun localizedSearchDurationLabel(duration: SearchDuration): String = stringResource(when (duration) {
+    SearchDuration.ALL -> R.string.search_duration_all
+    SearchDuration.UNDER_10MIN -> R.string.search_duration_under_10
+    SearchDuration.TEN_TO_30MIN -> R.string.search_duration_10_30
+    SearchDuration.THIRTY_TO_60MIN -> R.string.search_duration_30_60
+    SearchDuration.OVER_60MIN -> R.string.search_duration_over_60
+})
+
+@Composable
+private fun localizedSearchPubTimeLabel(type: SearchVideoPubTimeType): String = stringResource(when (type) {
+    SearchVideoPubTimeType.ALL -> R.string.search_pub_all
+    SearchVideoPubTimeType.DAY -> R.string.search_pub_day
+    SearchVideoPubTimeType.WEEK -> R.string.search_pub_week
+    SearchVideoPubTimeType.HALF_YEAR -> R.string.search_pub_half_year
+    SearchVideoPubTimeType.CUSTOM -> R.string.search_pub_custom
+})
+
+@Composable
+private fun localizedSearchZoneLabel(tid: Int): String = stringResource(when (tid) {
+    0 -> R.string.search_zone_all
+    1 -> R.string.search_zone_animation
+    13 -> R.string.search_zone_anime
+    167 -> R.string.search_zone_chinese_animation
+    3 -> R.string.search_zone_music
+    129 -> R.string.search_zone_dance
+    4 -> R.string.search_zone_games
+    36 -> R.string.search_zone_knowledge
+    188 -> R.string.search_zone_technology
+    234 -> R.string.search_zone_sports
+    223 -> R.string.search_zone_auto
+    160 -> R.string.search_zone_life
+    221 -> R.string.search_zone_food
+    217 -> R.string.search_zone_animals
+    119 -> R.string.search_zone_kichiku
+    115 -> R.string.search_zone_fashion
+    202 -> R.string.search_zone_news
+    5 -> R.string.search_zone_entertainment
+    181 -> R.string.search_zone_film_tv
+    177 -> R.string.search_zone_documentary
+    23 -> R.string.search_zone_movie
+    11 -> R.string.search_zone_television
+    else -> R.string.search_zone_all
+})

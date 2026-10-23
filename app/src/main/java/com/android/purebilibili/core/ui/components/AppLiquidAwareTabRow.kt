@@ -1,6 +1,10 @@
 package com.android.purebilibili.core.ui.components
 
+import com.android.purebilibili.core.util.LocalWindowSizeClass
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +50,9 @@ fun <T> AppThemeAdaptiveTabRow(
     enabled: Boolean = true,
     scrollable: Boolean = false,
     minTabWidth: Dp = Dp.Unspecified,
+    liquidGlassLabelHorizontalPadding: Dp? = null,
+    // Glass-only: fill each measured slot when short labels need uniform edge insets.
+    liquidGlassAdaptIndicatorToLabel: Boolean = true,
     compactMiuixWhenTwoOptions: Boolean = true,
     height: Dp = AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
     indicatorHeight: Dp = AppChromeSizeTokens.BottomBarMatchedSegmentedIndicatorHeightDp.dp,
@@ -58,6 +65,9 @@ fun <T> AppThemeAdaptiveTabRow(
     role: AppTabRowRole,
     indicatorPositionProvider: (() -> Float)? = null,
     isScrollInProgressProvider: () -> Boolean = { false },
+    liquidGlassAnimateLabelWidthChanges: Boolean = false,
+    // Explicit fixed slots; callers can disable rail scrolling without losing indicator gestures.
+    forceEqualWidth: Boolean = false,
 ) {
     AppLiquidAwareTabRow(
         options = options,
@@ -67,6 +77,8 @@ fun <T> AppThemeAdaptiveTabRow(
         enabled = enabled,
         scrollable = scrollable,
         minTabWidth = minTabWidth,
+        liquidGlassLabelHorizontalPadding = liquidGlassLabelHorizontalPadding,
+        liquidGlassAdaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
         compactMiuixWhenTwoOptions = compactMiuixWhenTwoOptions,
         height = height,
         indicatorHeight = indicatorHeight,
@@ -79,6 +91,8 @@ fun <T> AppThemeAdaptiveTabRow(
         role = role,
         indicatorPositionProvider = indicatorPositionProvider,
         isScrollInProgressProvider = isScrollInProgressProvider,
+        liquidGlassAnimateLabelWidthChanges = liquidGlassAnimateLabelWidthChanges,
+        forceEqualWidth = forceEqualWidth,
     )
 }
 
@@ -96,6 +110,9 @@ fun <T> AppLiquidAwareTabRow(
     enabled: Boolean = true,
     scrollable: Boolean = false,
     minTabWidth: Dp = Dp.Unspecified,
+    liquidGlassLabelHorizontalPadding: Dp? = null,
+    // Glass-only: fill each measured slot when short labels need uniform edge insets.
+    liquidGlassAdaptIndicatorToLabel: Boolean = true,
     compactMiuixWhenTwoOptions: Boolean = true,
     height: Dp = AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
     indicatorHeight: Dp = AppChromeSizeTokens.BottomBarMatchedSegmentedIndicatorHeightDp.dp,
@@ -108,38 +125,81 @@ fun <T> AppLiquidAwareTabRow(
     role: AppTabRowRole,
     indicatorPositionProvider: (() -> Float)? = null,
     isScrollInProgressProvider: () -> Boolean = { false },
+    liquidGlassAnimateLabelWidthChanges: Boolean = false,
+    // Fixed slots apply to all renderers only when explicitly requested by a page.
+    forceEqualWidth: Boolean = false,
 ) {
     if (options.isEmpty()) return
-    val labels = remember(options) { options.map { it.label } }
-    val resolvedMinTabWidth = resolveAppAdaptiveTabMinWidth(minTabWidth)
-    val resolvedLabelFontSize = if (labelFontSize.isSpecified) {
-        labelFontSize
-    } else {
-        com.android.purebilibili.core.ui.appTabLabelFontSize()
+    // Material boundary: glass-only spacing, wrapping and typography must never change
+    // the disabled MD3/Miuix paths. Keep their original defaults when adding glass tuning.
+    val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    // Opaque Miuix rails own their measurement and scrolling; glass capture
+    // margins must not consume the space reserved for neighbouring actions.
+    if (com.android.purebilibili.core.ui.isMiuixNonGlassEnabled()) {
+        AppNativeTabRow(
+            options = options,
+            selectedValue = selectedValue,
+            onSelectionChange = onSelectionChange,
+            modifier = modifier,
+            enabled = enabled,
+            scrollable = scrollable,
+            forceEqualWidth = forceEqualWidth,
+            centerContent = centerContent,
+            minTabWidth = resolveAppAdaptiveTabMinWidth(minTabWidth),
+            compactMiuixWhenTwoOptions = compactMiuixWhenTwoOptions,
+            labelFontSize = if (labelFontSize.isSpecified) labelFontSize else
+                com.android.purebilibili.core.ui.appTabLabelFontSize(),
+            indicatorPositionProvider = indicatorPositionProvider,
+        )
+        return
     }
+    val labels = remember(options) { options.map { it.label } }
+    val measurementLabels = if (liquidGlassEnabled) options.map { it.measurementLabel ?: it.label } else labels
+    val resolvedMinTabWidth = resolveAppAdaptiveTabMinWidth(minTabWidth)
+    val resolvedLabelFontSize = com.android.purebilibili.core.ui.appTabLabelFontSize(labelFontSize)
     // Measure once before choosing the material. Glass and native renderers own
     // the same slots, including font scaling and long labels.
-    val readableTabWidth = rememberMeasuredTabMinWidth(
+    val measuredTabWidth = rememberMeasuredTabMinWidth(
         requestedMinWidth = resolvedMinTabWidth,
-        labels = labels,
+        labels = measurementLabels,
         textStyle = MaterialTheme.typography.labelLarge.copy(
             fontSize = resolvedLabelFontSize,
             fontWeight = FontWeight.SemiBold,
         ),
+        horizontalPadding = if (liquidGlassEnabled) {
+            liquidGlassLabelHorizontalPadding ?: resolveLiquidGlassTabSlotHorizontalPadding(options.size)
+        } else 12.dp,
     )
     val selectedIndex = options.indexOfFirst { it.value == selectedValue }.coerceAtLeast(0)
     val resolvedDragSelectionEnabled = dragSelectionEnabled ?: (enabled && options.size > 1)
+    // Data-driven width changes are opt-in and glass-only. Native MD3/Miuix keep
+    // their measured slots and defaults, even when a caller enables this hint.
+    // A reservation is a geometry contract: metadata updates must not start width animations.
+    val animateLabelWidths = liquidGlassEnabled && liquidGlassAnimateLabelWidthChanges &&
+        options.none { it.measurementLabel != null } &&
+        com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
+        !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+    val readableTabWidth = if (animateLabelWidths) {
+        animateDpAsState(
+            targetValue = measuredTabWidth,
+            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            label = "glassAsyncAdaptiveTabWidth",
+        ).value
+    } else measuredTabWidth
     val nativePresentation = when (role) {
         AppTabRowRole.PRIMARY, AppTabRowRole.FILTER -> AppTabRowIndicatorPresentation.TONAL_PILL
         AppTabRowRole.SECONDARY -> AppTabRowIndicatorPresentation.UNDERLINE
     }
     val isCompact = (compactMiuixWhenTwoOptions && options.size <= 2) ||
         (minTabWidth.isSpecified && !scrollable)
+    // Secondary categories and filters wrap their labels; primary navigation may fill its track.
+    val contentSizedRail = !forceEqualWidth && (isCompact || scrollable ||
+        (liquidGlassEnabled && role != AppTabRowRole.PRIMARY))
     BoxWithConstraints(modifier = modifier, contentAlignment = if (centerContent) Alignment.Center else Alignment.CenterStart) {
         val contentWidth = readableTabWidth * options.size + AppSpacingTokens.ExtraSmall * 2
         // A wide label is not itself overflow. Fitting rails must stay outside
         // the rounded scroll viewport so a pressed glass lens can bloom freely.
-        val needsHorizontalScroll = scrollable &&
+        val needsHorizontalScroll = !forceEqualWidth && (if (liquidGlassEnabled) contentSizedRail else scrollable) &&
             constraints.hasBoundedWidth && contentWidth > maxWidth
         if (needsHorizontalScroll) {
             val indicatorCaptureInsets = resolveFloatingDockCaptureInsets(
@@ -178,14 +238,18 @@ fun <T> AppLiquidAwareTabRow(
                 )
                 BottomBarLiquidSegmentedControl(
                     items = labels,
+                    liquidGlassMeasurementLabels = measurementLabels,
+                    liquidGlassAnimateLabelWidthChanges = animateLabelWidths,
+                    liquidGlassLabelHorizontalPadding = liquidGlassLabelHorizontalPadding,
+                    liquidGlassAdaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
                     selectedIndex = selectedIndex,
                     onSelected = { index ->
                         options.getOrNull(index)?.let { onSelectionChange(it.value) }
                     },
                     modifier = Modifier.liquidDockViewport(
-                    verticalOverflow = indicatorOverflow,
-                    horizontalOverflow = indicatorHorizontalOverflow,
-                ),
+                        verticalOverflow = indicatorOverflow,
+                        horizontalOverflow = indicatorHorizontalOverflow,
+                    ),
                     scrollState = scrollState,
                     enabled = enabled,
                     itemWidth = readableTabWidth,
@@ -205,7 +269,9 @@ fun <T> AppLiquidAwareTabRow(
                         // During pager motion the shared scroll helper lock-steps the rail
                         // with the continuous indicator position. Keep edge-follow for idle
                         // indicator nudges so two scroll owners never compete.
-                        if (pagerPositionProvider == null || !pagerMotionActiveProvider()) {
+                        if (!scrollState.isScrollInProgress &&
+                            (pagerPositionProvider == null || !pagerMotionActiveProvider())
+                        ) {
                             scrollState.dispatchRawDelta(
                                 resolveScrollableTabIndicatorFollowDeltaPx(
                                     indicatorPosition = position,
@@ -225,7 +291,7 @@ fun <T> AppLiquidAwareTabRow(
                 )
             }
         } else {
-            val rowModifier = if (isCompact || scrollable) {
+            val rowModifier = if (contentSizedRail) {
                 // A scrollable rail keeps its leading edge even when its contents fit.
                 // Centering it in a weighted slot shifts detail tabs away from the page edge.
                 // Standalone rails center; callers with adjacent actions retain the start anchor.
@@ -237,20 +303,31 @@ fun <T> AppLiquidAwareTabRow(
             }
             // A short scrollable rail still owns fixed glass slots, even when it
             // fits without scrolling. Do not redistribute them across the viewport.
-            val rowItemWidth = if (isCompact || scrollable) {
+            val rowItemWidth = if (contentSizedRail) {
                 readableTabWidth
             } else {
                 null
             }
             BottomBarLiquidSegmentedControl(
                 items = labels,
+                liquidGlassMeasurementLabels = measurementLabels,
+                liquidGlassAnimateLabelWidthChanges = animateLabelWidths,
+                liquidGlassLabelHorizontalPadding = liquidGlassLabelHorizontalPadding,
+                liquidGlassAdaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
                 selectedIndex = selectedIndex,
                 onSelected = { index ->
                     options.getOrNull(index)?.let { onSelectionChange(it.value) }
                 },
                 modifier = rowModifier,
+                // Full-width primary shells also contain a compact glass child. Honor the caller's
+                // centering intent only in wide windows, with separate native and glass opt-ins.
+                centerGlassContent = centerContent &&
+                    LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
+                centerNativeContent = centerContent &&
+                    LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
                 enabled = enabled,
                 itemWidth = rowItemWidth,
+                forceEqualWidth = forceEqualWidth,
                 height = height,
                 indicatorHeight = indicatorHeight,
                 labelFontSize = resolvedLabelFontSize,

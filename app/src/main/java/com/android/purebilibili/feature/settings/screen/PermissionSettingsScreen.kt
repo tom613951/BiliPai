@@ -1,6 +1,8 @@
 // 文件路径: feature/settings/PermissionSettingsScreen.kt
 package com.android.purebilibili.feature.settings
 
+import com.android.purebilibili.core.theme.LocalAppUiStyle
+import com.android.purebilibili.core.theme.AppUiStyle
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
@@ -26,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
@@ -86,49 +89,49 @@ fun PermissionSettingsContent(
     val permissions = remember(rememberedSecondaryTextColor) {
         listOf(
             PermissionInfo(
-                name = "网络访问",
+                nameResId = R.string.permission_network_access,
                 permission = Manifest.permission.INTERNET,
-                description = "加载视频、图片和用户数据",
+                descriptionResId = R.string.permission_network_access_description,
                 iconResId = R.drawable.ms_wifi_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = true,
                 alwaysGranted = true
             ),
             PermissionInfo(
-                name = "网络状态",
+                nameResId = R.string.permission_network_status,
                 permission = Manifest.permission.ACCESS_NETWORK_STATE,
-                description = "检测网络连接状态，优化加载体验",
+                descriptionResId = R.string.permission_network_status_description,
                 iconResId = R.drawable.ms_bar_chart_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = true,
                 alwaysGranted = true
             ),
             PermissionInfo(
-                name = "发送通知",
+                nameResId = R.string.permission_notifications,
                 permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     Manifest.permission.POST_NOTIFICATIONS
                 } else {
                     "android.permission.POST_NOTIFICATIONS"
                 },
-                description = "显示媒体播放控制，以及已开启的消息、关注更新和开播提醒",
+                descriptionResId = R.string.permission_notifications_description,
                 iconResId = R.drawable.ms_notifications_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = false,
                 alwaysGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
             ),
             PermissionInfo(
-                name = "后台运行服务",
+                nameResId = R.string.permission_background_service,
                 permission = Manifest.permission.FOREGROUND_SERVICE,
-                description = "保持后台播放，并按需检查新消息",
+                descriptionResId = R.string.permission_background_service_description,
                 iconResId = R.drawable.ms_play_circle_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = true,
                 alwaysGranted = true
             ),
             PermissionInfo(
-                name = "媒体播放服务",
+                nameResId = R.string.permission_media_playback_service,
                 permission = "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-                description = "允许应用在后台继续播放视频",
+                descriptionResId = R.string.permission_media_playback_service_description,
                 iconResId = R.drawable.ms_audio_file_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = true,
@@ -136,14 +139,10 @@ fun PermissionSettingsContent(
             ),
             //  DLNA 投屏所需权限
             PermissionInfo(
-                name = "本地网络（DLNA）",
+                nameResId = if (Build.VERSION.SDK_INT >= 37) R.string.permission_local_network_cast else R.string.permission_local_network_dlna,
                 permission = localNetworkRuntimePermissions().firstOrNull()
                     ?: "android.permission.ACCESS_LOCAL_NETWORK",
-                description = if (Build.VERSION.SDK_INT >= 37) {
-                    "仅在搜索和连接局域网 DLNA 设备时使用；Google Cast 不需要此权限"
-                } else {
-                    "用于搜索和连接附近的 DLNA 投屏设备"
-                },
+                descriptionResId = if (Build.VERSION.SDK_INT >= 37) R.string.permission_local_network_cast_description else R.string.permission_local_network_dlna_description,
                 iconResId = R.drawable.ms_tv_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = false,
@@ -152,9 +151,9 @@ fun PermissionSettingsContent(
             ),
              // 📁 存储写入（使用 MediaStore/SAF，不申请所有文件访问）
             PermissionInfo(
-                name = "保存图片和下载",
+                nameResId = R.string.permission_save_images_downloads,
                 permission = "scoped_storage",
-                description = "图片和截图保存到相册；下载导出需授权文件夹",
+                descriptionResId = R.string.permission_save_images_downloads_description,
                 iconResId = R.drawable.ms_folder_shared_24,
                 iconTint = rememberedSecondaryTextColor,
                 isNormal = true,
@@ -194,7 +193,7 @@ fun PermissionSettingsContent(
             Spacer(modifier = Modifier.height(LocalSettingsTopContentPadding.current))
             Box(modifier = Modifier.entrance()) {
                 AppText(
-                    text = "以下是应用所需的权限及其用途说明。普通权限在安装时自动授予，无需手动操作。",
+                    text = stringResource(R.string.permission_settings_intro),
                     style = MaterialTheme.typography.bodySmall,
                     color = AppContentColors.secondaryText(),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -202,7 +201,7 @@ fun PermissionSettingsContent(
             }
 
             Box(modifier = Modifier.entrance()) {
-                AppPreferenceSectionTitle("需要授权的权限")
+                AppPreferenceSectionTitle(stringResource(R.string.permission_settings_required_section))
             }
             Box(modifier = Modifier.entrance()) {
                 AppPreferenceGroup {
@@ -218,7 +217,7 @@ fun PermissionSettingsContent(
             }
 
             Box(modifier = Modifier.entrance()) {
-                AppPreferenceSectionTitle("自动授予的权限")
+                AppPreferenceSectionTitle(stringResource(R.string.permission_settings_auto_granted_section))
             }
             Box(modifier = Modifier.entrance()) {
                 AppPreferenceGroup {
@@ -237,7 +236,7 @@ fun PermissionSettingsContent(
                 Column {
                     Spacer(modifier = Modifier.height(16.dp))
                     AppText(
-                        text = "BiliPai 仅在必要功能的前提下申请部分敏感权限。",
+                        text = stringResource(R.string.permission_settings_footer),
                         style = MaterialTheme.typography.bodySmall,
                         color = AppContentColors.secondaryText(),
                         modifier = Modifier.padding(horizontal = 16.dp),
@@ -248,9 +247,9 @@ fun PermissionSettingsContent(
 }
 
 private data class PermissionInfo(
-    val name: String,
+    @StringRes val nameResId: Int,
     val permission: String,
-    val description: String,
+    @StringRes val descriptionResId: Int,
     @DrawableRes val iconResId: Int,
     val iconTint: Color,
     val isNormal: Boolean,  // 是否是普通权限（自动授予）
@@ -268,6 +267,10 @@ private fun PermissionItem(
     onOpenSettings: (() -> Unit)?
 ) {
     val permissionIcon = rememberMaterialSymbol(info.iconResId)
+    val name = stringResource(info.nameResId)
+    val description = stringResource(info.descriptionResId)
+    val grantedLabel = stringResource(R.string.permission_status_granted)
+    val deniedLabel = stringResource(R.string.permission_status_not_granted)
     val visualSpec = rememberAdaptiveListVisualCapabilities().componentSpec
     val effectiveIconTint = rememberAdaptivePreferenceIconContainerColor(info.iconTint)
     val iconContentColor = rememberAdaptivePreferenceIconContentColor(effectiveIconTint)
@@ -281,7 +284,12 @@ private fun PermissionItem(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 图标
-        Box(
+        if (LocalAppUiStyle.current == AppUiStyle.MIUIX || com.android.purebilibili.core.ui.components.useColorfulPreferenceIcons()) {
+            SettingsFunctionIcon(
+                title = name,
+                imageVector = permissionIcon,
+            )
+        } else Box(
             modifier = Modifier
                 .size(visualSpec.iconContainerSizeDp.dp)
                 .adaptiveSquircleBackground(
@@ -303,13 +311,13 @@ private fun PermissionItem(
         // 名称和描述
         Column(modifier = Modifier.weight(1f)) {
             AppText(
-                text = info.name,
+                text = name,
                 style = MaterialTheme.typography.bodyLarge,
                 color = AppContentColors.primaryText()
             )
             Spacer(modifier = Modifier.height(2.dp))
             AppText(
-                text = info.description,
+                text = description,
                 style = MaterialTheme.typography.bodySmall,
                 color = AppContentColors.secondaryText()
             )
@@ -319,7 +327,7 @@ private fun PermissionItem(
         if (isGranted) {
             AppIcon(
                 com.android.purebilibili.feature.settings.rememberMaterialSymbol(com.android.purebilibili.R.drawable.ms_check_circle_outline_24),
-                contentDescription = "已授权",
+                contentDescription = grantedLabel,
                 tint = grantedTint,
                 modifier = Modifier.size(22.dp)
             )
@@ -327,7 +335,7 @@ private fun PermissionItem(
             // 未授权时显示红色的 X
             AppIcon(
                 com.android.purebilibili.feature.settings.rememberMaterialSymbol(com.android.purebilibili.R.drawable.ms_cancel_24),
-                contentDescription = "未授权",
+                contentDescription = deniedLabel,
                 tint = deniedTint,
                 modifier = Modifier.size(22.dp)
             )

@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.home.components.cards
 
+import com.android.purebilibili.core.ui.wallpaper.WallpaperReadabilityProfile
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
@@ -16,7 +17,8 @@ data class WallpaperPalette(
     val topColor: Color,
     val bottomColor: Color,
     val dominantColor: Color = topColor,
-    val stops: List<Color> = listOf(topColor, bottomColor)
+    val stops: List<Color> = listOf(topColor, bottomColor),
+    val readability: WallpaperReadabilityProfile? = null,
 )
 
 /**
@@ -38,6 +40,9 @@ val LocalHomeScrollTickProvider = staticCompositionLocalOf<(() -> Int)?> { null 
 // Keep the state objects stable; only blur consumers subscribe to motion boundaries.
 val LocalHomeCardScrolling = compositionLocalOf<State<Boolean>?> { null }
 val LocalHomeCardTransitionRunning = compositionLocalOf<State<Boolean>?> { null }
+
+/** Only home defers optional network/color work; other card callers keep normal behavior. */
+internal val LocalHomeCardAuxiliaryWorkAllowed = compositionLocalOf { true }
 
 /**
  * 纯 Kotlin 采样区域定义（无 Android 运行库依赖，便于快速单元测试）

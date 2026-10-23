@@ -13,7 +13,7 @@ internal fun DynamicAdaptiveSegmentedControl(
     items: List<String>,
     selectedIndex: Int,
     onSelected: (Int) -> Unit,
-    itemWidth: Dp,
+    itemWidth: Dp?,
     height: Dp,
     indicatorHeight: Dp,
     labelFontSize: TextUnit,
@@ -22,6 +22,8 @@ internal fun DynamicAdaptiveSegmentedControl(
 ) {
     if (items.isEmpty()) return
     BottomBarLiquidSegmentedControl(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         items = items,
         selectedIndex = selectedIndex,
         onSelected = onSelected,

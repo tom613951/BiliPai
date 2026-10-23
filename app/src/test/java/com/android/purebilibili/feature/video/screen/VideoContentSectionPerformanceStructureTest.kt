@@ -25,10 +25,10 @@ class VideoContentSectionPerformanceStructureTest {
         val source = loadSource(
             "app/src/main/java/com/android/purebilibili/feature/video/screen/VideoContentSection.kt"
         )
-        val commentTabSource = source.substringAfter("private fun VideoCommentTab(")
+        val commentTabSource = source.substringAfter("internal fun VideoCommentTab(")
 
         assertTrue(commentTabSource.contains("val shouldLoadMore by remember("))
-        assertTrue(commentTabSource.contains("LaunchedEffect(shouldLoadMore)"))
+        assertTrue(commentTabSource.contains("LaunchedEffect(shouldLoadMore, isRepliesRefreshing, repliesError, paginationPage)"))
         assertFalse(
             commentTabSource.contains(
                 "item {\n                    val shouldLoadMore by remember("
@@ -61,15 +61,21 @@ class VideoContentSectionPerformanceStructureTest {
         assertTrue(source.contains("enabled = tabBarCollapseEnabled"))
         assertFalse(source.contains("visible = !collapseTabBarForCommentScroll"))
         // Sort filter bar lives in the top chrome beside the comment tab.
-        assertTrue(source.contains("pagerState.currentPage == 1 &&"))
-        assertTrue(source.contains("visible = commentListAtTop"))
+        // The glass overlay leaves with list scrolling; native visibility stays unchanged.
+        val sharedHeader = loadSource(
+            "app/src/main/java/com/android/purebilibili/feature/video/ui/components/VideoCommentFloatingHeader.kt"
+        )
+        assertTrue(source.contains("VideoCommentFloatingHeader("))
+        assertTrue(sharedHeader.contains("visible = !liquidGlassEnabled || listAtTop"))
+        assertFalse(sharedHeader.contains("showNativeTitle"))
+        assertTrue(source.contains("val commentListAtTop by remember(commentListState)"))
+        assertTrue(source.contains("remember(tabBarScrollHideEnabled, pagerState)"))
+        assertTrue(source.contains("showHeader = !immersiveVideoContentChromeEnabled && !liquidGlassEnabled"))
+        assertTrue(source.contains("floatingHeaderContentPadding = if (immersiveVideoContentChromeEnabled || liquidGlassEnabled) 46.dp else 0.dp"))
         assertTrue(source.contains("CommentSortFilterBar("))
-        val sortControlSource = source
-            .substringAfter("CommentSortFilterBar(")
-            .substringBefore("AppLiquidGlassBackToTopButton(")
-        assertTrue(sortControlSource.contains("liquidGlassEffectsEnabled = liquidGlassEnabled"))
-        assertTrue(sortControlSource.contains(".align(Alignment.TopEnd)"))
-        assertFalse(sortControlSource.contains("visible = commentListAtTop"))
+        assertTrue(sharedHeader.contains("liquidGlassEffectsEnabled = liquidGlassEnabled"))
+        assertTrue(sharedHeader.contains(".align(Alignment.TopEnd)"))
+        assertTrue(sharedHeader.contains(".align(Alignment.CenterEnd)"))
         assertFalse(source.contains("(!tabBarCollapseEnabled || commentListAtTop)"))
         assertTrue(source.contains("顶部标签与评论标题/排序共用同一张渐进模糊材质"))
         assertTrue(source.contains("resolveVideoContentCommentChromeHeightFraction("))
@@ -77,7 +83,7 @@ class VideoContentSectionPerformanceStructureTest {
         assertTrue(source.contains("progressiveTopFadeEnabled"))
         assertTrue(source.contains(".topSolidProgressiveFade("))
         assertTrue(source.contains("showHeader = !immersiveVideoContentChromeEnabled"))
-        assertTrue(source.contains("shouldShowVideoContentTabBarDanmakuActions(selectedTabIndex)"))
+        assertTrue(source.contains("showDanmakuActions && shouldShowVideoContentTabBarDanmakuActions(selectedTabIndex)"))
     }
 
     private fun loadSource(path: String): String {

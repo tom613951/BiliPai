@@ -1,6 +1,8 @@
 package com.android.purebilibili.feature.video.player
 
+import com.android.purebilibili.core.ui.components.rememberFollowActionWithConfirmation
 import com.android.purebilibili.core.ui.AppContentColors
+import com.android.purebilibili.core.ui.resolveButtonContentColor
 
 import coil3.request.crossfade
 import com.android.purebilibili.core.ui.components.AppIcon
@@ -213,10 +215,22 @@ fun UpInfoSection(
             }
         }
 
+        // Pair the follow label and plus icon with the actual fill, including bright custom seeds.
+        val followContainer = if (isFollowing) MaterialTheme.colorScheme.surfaceVariant else AppContentColors.accent()
+        val followContent = resolveButtonContentColor(
+            followContainer,
+            if (isFollowing) AppContentColors.secondaryText() else AppContentColors.onAccent(),
+            MaterialTheme.colorScheme,
+        )
         // 关注按钮
         AppSurface(
-            onClick = onFollowClick,
-            color = if (isFollowing) MaterialTheme.colorScheme.surfaceVariant else AppContentColors.accent(),
+            onClick = rememberFollowActionWithConfirmation(
+                targetKey = info.owner.mid,
+                userName = info.owner.name,
+                isFollowing = isFollowing,
+                onFollowClick = onFollowClick,
+            ),
+            color = followContainer,
             shape = AppShapes.container(ContainerLevel.Card),
             modifier = Modifier.height(32.dp)
         ) {
@@ -228,7 +242,7 @@ fun UpInfoSection(
                     AppIcon(
                         Icons.Outlined.Add,
                         contentDescription = null,
-                        tint = Color.White,
+                        tint = followContent,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(Modifier.width(2.dp))
@@ -236,7 +250,7 @@ fun UpInfoSection(
                 AppText(
                     text = if (isFollowing) "已关注" else "关注",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                    color = if (isFollowing) AppContentColors.secondaryText() else Color.White
+                    color = followContent
                 )
             }
         }

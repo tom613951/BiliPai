@@ -23,6 +23,7 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.asPainter
 import coil3.imageLoader
+import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 
 /** Defaults to normal loading outside the retained bottom-tab page scope. */
@@ -40,21 +41,38 @@ internal fun PageAwareAsyncImage(
     imageLoader: ImageLoader? = null,
     contentScale: ContentScale = ContentScale.Fit,
     alignment: Alignment = Alignment.Center,
+    loadingAllowed: Boolean = LocalPageImageLoadingAllowed.current,
+    onError: ((AsyncImagePainter.State.Error) -> Unit)? = null,
     onSuccess: ((AsyncImagePainter.State.Success) -> Unit)? = null,
 ) {
     val context = LocalContext.current
+    val resolvedImageLoader = imageLoader ?: context.imageLoader
     val request = model as? ImageRequest
     val imageKey = request?.data ?: model
-    var retainedImage by remember(imageKey, request?.memoryCacheKey, request?.memoryCacheKeyExtras, imageLoader) {
+    var retainedImage by remember(imageKey, request?.memoryCacheKey, request?.memoryCacheKeyExtras, resolvedImageLoader) {
         mutableStateOf<coil3.Image?>(null)
     }
-    val retainedPainter = remember(retainedImage, context) {
-        retainedImage?.asPainter(context, FilterQuality.Low)
+    // A cached placeholder can already be visible before onSuccess, or this slot
+    // can remount while its page is paused. Replay only this request's exact cache
+    // identity; pausing must not discard a decoded cover or start another request.
+    val cachedImage = remember(
+        imageKey, request?.memoryCacheKey, request?.memoryCacheKeyExtras, request?.memoryCachePolicy,
+        resolvedImageLoader, loadingAllowed,
+    ) {
+        if (!loadingAllowed && request?.memoryCachePolicy?.readEnabled == true) {
+            request.memoryCacheKey?.let { key ->
+                resolvedImageLoader.memoryCache?.get(MemoryCache.Key(key, request.memoryCacheKeyExtras))?.image
+            }
+        } else null
     }
-    if (LocalPageImageLoadingAllowed.current) {
+    val replayImage = retainedImage ?: cachedImage
+    val retainedPainter = remember(replayImage, context) {
+        replayImage?.asPainter(context, FilterQuality.Low)
+    }
+    if (loadingAllowed) {
         AsyncImage(
             model = model,
-            imageLoader = imageLoader ?: context.imageLoader,
+            imageLoader = resolvedImageLoader,
             contentDescription = contentDescription,
             modifier = modifier,
             placeholder = retainedPainter,
@@ -64,12 +82,13 @@ internal fun PageAwareAsyncImage(
                 retainedImage = it.result.image
                 onSuccess?.invoke(it)
             },
+            onError = onError,
         )
     } else {
         // AsyncImage's forgotten callback runs during apply. Restore drawable visibility
         // afterwards for static drawing, without restarting its frame clock.
         SideEffect {
-            (retainedImage as? DrawableImage)?.drawable?.let { drawable ->
+            (replayImage as? DrawableImage)?.drawable?.let { drawable ->
                 drawable.setVisible(true, false)
                 (drawable as? Animatable)?.stop()
             }

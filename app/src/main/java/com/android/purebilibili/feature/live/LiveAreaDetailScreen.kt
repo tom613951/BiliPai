@@ -27,6 +27,7 @@ import com.android.purebilibili.core.util.responsiveContentWidth
 import com.android.purebilibili.data.model.response.LiveRoom
 import com.android.purebilibili.data.model.response.LiveSecondSortTag
 import com.android.purebilibili.data.repository.LiveRepository
+import com.android.purebilibili.navigation.animatePagerSelection
 import kotlinx.coroutines.launch
 
 private data class LiveAreaTab(val id: Int, val parentId: Int, val title: String, val cover: String = "")
@@ -90,12 +91,16 @@ fun LiveAreaDetailScreen(
                 if (metadataLoaded) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         AppThemeAdaptiveTabRow(
+                            // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                             role = AppTabRowRole.SECONDARY,
                             options = tabs.mapIndexed { index, tab -> AppSegmentOption(index, tab.title) },
                             selectedValue = pager.currentPage,
                             scrollable = true,
                             centerContent = false,
-                            onSelectionChange = { target -> scope.launch { pager.scrollToPage(target) } },
+                            onSelectionChange = { target ->
+                                scope.launch { animatePagerSelection(pager, target) }
+                            },
                             indicatorPositionProvider = { pager.currentPage + pager.currentPageOffsetFraction },
                             isScrollInProgressProvider = { pager.isScrollInProgress },
                             modifier = Modifier.weight(1f),
@@ -132,7 +137,7 @@ fun LiveAreaDetailScreen(
                 itemsIndexed(tabs) { index, tab ->
                     AppTextButton(onClick = {
                         showMenu = false
-                        scope.launch { pager.scrollToPage(index) }
+                        scope.launch { animatePagerSelection(pager, index) }
                     }) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             coil3.compose.AsyncImage(model = tab.cover, contentDescription = null, modifier = Modifier.size(48.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit)

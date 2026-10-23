@@ -31,11 +31,13 @@ import androidx.compose.runtime.setValue
 import com.android.purebilibili.core.ui.rememberBackToTopButtonEnabled
 import com.android.purebilibili.core.ui.components.AppLiquidGlassBackToTopButton
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.android.purebilibili.core.store.SettingsManager
@@ -110,12 +112,17 @@ private fun BangumiHubScreen(
     backEnabled: Boolean,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val channelPager = rememberBangumiChannelPagerState(
+        channel = state.channel,
+        enabled = state.page == BangumiHubPage.HOME,
+        onChannelSelected = viewModel::selectChannel,
+    )
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val focusRequester = remember { FocusRequester() }
-    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var searchQuery by rememberSaveable(state.accountGeneration) { mutableStateOf("") }
     val selectionActive = state.page == BangumiHubPage.FOLLOW &&
         state.followStates[state.channel to state.followStatus]?.selectedIds?.isNotEmpty() == true
     var scrollToTopRequestId by rememberSaveable { mutableIntStateOf(0) }
@@ -166,7 +173,7 @@ private fun BangumiHubScreen(
     // Keep progressive sampling attached through skeleton → content transitions.
     // Recreating its graphics layers briefly exposes an empty/dark texture.
     val chromeSource = if (progressiveBlur || themeConfig.liquidGlassEnabled) {
-        rememberChromeBackdropSource()
+        rememberChromeBackdropSource(recordingBackground = MaterialTheme.colorScheme.background)
     } else {
         null
     }
@@ -211,13 +218,12 @@ private fun BangumiHubScreen(
                     }
                 ),
             ) {
-                // Native MD3 tabs include transparent unselected labels. Give the
-                // entire header an opaque surface when posters scroll underneath.
+                // 不透明原生底色仅用于普通顶栏，沉浸材质需要透出下方列表采样。
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(
-                            if (solidNativeHeader) MaterialTheme.colorScheme.background
+                            if (solidNativeHeader && !chromeActive) MaterialTheme.colorScheme.background
                             else Color.Transparent
                         ),
                 ) {
@@ -264,22 +270,39 @@ private fun BangumiHubScreen(
                     }
                     if (state.page != BangumiHubPage.SEARCH) {
                         AppLiquidAwareTabRow(
+                            // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                             role = com.android.purebilibili.core.ui.components.AppTabRowRole.PRIMARY,
                             options = BangumiChannel.entries.map { AppSegmentOption(it, it.label) },
                             selectedValue = state.channel,
+                            indicatorPositionProvider = if (state.page == BangumiHubPage.HOME) {
+                                { channelPager.currentPage + channelPager.currentPageOffsetFraction }
+                            } else null,
+                            isScrollInProgressProvider = {
+                                state.page == BangumiHubPage.HOME && channelPager.isScrollInProgress
+                            },
                             enabled = !selectionActive,
                             onSelectionChange = viewModel::selectChannel,
                             dragSelectionEnabled = true,
                             tapPressRefractionEnabled = true,
+                            // Enlarge only the glass channel dock; native chrome retains its defaults.
+                            minTabWidth = if (themeConfig.liquidGlassEnabled) 64.dp else androidx.compose.ui.unit.Dp.Unspecified,
+                            labelFontSize = if (themeConfig.liquidGlassEnabled) 15.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+                            height = if (themeConfig.liquidGlassEnabled) 44.dp else
+                                com.android.purebilibili.core.ui.AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
+                            indicatorHeight = if (themeConfig.liquidGlassEnabled) 34.dp else
+                                com.android.purebilibili.core.ui.AppChromeSizeTokens.BottomBarMatchedSegmentedIndicatorHeightDp.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .responsiveContentWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(horizontal = 16.dp, vertical = if (themeConfig.liquidGlassEnabled) 6.dp else 8.dp),
                             miuixBackdrop = chromeBackdrop,
                         )
                     }
                     if (state.page == BangumiHubPage.FOLLOW) {
                         AppLiquidAwareTabRow(
+                            // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                             role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
                             options = BangumiFollowStatus.entries.map { AppSegmentOption(it, it.label) },
                             selectedValue = state.followStatus,
@@ -317,9 +340,15 @@ private fun BangumiHubScreen(
                     .then(if (hazeState != null) Modifier.hazeSourceCompat(hazeState) else Modifier)
                     .globalWallpaperAwareBackground(MaterialTheme.colorScheme.background),
             ) {
-                Box(modifier = Modifier.fillMaxSize().responsiveContentWidth()) {
+                // 沉浸顶栏使用列表内部留白，让滚动内容进入采样区域；普通顶栏保留外部避让。
+                Box(
+                    modifier = Modifier.fillMaxSize().responsiveContentWidth()
+                        .padding(top = if (chromeActive) 0.dp else listTopPadding).clipToBounds(),
+                ) {
                     BangumiHubContent(
                         state = state,
+                        channelPagerState = channelPager,
+                        onPrepareChannel = viewModel::prepareHomeChannel,
                         onBangumiClick = onBangumiClick,
                         onEpisodeClick = onBangumiEpisodeClick,
                         onRefreshHome = { viewModel.refreshHome() },
@@ -358,7 +387,7 @@ private fun BangumiHubScreen(
                         },
                         scrollToTopRequestId = scrollToTopRequestId,
                         listBottomPadding = bangumiListBottomPadding,
-                        listTopPadding = listTopPadding,
+                        listTopPadding = if (chromeActive) listTopPadding else 0.dp,
                         tabBackdrop = null,
                         showFollowStatusTabs = false,
                     )

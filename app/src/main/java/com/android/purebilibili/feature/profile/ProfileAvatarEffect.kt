@@ -1,8 +1,4 @@
-/*
- * Avatar fusion hosted from NextAlone/Nagram ProfileGooeyView.java,
- * revision fb56ea9801e5de68c60f0152b444bbe2a0fda520; GPL-3.0.
- * Telegram and Nagram contributors.
- */
+/** 头像融合视图的 Compose 宿主与生命周期适配。 */
 package com.android.purebilibili.feature.profile
 
 import android.widget.FrameLayout
@@ -15,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
@@ -27,16 +24,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.android.purebilibili.core.ui.LocalComponentMotionEnabled
 import com.android.purebilibili.core.ui.motion.rememberSystemReduceMotion
 import com.android.purebilibili.core.ui.performance.isLowBlurBudgetForced
 import com.android.purebilibili.feature.home.UserState
+import kotlin.math.roundToInt
 
 /** Keep native fusion off the page backdrop; only the avatar/cutout enter its buffers. */
 @Composable
@@ -49,8 +51,10 @@ internal fun ProfileAvatarEffect(
     flingBehavior: FlingBehavior,
     onAvatarClick: () -> Unit,
     modifier: Modifier = Modifier,
+    photoScrollConnection: NestedScrollConnection? = null,
 ) {
     val density = LocalDensity.current
+    val latestDensity = rememberUpdatedState(density)
     val parentComposition = rememberCompositionContext()
     val latestUser = rememberUpdatedState(user)
     val latestBorder = rememberUpdatedState(borderColor)
@@ -61,6 +65,7 @@ internal fun ProfileAvatarEffect(
     val motionEnabled = LocalComponentMotionEnabled.current && !rememberSystemReduceMotion() && !lowBudget
     val latestMotion = rememberUpdatedState(motionEnabled)
     val latestProvider = rememberUpdatedState(expandedFractionProvider)
+    val latestPhotoScrollConnection = rememberUpdatedState(photoScrollConnection)
     val latestTop = rememberUpdatedState(with(density) { statusBarTopPadding.toPx() })
     val host = remember { arrayOfNulls<ProfileAvatarFusionView>(1) }
     // Refresh the native display list even when Compose reuses its cached draw layer,
@@ -89,41 +94,65 @@ internal fun ProfileAvatarEffect(
                     pivotX = 0f
                     pivotY = 0f
                     setContent {
-                        val currentUser = latestUser.value
-                        AsyncImage(
-                            model = currentUser.face,
-                            contentDescription = "${currentUser.name}的头像，编辑个人资料",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                                .clip(CircleShape)
-                                .border(2.dp, latestBorder.value, CircleShape)
-                                .scrollable(listState, Orientation.Vertical, reverseDirection = true, flingBehavior = latestFling.value)
-                                .clickable { latestClick.value() },
-                        )
+                        // Preserve scaled layout density and software-canvas-safe image requests together.
+                        CompositionLocalProvider(LocalDensity provides latestDensity.value) {
+                            val currentUser = latestUser.value
+                            val context = LocalContext.current
+                            val avatarRequest = remember(context, currentUser.face) {
+                                ImageRequest.Builder(context)
+                                    .data(currentUser.face)
+                                    .buildForProfileFusion()
+                            }
+                            AsyncImage(
+                                model = avatarRequest,
+                                contentDescription = "${currentUser.name}的头像，编辑个人资料",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                                    .clip(CircleShape)
+                                    .border(2.dp, latestBorder.value, CircleShape)
+                                    .then(latestPhotoScrollConnection.value?.let { Modifier.nestedScroll(it) } ?: Modifier)
+                                    .scrollable(listState, Orientation.Vertical, reverseDirection = true, flingBehavior = latestFling.value)
+                                    .clickable { latestClick.value() },
+                            )
+                        }
                     }
                 }
-                val baseSize = (100f * context.resources.displayMetrics.density).toInt()
+                val baseSize = (100f * density.density).roundToInt().coerceAtLeast(1)
                 addView(avatar, FrameLayout.LayoutParams(baseSize, baseSize))
                 setFrameUpdater {
                     setHardwareEffectsEnabled(!latestLowBudget.value)
                     val expanded = latestProvider.value().coerceIn(0f, 1f)
-                    val deviceDensity = context.resources.displayMetrics.density
+                    // Layout coordinates use the app's Compose density, not device resource density.
+                    // Cutout bounds are already physical pixels in this host's viewport.
+                    val layoutDensity = latestDensity.value.density
                     val cutout = notchInfo
-                    // Same centered-avatar end size and Y endpoint as the upstream ProfileActivity.
-                    val endSize = if (cutout != null && cutout.isLikelyCircle) {
-                        0.5f * cutout.bounds.width() / deviceDensity
-                    } else 24f
-                    val scale = (endSize + (96f - endSize) * expanded) / 100f
-                    val endY = if (cutout != null && cutout.isLikelyCircle) cutout.bounds.centerY() else -29f * deviceDensity
-                    val startY = latestTop.value + 35f * deviceDensity
+                    val sizePx = resolveProfileAvatarSizePx(
+                        density = layoutDensity,
+                        expandedFraction = expanded,
+                        circularCutoutWidthPx = if (cutout != null && cutout.isLikelyCircle) cutout.bounds.width() else 0f,
+                    )
+                    val scale = sizePx / avatar.layoutParams.width
+                    val endY = if (cutout != null && cutout.isLikelyCircle) cutout.bounds.centerY() else -29f * layoutDensity
+                    val startY = latestTop.value + PROFILE_EXPANDED_AVATAR_TOP_DP * layoutDensity
                     avatar.scaleX = scale
                     avatar.scaleY = scale
-                    avatar.translationX = (width - baseSize * scale) / 2f
+                    avatar.translationX = (width - sizePx) / 2f
                     avatar.translationY = endY + (startY - endY) * expanded
                     setStatusBarHeight(latestTop.value.toInt())
                     updateFrame(1f - expanded, latestMotion.value)
                 }
             }
+        },
+        update = { view ->
+            val avatar = view.getChildAt(0)
+            val size = (100f * density.density).roundToInt().coerceAtLeast(1)
+            val params = avatar.layoutParams
+            if (params.width != size || params.height != size) {
+                params.width = size
+                params.height = size
+                avatar.layoutParams = params
+            }
+            view.prepareFrame()
         },
         onRelease = { view ->
             (view.getChildAt(0) as? ComposeView)?.disposeComposition()

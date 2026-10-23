@@ -108,6 +108,7 @@ fun PagesSelector(
 ) {
     if (pages.isEmpty()) return
 
+    val sheetMaxHeight = episodeSheetMaxHeight()
     val configuration = LocalConfiguration.current
     val isLandscape = remember(configuration.orientation, configuration.screenWidthDp, configuration.screenHeightDp) {
         configuration.orientation == Configuration.ORIENTATION_LANDSCAPE ||
@@ -314,7 +315,7 @@ fun PagesSelector(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.9f)
+                    .heightIn(max = sheetMaxHeight)
             ) {
                 Row(
                     modifier = Modifier
@@ -449,6 +450,10 @@ private fun PagesHorizontalPreviewRow(
         }
     }
 
+    // 液态玻璃选中态与详情标签共用主题色；原生分支仍使用自身主题主色。
+    val selectedAccent = AppContentColors.selectionAccent(
+        com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+    )
     LazyRow(
         state = listState,
         modifier = modifier
@@ -473,7 +478,7 @@ private fun PagesHorizontalPreviewRow(
                 if (isCurrent) {
                     PlayingEqualizerIcon(
                         playing = isPlaying,
-                        color = AppContentColors.accent(),
+                        color = selectedAccent,
                         modifier = Modifier.size(PagePreviewEqualizerSize),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
@@ -481,7 +486,7 @@ private fun PagesHorizontalPreviewRow(
                 AppText(
                     text = title,
                     fontSize = 13.sp,
-                    color = if (isCurrent) AppContentColors.accent() else AppContentColors.primaryText(),
+                    color = if (isCurrent) selectedAccent else AppContentColors.primaryText(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),

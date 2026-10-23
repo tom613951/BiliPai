@@ -57,14 +57,11 @@ internal fun <T> mergeNotificationSeen(seen: List<T>, newestFirst: List<T>, cap:
     evictBounded(seen + newestFirst.asReversed(), cap)
 
 internal const val MAX_DYNAMIC_NOTIFICATION_PREVIEWS = 3
+internal const val MAX_DYNAMIC_NOTIFICATION_CONCURRENCY = 16
 
 // Dynamic IDs are decimal publish baselines. Compare without Long overflow or BigInteger allocation.
 internal fun isNewerDynamicNotificationId(id: String, baseline: String): Boolean =
     id.isNotEmpty() && (id.length > baseline.length || (id.length == baseline.length && id > baseline))
-
-internal fun isDynamicNotificationRead(id: String, readOffset: String): Boolean =
-    readOffset.isNotEmpty() && readOffset.all { it in '0'..'9' } &&
-        !isNewerDynamicNotificationId(id, readOffset.trimStart('0').ifEmpty { "0" })
 
 internal fun addNewestDynamicNotificationPreview(items: MutableList<DynamicItem>, item: DynamicItem) {
     var index = 0
@@ -135,3 +132,14 @@ internal data class PendingMessageNotification(
     val group: String,
     val isGroupSummary: Boolean = false,
 )
+
+// Suppress adjacent Worker/resident scans, without carrying elapsed timestamps across reboots.
+internal fun shouldSkipRecentNotificationCheck(
+    mid: Long,
+    lastMid: Long?,
+    nowElapsedMs: Long,
+    lastElapsedMs: Long?,
+    boot: Long,
+    lastBoot: Long?
+): Boolean = mid == lastMid && boot >= 0L && boot == lastBoot && lastElapsedMs != null &&
+    nowElapsedMs >= lastElapsedMs && nowElapsedMs - lastElapsedMs < 30_000L

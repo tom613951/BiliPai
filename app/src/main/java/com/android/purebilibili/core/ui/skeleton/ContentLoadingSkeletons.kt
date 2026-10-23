@@ -31,10 +31,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
@@ -49,12 +54,16 @@ import com.android.purebilibili.core.ui.ContainerLevel
  */
 
 @Composable
-fun rememberContentSkeletonPulse(): Float {
+fun rememberContentSkeletonPulseState(): State<Float> {
+    if (!com.android.purebilibili.core.ui.rememberVisualWorkActive() ||
+        com.android.purebilibili.core.ui.motion.rememberSystemReduceMotion()) {
+        return rememberUpdatedState(0.5f)
+    }
     if (com.android.purebilibili.core.ui.skeleton.rememberSkeletonBreathingEnabled()) {
-        return com.android.purebilibili.core.ui.skeleton.rememberGentleSkeletonPulse().value
+        return com.android.purebilibili.core.ui.skeleton.rememberGentleSkeletonPulse()
     }
     val transition = rememberInfiniteTransition(label = "contentSkeletonPulse")
-    val pulse by transition.animateFloat(
+    val pulse = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -67,6 +76,24 @@ fun rememberContentSkeletonPulse(): Float {
         label = "contentSkeletonPulseAlpha",
     )
     return pulse
+}
+
+/** Compatibility for callers whose value really participates in composition. */
+@Composable
+fun rememberContentSkeletonPulse(): Float = rememberContentSkeletonPulseState().value
+
+/** The State is read by ContentSkeletonBlock's draw callback, never by its parent list. */
+@Composable
+fun rememberContentSkeletonBlockColor(pulse: State<Float>): () -> Color {
+    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    return remember(pulse, isDark, onSurface) {
+        {
+            val min = if (isDark) CONTENT_SKELETON_DARK_MIN_ALPHA else CONTENT_SKELETON_LIGHT_MIN_ALPHA
+            val max = if (isDark) CONTENT_SKELETON_DARK_MAX_ALPHA else CONTENT_SKELETON_LIGHT_MAX_ALPHA
+            onSurface.copy(alpha = min + (max - min) * pulse.value)
+        }
+    }
 }
 
 @Composable
@@ -99,6 +126,59 @@ fun ContentSkeletonBlock(
 }
 
 @Composable
+fun ContentSkeletonBlock(
+    color: () -> Color,
+    modifier: Modifier = Modifier,
+    shape: Shape = AppShapes.container(ContainerLevel.Tag),
+) {
+    Box(modifier = modifier.clip(shape).drawBehind { drawRect(color()) })
+}
+
+/** Keep the real font metrics and wrapping; paint one placeholder per measured text line. */
+@Composable
+internal fun ContentSkeletonText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    colorProvider: () -> Color,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1,
+    minLines: Int = 1,
+) {
+    val textLayout = remember { androidx.compose.runtime.mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    com.android.purebilibili.core.ui.components.AppText(
+        text = text,
+        style = style,
+        maxLines = maxLines,
+        minLines = minLines,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        tapToCopyEnabled = false,
+        color = Color.Transparent,
+        onTextLayout = { textLayout.value = it },
+        modifier = modifier
+            .clearAndSetSemantics { }
+            .drawWithContent {
+                // Measurements are written during layout and read only during drawing.
+                val layout = textLayout.value ?: return@drawWithContent
+                val color = colorProvider()
+                for (line in 0 until layout.lineCount) {
+                    val top = layout.getLineTop(line)
+                    val bottom = layout.getLineBottom(line)
+                    val inset = (bottom - top) * 0.18f
+                    drawRoundRect(
+                        color = color,
+                        topLeft = androidx.compose.ui.geometry.Offset(layout.getLineLeft(line), top + inset),
+                        size = androidx.compose.ui.geometry.Size(
+                            (layout.getLineRight(line) - layout.getLineLeft(line)).coerceAtLeast(0f),
+                            (bottom - top - inset * 2f).coerceAtLeast(0f),
+                        ),
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(3.dp.toPx()),
+                    )
+                }
+            },
+    )
+}
+
+@Composable
 fun ContentVideoGridSkeleton(
     modifier: Modifier = Modifier,
     minItemWidth: Dp = 160.dp,
@@ -108,7 +188,7 @@ fun ContentVideoGridSkeleton(
     horizontalSpacing: Dp = 8.dp,
     verticalSpacing: Dp = 8.dp,
 ) {
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = minItemWidth),
@@ -126,7 +206,7 @@ fun ContentVideoGridSkeleton(
         ) {
             ContentVideoGridItemSkeleton(
                 coverAspectRatio = coverAspectRatio,
-                blockColor = blockColor,
+                blockColorProvider = blockColor,
             )
         }
     }
@@ -143,7 +223,7 @@ fun ContentVideoGridSkeletonFixedColumns(
 ) {
     val safeColumns = columns.coerceAtLeast(1)
     val skeletonKeys = List(safeColumns * rows.coerceAtLeast(1)) { it }
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyVerticalGrid(
         columns = GridCells.Fixed(safeColumns),
@@ -160,7 +240,7 @@ fun ContentVideoGridSkeletonFixedColumns(
         ) {
             ContentVideoGridItemSkeleton(
                 coverAspectRatio = coverAspectRatio,
-                blockColor = blockColor,
+                blockColorProvider = blockColor,
             )
         }
     }
@@ -169,31 +249,33 @@ fun ContentVideoGridSkeletonFixedColumns(
 @Composable
 fun ContentVideoGridItemSkeleton(
     coverAspectRatio: Float = 4f / 3f,
-    blockColor: Color,
+    blockColor: Color = Color.Unspecified,
     modifier: Modifier = Modifier,
+    blockColorProvider: (() -> Color)? = null,
 ) {
+    val colorProvider = blockColorProvider ?: { blockColor }
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(bottom = 12.dp),
     ) {
         ContentSkeletonBlock(
-            color = blockColor,
-            shape = AppShapes.container(ContainerLevel.Chip),
+            color = colorProvider,
+            shape = AppShapes.mediaCover(),
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(coverAspectRatio),
         )
         Spacer(modifier = Modifier.height(8.dp))
         ContentSkeletonBlock(
-            color = blockColor,
+            color = colorProvider,
             modifier = Modifier
                 .fillMaxWidth(0.9f)
                 .height(16.dp),
         )
         Spacer(modifier = Modifier.height(6.dp))
         ContentSkeletonBlock(
-            color = blockColor,
+            color = colorProvider,
             modifier = Modifier
                 .fillMaxWidth(0.5f)
                 .height(12.dp),
@@ -210,9 +292,13 @@ fun MediaListRowSkeleton(
     contentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
     contentGap: Dp = 12.dp,
     blockColor: Color? = null,
+    blockColorProvider: (() -> Color)? = null,
 ) {
-    val pulse = if (blockColor == null) rememberContentSkeletonPulse() else 0f
-    val color = blockColor ?: rememberContentSkeletonBlockColor(pulse)
+    val color = blockColorProvider ?: if (blockColor != null) {
+        { blockColor }
+    } else {
+        rememberContentSkeletonBlockColor(rememberContentSkeletonPulseState())
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -221,7 +307,7 @@ fun MediaListRowSkeleton(
     ) {
         ContentSkeletonBlock(
             color = color,
-            shape = AppShapes.container(ContainerLevel.Chip),
+            shape = AppShapes.mediaCover(),
             modifier = Modifier
                 .width(coverWidth)
                 .aspectRatio(coverAspectRatio),
@@ -258,9 +344,13 @@ fun UserListRowSkeleton(
     modifier: Modifier = Modifier,
     avatarSize: Dp = 48.dp,
     blockColor: Color? = null,
+    blockColorProvider: (() -> Color)? = null,
 ) {
-    val pulse = if (blockColor == null) rememberContentSkeletonPulse() else 0f
-    val color = blockColor ?: rememberContentSkeletonBlockColor(pulse)
+    val color = blockColorProvider ?: if (blockColor != null) {
+        { blockColor }
+    } else {
+        rememberContentSkeletonBlockColor(rememberContentSkeletonPulseState())
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -449,7 +539,7 @@ fun ContentMediaListSkeleton(
     mediaRowContentPadding: PaddingValues = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
     mediaRowContentGap: Dp = 12.dp,
 ) {
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     val skeletonKeys = List(itemCount.coerceAtLeast(0)) { it }
     LazyColumn(
@@ -463,14 +553,14 @@ fun ContentMediaListSkeleton(
             contentType = { if (useUserRow) "user_row_skeleton" else "media_row_skeleton" },
         ) {
             if (useUserRow) {
-                UserListRowSkeleton(blockColor = blockColor)
+                UserListRowSkeleton(blockColorProvider = blockColor)
             } else {
                 MediaListRowSkeleton(
                     coverWidth = mediaRowCoverWidth,
                     coverAspectRatio = mediaRowCoverAspectRatio,
                     contentPadding = mediaRowContentPadding,
                     contentGap = mediaRowContentGap,
-                    blockColor = blockColor,
+                    blockColorProvider = blockColor,
                 )
             }
         }
@@ -483,7 +573,7 @@ fun ArticleDetailSkeleton(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(20.dp),
 ) {
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -524,7 +614,7 @@ fun PosterDetailSkeleton(
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(16.dp),
 ) {
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -569,7 +659,7 @@ fun ContentCategoryGridSkeleton(
     spacing: Dp = 16.dp,
 ) {
     val safeColumns = columns.coerceAtLeast(1)
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyVerticalGrid(
         columns = GridCells.Fixed(safeColumns),
@@ -600,7 +690,7 @@ fun TrendingListSkeleton(
     itemCount: Int = 10,
     contentPadding: PaddingValues = PaddingValues(bottom = 24.dp),
 ) {
-    val pulse = rememberContentSkeletonPulse()
+    val pulse = rememberContentSkeletonPulseState()
     val blockColor = rememberContentSkeletonBlockColor(pulse)
     LazyColumn(
         modifier = modifier.fillMaxSize(),

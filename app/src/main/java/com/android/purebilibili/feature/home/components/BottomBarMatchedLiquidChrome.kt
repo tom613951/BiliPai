@@ -48,7 +48,6 @@ import com.android.purebilibili.core.ui.motion.BottomBarMotionSpec
 import com.android.purebilibili.core.ui.motion.emphasizedEnterTween
 import com.android.purebilibili.core.ui.motion.emphasizedExitTween
 import com.android.purebilibili.core.ui.motion.softLandingSpring
-import com.android.purebilibili.feature.home.components.liquid.rememberCombinedBackdrop
 import dev.chrisbanes.haze.HazeState
 import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.blur.layerBackdrop
@@ -65,6 +64,7 @@ internal enum class BottomBarLiquidOrientation {
 internal data class LiquidGlassRenderConfig(
     val tuning: LiquidGlassTuning = resolveLiquidGlassTuning(progress = 0.5f),
     val preset: BottomBarLiquidGlassPreset = BottomBarLiquidGlassPreset.BILIPAI_TUNED,
+    val navigationIconCrossScaleEnabled: Boolean = true,
 )
 
 internal val LocalLiquidGlassRenderConfig = staticCompositionLocalOf {
@@ -247,15 +247,24 @@ internal fun Modifier.bottomBarMatchedLiquidDockSurface(
     shellLensIntensity: Float = 1f
 ): Modifier = composed {
     val isScrolling = isScrollInProgressProvider()
-    val animatedScrollProgress by animateFloatAsState(
-        targetValue = if (isScrolling) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = resolveBottomBarMaterialScrollAnimationDurationMillis(isScrolling),
-            easing = AppMotionEasing.Continuity
-        ),
-        label = "bottomBarMatchedMaterialScrollProgress"
-    )
-    val materialScrollProgress = materialScrollProgressOverride ?: animatedScrollProgress
+    // The tuned glass material does not read scroll progress. Avoid running a
+    // composition-driven tail animation during card navigation for an unused value.
+    // Non-glass callers and the refined preset keep their original material behavior.
+    val materialScrollProgress = if (materialScrollProgressOverride != null) {
+        materialScrollProgressOverride
+    } else if (glassEnabled && liquidGlassPreset == BottomBarLiquidGlassPreset.BILIPAI_TUNED) {
+        0f
+    } else {
+        val animatedScrollProgress by animateFloatAsState(
+            targetValue = if (isScrolling) 1f else 0f,
+            animationSpec = tween(
+                durationMillis = resolveBottomBarMaterialScrollAnimationDurationMillis(isScrolling),
+                easing = AppMotionEasing.Continuity
+            ),
+            label = "bottomBarMatchedMaterialScrollProgress"
+        )
+        animatedScrollProgress
+    }
     // Miuix-only: no legacy fallback. Null backdrop degrades inside biliPaiMiuixFloatingDockSurface.
     biliPaiMiuixFloatingDockSurface(
         shape = shape,
@@ -342,11 +351,12 @@ internal fun BottomBarMatchedReusableLiquidDock(
         liquidGlassEnabled = reuseEnabled && reuseAllowed,
         blurEnabled = true
     )
-    val localBackdrop = rememberLayerBackdrop()
-    val effectiveBackdrop = if (backdrop != null) {
-        rememberCombinedBackdrop(localBackdrop, backdrop)
-    } else {
-        localBackdrop
+    // Match floating segmented chrome: a supplied sibling/page source already
+    // contains the background pixels. Do not record a second blank source and
+    // sample both on every optical pass. Each dock still owns its lens/effects.
+    val localBackdrop = if (backdrop == null) rememberLayerBackdrop() else null
+    val effectiveBackdrop = (backdrop ?: localBackdrop)?.let {
+        com.android.purebilibili.feature.home.components.liquid.rememberStableBackdrop(it)
     }
     val isDarkTheme = com.android.purebilibili.core.ui.isAppInDarkTheme()
     val blurIntensity = currentUnifiedBlurIntensity()
@@ -391,19 +401,13 @@ internal fun BottomBarMatchedReusableLiquidDock(
         transformInBackdrop = glassEnabled,
         allowConsumedDrag = allowConsumedDrag,
     )) {
-        if (drawShellLens) {
+        if (localBackdrop != null) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .bottomBarMatchedCaptureOverflow(captureSafeInset)
-                    .alpha(0f)
-                    .layerBackdrop(localBackdrop)
-                    .background(AppSurfaceTokens.background())
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
+                    .then(if (drawShellLens) {
+                        Modifier.bottomBarMatchedCaptureOverflow(captureSafeInset)
+                    } else Modifier)
                     .alpha(0f)
                     .layerBackdrop(localBackdrop)
                     .background(AppSurfaceTokens.background())
@@ -469,7 +473,11 @@ internal fun BoxScope.BottomBarMatchedLiquidIndicator(
         BottomBarClickPulseTransform(scaleX = 1f),
     orientation: BottomBarLiquidOrientation = BottomBarLiquidOrientation.HORIZONTAL,
     indicatorAlignment: Alignment = Alignment.CenterStart,
-    interactionModifier: Modifier = Modifier
+    interactionModifier: Modifier = Modifier,
+    wobblePosition: (() -> Float)? = null,
+    wobbleSelection: (() -> Any?)? = null,
+    wobbleReady: (() -> Boolean)? = null,
+    wobbleLastIndex: Int = -1,
 ) {
     // Miuix-only indicator path. Null backdrop degrades to solid surface inside the layer.
     BiliPaiMiuixBottomBarIndicatorLayer(
@@ -501,7 +509,11 @@ internal fun BoxScope.BottomBarMatchedLiquidIndicator(
         isDarkTheme = isDarkTheme,
         swapMotionAxes = orientation == BottomBarLiquidOrientation.VERTICAL,
         indicatorAlignment = indicatorAlignment,
-        interactionModifier = interactionModifier
+        interactionModifier = interactionModifier,
+        wobblePosition = wobblePosition,
+        wobbleSelection = wobbleSelection,
+        wobbleReady = wobbleReady,
+        wobbleLastIndex = wobbleLastIndex,
     )
 }
 

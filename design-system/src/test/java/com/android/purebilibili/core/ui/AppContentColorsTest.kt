@@ -14,6 +14,20 @@ import kotlin.test.assertTrue
 
 class AppContentColorsTest {
     @Test
+    fun glassSelectionUsesExactCustomAccentWhileNativeSelectionKeepsGeneratedPalette() {
+        val pickedBlue = Color(0xFF007AFF)
+        val generatedBlue = Color(0xFF4A608A)
+        assertEquals(pickedBlue, resolveSelectionAccentColor(true, generatedBlue, pickedBlue))
+        assertEquals(generatedBlue, resolveSelectionAccentColor(false, generatedBlue, pickedBlue))
+    }
+
+    @Test
+    fun glassSelectionFallsBackToNativeAccentWhenNoExactColorIsProvided() {
+        val wallpaperAccent = Color(0xFF4A608A)
+        assertEquals(wallpaperAccent, resolveSelectionAccentColor(true, wallpaperAccent, Color.Unspecified))
+    }
+
+    @Test
     fun supportingTextIsReadableAcrossCanvasAndCardSurfaces() {
         listOf(lightColorScheme(), darkColorScheme()).forEach { scheme ->
             val requested = scheme.onSurface.copy(alpha = 0.25f)
@@ -48,4 +62,15 @@ class AppContentColorsTest {
             }
         }
     }
+    @Test
+    fun unreadableCustomOnSurfaceCannotRemainTheLastFallback() {
+        val scheme = lightColorScheme().copy(onSurface = Color.White, onSurfaceVariant = Color.White)
+        val actual = resolveReadableNeutralContent(Color.White, scheme)
+        listOf(scheme.background, scheme.surface, scheme.surfaceContainerLowest, scheme.surfaceContainerLow,
+            scheme.surfaceContainer, scheme.surfaceContainerHigh, scheme.surfaceContainerHighest,
+            scheme.surfaceDim, scheme.surfaceBright, scheme.surfaceVariant).forEach { background ->
+            assertTrue(calculateContrastRatio(opaqueCompositeOver(actual, background), background) >= ACCESSIBLE_TEXT_MIN_CONTRAST)
+        }
+    }
+
 }

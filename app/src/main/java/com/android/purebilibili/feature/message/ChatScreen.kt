@@ -21,6 +21,8 @@ import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.appendInlineContent
@@ -91,7 +93,6 @@ import com.android.purebilibili.feature.home.resolveHomeWallpaperUri
 import com.android.purebilibili.feature.home.components.cards.HorizontalVideoCardFrame
 import com.android.purebilibili.feature.home.components.cards.VideoCardCoverDurationText
 import com.android.purebilibili.feature.home.components.cards.LocalWallpaperPalette
-import com.android.purebilibili.feature.home.components.cards.WallpaperPaletteStore
 import com.android.purebilibili.feature.home.components.BottomBarMatchedReusableLiquidDock
 import com.android.purebilibili.feature.home.components.liquid.rememberCombinedBackdrop
 import com.android.purebilibili.feature.home.components.resolveFloatingDockGeometryScale
@@ -155,19 +156,22 @@ fun ChatScreen(
     onOpenBilibiliLink: (String) -> Unit = {},
     viewModel: ChatViewModel = viewModel(factory = ChatViewModel.Factory(talkerId, sessionType))
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    var inputText by rememberSaveable(talkerId, sessionType) { mutableStateOf("") }
+    val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val rawUiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val uiState = rawUiState.takeIf { it.accountIdentity == accountIdentity }
+        ?: ChatUiState(accountIdentity = accountIdentity)
+    var inputText by rememberSaveable(talkerId, sessionType, accountIdentity) { mutableStateOf("") }
     LaunchedEffect(viewModel, uiState.sentText) {
         val sentText = uiState.sentText ?: return@LaunchedEffect
         if (inputText == sentText) inputText = ""
         viewModel.consumeSentText(sentText)
     }
-    val listState = rememberLazyListState()
+    val listState = androidx.compose.runtime.key(accountIdentity) { rememberLazyListState() }
     val scrollScope = rememberCoroutineScope()
-    var followLatest by rememberSaveable(talkerId, sessionType) { mutableStateOf(true) }
-    var handledScrollVersion by remember(viewModel) { mutableStateOf(uiState.scrollToLatestVersion) }
+    var followLatest by rememberSaveable(talkerId, sessionType, accountIdentity) { mutableStateOf(true) }
+    var handledScrollVersion by remember(viewModel, accountIdentity) { mutableStateOf(uiState.scrollToLatestVersion) }
     val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(viewModel, lifecycleOwner) {
+    LaunchedEffect(viewModel, lifecycleOwner, accountIdentity) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (isActive) {
                 viewModel.refreshMessages()
@@ -182,15 +186,17 @@ fun ChatScreen(
                 if (scrolling || !canScrollToNewer) followLatest = !canScrollToNewer
             }
     }
-    var pendingWithdrawMessage by remember { mutableStateOf<PrivateMessageItem?>(null) }
-    var showInterceptConfirm by remember { mutableStateOf(false) }
+    var pendingWithdrawMessage by remember(accountIdentity) { mutableStateOf<PrivateMessageItem?>(null) }
+    var showInterceptConfirm by remember(accountIdentity) { mutableStateOf(false) }
+    var imagePickIdentity by remember { mutableStateOf<com.android.purebilibili.core.store.AccountSessionIdentity?>(null) }
     val context = LocalContext.current
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = PickGalleryVisualMedia()
     ) { uri ->
-        if (uri != null) {
+        if (uri != null && imagePickIdentity == com.android.purebilibili.core.store.TokenManager.accountIdentity.value) {
             viewModel.sendImageMessage(context, uri)
         }
+        imagePickIdentity = null
     }
 
     val latestMessageKey = uiState.messages.lastOrNull()?.let(::chatMessageKey)
@@ -459,6 +465,7 @@ fun ChatScreen(
                         }
                     },
                     onPickImage = {
+                        imagePickIdentity = accountIdentity
                         imagePickerLauncher.launch(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
@@ -544,9 +551,9 @@ private fun ChatWallpaperHost(
     wallpaperBackdrop: LayerBackdrop?,
     content: @Composable (@Composable () -> Unit) -> Unit,
 ) {
+    val wallpaperAllowed = LocalGlobalWallpaperBackdropVisible.current
     val context = LocalContext.current
-    val configuredHomeWallpaperUri by SettingsManager.getHomeWallpaperUri(context)
-        .collectAsStateWithLifecycle(initialValue = "")
+    val configuredHomeWallpaperUri = com.android.purebilibili.core.ui.wallpaper.LocalHomeWallpaperSelection.current.uri
     val splashWallpaperUri by SettingsManager.getSplashWallpaperUri(context)
         .collectAsStateWithLifecycle(initialValue = "")
     val wallpaperEffectMode by SettingsManager.getHomeWallpaperEffectMode(context)
@@ -557,14 +564,7 @@ private fun ChatWallpaperHost(
             splashWallpaperUri = splashWallpaperUri,
         )
     }
-    val wallpaperPalette by WallpaperPaletteStore.currentPalette.collectAsStateWithLifecycle()
-    LaunchedEffect(wallpaperUri) {
-        WallpaperPaletteStore.loadWallpaperPalette(
-            context = context,
-            uri = wallpaperUri,
-            scope = this,
-        )
-    }
+    val wallpaperPalette = LocalWallpaperPalette.current
 
     val baseColor = AppSurfaceTokens.chromeBackground()
     val isLightBackground = remember(baseColor) { baseColor.luminance() > 0.5f }
@@ -574,11 +574,12 @@ private fun ChatWallpaperHost(
     val wallpaperAppearance = remember(
         wallpaperUri,
         wallpaperEffectMode,
+        wallpaperAllowed,
         isLightBackground,
         isDataSaverActive,
     ) {
         resolveHomeWallpaperBackdropAppearance(
-            hasWallpaper = wallpaperUri.isNotBlank(),
+            hasWallpaper = wallpaperAllowed && wallpaperUri.isNotBlank(),
             effectMode = wallpaperEffectMode,
             isDarkTheme = !isLightBackground,
             isDataSaverActive = isDataSaverActive,
@@ -686,12 +687,14 @@ fun ChatInputBar(
 
     val liquidGlassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
     val dockShape = resolveSharedBottomBarCapsuleShape()
-    val shellLensIntensity = resolveFloatingDockGeometryScale(CHAT_INPUT_DOCK_HEIGHT.value)
+    // All materials use compact input geometry; multiline messages can grow on demand.
+    val visibleDockHeight = 40.dp
+    val shellLensIntensity = resolveFloatingDockGeometryScale(visibleDockHeight.value)
     val panelColor = com.android.purebilibili.core.ui.globalWallpaperAwareChromeColor(
         AppSurfaceTokens.surface()
     )
     val keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send)
-    val keyboardActions = KeyboardActions(onSend = { onSend() })
+    val keyboardActions = KeyboardActions(onSend = { if (!isBusy && text.isNotBlank()) onSend() })
 
     Row(
         modifier = modifier
@@ -705,16 +708,7 @@ fun ChatInputBar(
             shape = dockShape,
             modifier = Modifier
                 .weight(1f)
-                .height(CHAT_INPUT_DOCK_HEIGHT)
-                .then(
-                    if (!liquidGlassEnabled) {
-                        Modifier
-                            .clip(dockShape)
-                            .background(panelColor)
-                    } else {
-                        Modifier
-                    }
-                ),
+                .heightIn(min = 40.dp, max = 112.dp),
             backdrop = backdrop,
             reuseEnabled = liquidGlassEnabled,
             drawShellLens = true,
@@ -727,48 +721,54 @@ fun ChatInputBar(
             } else {
                 AppContentColors.secondaryText()
             }
-            AppOutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.fillMaxSize(),
-                placeholderText = "输入消息...",
-                maxLines = 4,
-                keyboardOptions = keyboardOptions,
-                keyboardActions = keyboardActions,
-                shape = dockShape,
-                miuixCornerRadius = CHAT_INPUT_DOCK_HEIGHT / 2,
-                miuixContainerColor = Color.Transparent,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = fieldTextColor),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = fieldColor,
-                    unfocusedContainerColor = fieldColor,
-                    disabledContainerColor = fieldColor,
-                    focusedBorderColor = if (liquidChromeActive) {
-                        Color.Transparent
-                    } else {
-                        AppContentColors.accent()
+            if (liquidChromeActive) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    readOnly = isBusy,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp, max = 112.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    maxLines = 4,
+                    keyboardOptions = keyboardOptions,
+                    keyboardActions = keyboardActions,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = fieldTextColor),
+                    cursorBrush = SolidColor(AppContentColors.accent()),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (text.isEmpty()) {
+                                AppText(
+                                    "输入消息...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = placeholderColor,
+                                    maxLines = 1,
+                                )
+                            }
+                            innerTextField()
+                        }
                     },
-                    unfocusedBorderColor = if (liquidChromeActive) {
-                        Color.Transparent
-                    } else {
-                        MaterialTheme.colorScheme.outline
-                    },
-                    disabledBorderColor = Color.Transparent,
-                    focusedTextColor = fieldTextColor,
-                    unfocusedTextColor = fieldTextColor,
-                    disabledTextColor = fieldTextColor.copy(alpha = 0.72f),
-                    focusedPlaceholderColor = placeholderColor,
-                    unfocusedPlaceholderColor = placeholderColor,
-                    disabledPlaceholderColor = placeholderColor,
-                    cursorColor = fieldTextColor,
-                ),
-            )
+                )
+            } else {
+                com.android.purebilibili.core.ui.components.AppCompactInputField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 112.dp),
+                    placeholder = "输入消息...",
+                    containerColor = panelColor,
+                    readOnly = isBusy,
+                    singleLine = false,
+                    maxLines = 4,
+                    keyboardOptions = keyboardOptions,
+                    keyboardActions = keyboardActions,
+                )
+            }
         }
 
         BottomBarMatchedReusableLiquidDock(
             shape = CircleShape,
             modifier = Modifier
-                .size(CHAT_INPUT_DOCK_HEIGHT)
+                .size(visibleDockHeight)
                 .then(
                     if (!liquidGlassEnabled) {
                         Modifier
@@ -1177,7 +1177,7 @@ private fun MessageHorizontalVideoCard(
     supportingText: String? = null,
 ) {
     val cardShape = AppShapes.container(ContainerLevel.Card)
-    val contentTypography = feedContentTypography(FeedTitleHierarchy.Standard)
+    val contentTypography = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography()
     val glassContentColors = rememberMessageGlassContentColors(
         defaultOnSurface = AppContentColors.primaryText(),
         defaultOnSurfaceVariant = AppContentColors.secondaryText(),
@@ -1228,8 +1228,8 @@ private fun MessageHorizontalVideoCard(
                 AppText(
                     text = title,
                     style = contentTypography.title,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
+                    maxLines = com.android.purebilibili.core.ui.videoCardTitleMaxLines(),
+                    overflow = com.android.purebilibili.core.ui.videoCardTitleOverflow(),
                     color = glassContentColors.titleColor,
                     modifier = Modifier.fillMaxWidth(),
                 )

@@ -1,6 +1,7 @@
 // File: feature/video/ui/section/VideoInfoSection.kt
 package com.android.purebilibili.feature.video.ui.section
 
+import com.android.purebilibili.core.ui.components.rememberFollowActionWithConfirmation
 import com.android.purebilibili.core.ui.AppContentColors
 
 import coil3.request.crossfade
@@ -74,7 +75,6 @@ import com.android.purebilibili.core.ui.UserAvatarCornerMarkBadge
 import com.android.purebilibili.core.ui.resolveUserAvatarCornerMark
 import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.AppSurface
-import com.android.purebilibili.core.ui.components.resolveUpStatsText
 import com.android.purebilibili.core.ui.components.resolveUpNameColor
 import com.android.purebilibili.core.ui.components.UserUpBadge
 import com.android.purebilibili.core.theme.AppUiStyle
@@ -122,7 +122,7 @@ private val VIDEO_DESCRIPTION_URL_PATTERN =
 private val VIDEO_DESCRIPTION_INLINE_BVID_PATTERN =
     Regex("""(?<![A-Za-z0-9])BV[a-zA-Z0-9]{10}(?![A-Za-z0-9])""", RegexOption.IGNORE_CASE)
 private val VIDEO_DESCRIPTION_TOPIC_PATTERN =
-    Regex("""#([^#\n\r\t]+)#""")
+    Regex("""#[^#\s，。,.!?！？；;:：、]+#?""")
 private val VIDEO_DESCRIPTION_MENTION_PATTERN =
     Regex("""@[^\s@,，。:：;；!！?？/\\]{1,32}""")
 
@@ -180,7 +180,8 @@ private fun buildRawDescriptionAnnotatedString(
         val range: IntRange,
         val annotation: String,
         val displayText: String,
-        val priority: Int
+        val priority: Int,
+        val underline: Boolean = true
     )
 
     val matches = mutableListOf<LinkMatch>()
@@ -210,14 +211,15 @@ private fun buildRawDescriptionAnnotatedString(
             match.range.first <= existing.range.last && match.range.last >= existing.range.first
         }
         if (!overlapsUrl) {
-            val topic = match.groupValues[1].trim()
+            val topic = match.value.removePrefix("#").removeSuffix("#").trim()
             if (topic.isNotEmpty()) {
                 val encoded = java.net.URLEncoder.encode(topic, java.nio.charset.StandardCharsets.UTF_8.name())
                 matches += LinkMatch(
                     range = match.range,
                     annotation = "bilibili://search?keyword=$encoded",
                     displayText = match.value,
-                    priority = 2
+                    priority = 2,
+                    underline = false
                 )
             }
         }
@@ -255,7 +257,12 @@ private fun buildRawDescriptionAnnotatedString(
                     linkInteractionListener = linkListener,
                 )
             ) {
-                withStyle(SpanStyle(color = urlColor, textDecoration = TextDecoration.Underline)) {
+                withStyle(
+                    SpanStyle(
+                        color = urlColor,
+                        textDecoration = if (match.underline) TextDecoration.Underline else TextDecoration.None
+                    )
+                ) {
                     append(match.displayText)
                 }
             }
@@ -1105,7 +1112,8 @@ fun UpInfoSection(
             speedSettings = sharedTransitionSpeedSettings
         )
     }
-    val upStatsText = resolveUpStatsText(
+    // 统计是所有材质共有的详情信息，不调整 MD3、Miuix 或玻璃的原生控件参数。
+    val upStatsLabels = resolveVideoDetailOwnerStatsLabels(
         followerCount = followerCount,
         videoCount = videoCount
     )
@@ -1300,7 +1308,12 @@ fun UpInfoSection(
             // 关注状态未确认时不再用空格+灰底占位：直接按“未关注”的主题配色渲染完整按钮，
             // 状态回填后仅用 Crossfade 切换文案，避免灰胶囊→蓝色按钮的硬跳与闪烁。
             AppSurface(
-                onClick = onFollowClick,
+                onClick = rememberFollowActionWithConfirmation(
+                    targetKey = info.owner.mid,
+                    userName = info.owner.name,
+                    isFollowing = isFollowing,
+                    onFollowClick = onFollowClick,
+                ),
                 enabled = followStatusKnown,
                 color = when (followVisualPolicy.detailButtonTone) {
                     FollowButtonTone.PRIMARY -> AppContentColors.accent()
@@ -1353,26 +1366,24 @@ fun UpInfoSection(
                     Column(modifier = Modifier.weight(1f)) {
                         upNameContent(Modifier.fillMaxWidth())
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                        if (upStatsLabels.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            OwnerStatsRow(labels = upStatsLabels)
+                        }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (playerControlVisibility.showFollowButton) {
-                                followButtonContent()
-                            }
-                            if (!upStatsText.isNullOrBlank()) {
-                                AppText(
-                                    text = upStatsText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AppContentColors.secondaryText(),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            if (trailingContent != null) {
-                                trailingContent()
+                        if (playerControlVisibility.showFollowButton || trailingContent != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (playerControlVisibility.showFollowButton) {
+                                    followButtonContent()
+                                }
+                                if (trailingContent != null) {
+                                    trailingContent()
+                                }
                             }
                         }
                     }
@@ -1392,15 +1403,9 @@ fun UpInfoSection(
                     // UP owner name row
                     Column(modifier = Modifier.weight(1f)) {
                         upNameContent(Modifier)
-                        if (!upStatsText.isNullOrBlank()) {
+                        if (upStatsLabels.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(2.dp))
-                            AppText(
-                                text = upStatsText,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AppContentColors.secondaryText(),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            OwnerStatsRow(labels = upStatsLabels)
                         }
                     }
 
@@ -1593,7 +1598,15 @@ private fun CreatorTeamMemberChip(
             Box(
                 modifier = Modifier
                     .heightIn(min = 48.dp)
-                    .clickable(role = Role.Button, onClick = onFollowToggle),
+                    .clickable(
+                        role = Role.Button,
+                        onClick = rememberFollowActionWithConfirmation(
+                            targetKey = member.mid,
+                            userName = member.name,
+                            isFollowing = isFollowing,
+                            onFollowClick = onFollowToggle,
+                        ),
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 AppSurface(
@@ -2136,12 +2149,14 @@ private fun BgmRecommendVideoSkeletonRow(
         VideoCardSkeleton(
             modifier = Modifier.weight(1f),
             index = indexBase,
-            coverAspectRatio = cardLayout.coverAspectRatio
+            coverAspectRatio = cardLayout.coverAspectRatio,
+            compactMetadata = cardLayout.compactMetadata
         )
         VideoCardSkeleton(
             modifier = Modifier.weight(1f),
             index = indexBase + 1,
-            coverAspectRatio = cardLayout.coverAspectRatio
+            coverAspectRatio = cardLayout.coverAspectRatio,
+            compactMetadata = cardLayout.compactMetadata
         )
     }
 }
@@ -2642,4 +2657,24 @@ private fun mergeBgmRecommendedVideos(
         seenKeys.add(key)
     }
     return existing + appended
+}
+
+/** 数量与标签跟随主题字体，项间距使用布局单位，不依赖空格宽度。 */
+@Composable
+private fun OwnerStatsRow(labels: List<String>, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        labels.forEach { label ->
+            AppText(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = AppContentColors.secondaryText(),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }

@@ -191,6 +191,7 @@ internal sealed interface BiliPaiNavKey : NavKey {
     data class FavoriteSearch(
         val query: String = "",
         val scope: FavoriteSearchScope = FavoriteSearchScope.CURRENT_FOLDER,
+        val subscribed: Boolean = false,
     ) : BiliPaiNavKey {
         override val routeBase: String = "favorite_search"
     }
@@ -225,9 +226,10 @@ internal sealed interface BiliPaiNavKey : NavKey {
 
     @Serializable
     data class Following(
-        val mid: Long
+        val mid: Long,
+        val fans: Boolean = false,
     ) : BiliPaiNavKey {
-        override val routeBase: String = "following"
+        override val routeBase: String = if (fans) "fans" else "following"
     }
 
     @Serializable

@@ -31,7 +31,10 @@ internal const val VIDEO_CONTENT_COMMENT_TAB_INDEX = 1
 internal fun isVideoDetailEntryActiveMiuixTransitionSource(
     entrySourceRoute: String?,
     activeSourceRoute: String?,
+    miuixTransitionEnabled: Boolean,
 ): Boolean {
+    // Source metadata survives even when the navigation host disables the card morph.
+    if (!miuixTransitionEnabled) return false
     val normalizedEntrySource =
         normalizeSharedElementSourceRoute(entrySourceRoute) ?: return false
     val normalizedActiveSource =
@@ -281,6 +284,7 @@ internal fun resolveVideoDetailReturnMediaFrame(
     showResidentCoverUntilFirstFrame: Boolean = false,
     followProgressEnabled: Boolean = true,
     progressiveResidentCover: Boolean = false,
+    entryCoverAlpha: Float = 0f,
 ): VideoDetailReturnMediaFrame {
     if (!hasResidentCover) {
         return VideoDetailReturnMediaFrame(coverAlpha = 0f, playerAlpha = 1f)
@@ -290,7 +294,12 @@ internal fun resolveVideoDetailReturnMediaFrame(
     }
     val returnActive = isCommittedCardReturn || isReturnGestureInProgress
     if (!returnActive) {
-        return VideoDetailReturnMediaFrame(coverAlpha = 0f, playerAlpha = 1f)
+        // First frame is already rendered: keep it opaque beneath the fading cover.
+        // Return/seek ownership below deliberately ignores this entry-only effect.
+        return VideoDetailReturnMediaFrame(
+            coverAlpha = entryCoverAlpha.coerceIn(0f, 1f),
+            playerAlpha = 1f,
+        )
     }
     if (!liveReturnMorph) {
         if (progressiveResidentCover && followProgressEnabled) {
@@ -385,7 +394,7 @@ internal fun resolveVideoDetailReturnPlayerAlpha(
 /**
  * Resident / player-section cover — must match the **stationary list card** Coil request.
  *
- * Priority: Miuix session snapshot → click [CardPositionManager] snapshot → home prefetch
+ * Priority: session snapshot → click snapshot → retained entry source → home prefetch
  * registry → route cover (last resort, may not match list pixels).
  */
 internal data class VideoDetailResidentCoverSource(
@@ -404,6 +413,7 @@ internal fun resolveVideoDetailResidentCoverSource(
     prefetchCacheKey: String? = null,
     prefetchDecodeWidthPx: Int = 0,
     prefetchDecodeHeightPx: Int = 0,
+    retainedStationarySource: VideoDetailResidentCoverSource? = null,
 ): VideoDetailResidentCoverSource? {
     fun fromSnapshot(snapshot: VideoCardSourceChromeSnapshot?): VideoDetailResidentCoverSource? {
         val url = snapshot?.coverUrl?.trim()?.takeIf { it.isNotBlank() } ?: return null
@@ -417,6 +427,8 @@ internal fun resolveVideoDetailResidentCoverSource(
     }
     fromSnapshot(sourceChromeSnapshot)?.let { return it }
     fromSnapshot(clickChromeSnapshot)?.let { return it }
+    // 导航可能先清理来源元数据，再卸载详情 entry；落位末帧不能换成兜底图片。
+    retainedStationarySource?.let { return it }
     val prefetch = prefetchUrl?.trim()?.takeIf { it.isNotBlank() }
     val prefetchKey = prefetchCacheKey?.trim()?.takeIf { it.isNotBlank() }
     if (prefetch != null && prefetchKey != null) {

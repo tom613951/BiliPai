@@ -15,6 +15,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
@@ -68,6 +69,7 @@ import com.android.purebilibili.feature.anime4k.Anime4KPreset
 import com.android.purebilibili.feature.anime4k.DEFAULT_FSR_SHARPNESS
 import com.android.purebilibili.feature.anime4k.VideoEnhancementAlgorithm
 import com.android.purebilibili.feature.video.playback.audio.AudioQualityOption
+import com.android.purebilibili.feature.video.viewmodel.normalizeCodecFamilyKey
 import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.ui.AppSpacingTokens
 import com.android.purebilibili.core.ui.isMiuixNonGlassEnabled
@@ -76,6 +78,14 @@ import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.ContainerLevel
 import com.android.purebilibili.feature.settings.SettingsIconRole
 import com.android.purebilibili.feature.settings.rememberSettingsSemanticIcon
+
+private fun piliCodecLabel(codec: String?): String = when (normalizeCodecFamilyKey(codec)) {
+    "avc1" -> "AVC (H.264)"
+    "hev1" -> "HEVC (H.265)"
+    "av01" -> "AV1"
+    "dvh1", "dvhe" -> "Dolby Vision"
+    else -> codec ?: "未知"
+}
 
 private enum class VideoSettingsPanelTextRole {
     TITLE,
@@ -221,6 +231,8 @@ fun VideoSettingsPanel(
     // 定时关闭
     sleepTimerMinutes: Int?,
     onSleepTimerChange: (Int?) -> Unit,
+    isFullscreen: Boolean = false,
+    playerBounds: androidx.compose.ui.unit.IntRect? = null,
 
     // 视频控制
     onReload: () -> Unit,
@@ -262,10 +274,12 @@ fun VideoSettingsPanel(
     // [New] Codec & Audio Quality
     // Passed from VideoPlaybackViewModel/SettingsManager
     currentCodec: String = "hev1",
+    playingVideoCodec: String? = null,
     onCodecChange: (String) -> Unit = {},
     currentSecondCodec: String = "avc1",
     onSecondCodecChange: (String) -> Unit = {},
     currentAudioQuality: Int = -1,
+    selectedAudioQuality: Int = -1,
     availableAudioQualities: List<AudioQualityOption> = emptyList(),
     onAudioQualityChange: (Int) -> Unit = {},
     anime4kEnabled: Boolean = false,
@@ -288,18 +302,41 @@ fun VideoSettingsPanel(
     onCaptureScreenshot: () -> Unit = {},
     onDownloadAudio: () -> Unit = {},
 
+    onWatchLater: (() -> Unit)? = null,
+    onShowNotes: (() -> Unit)? = null,
+    onDownloadVideo: (() -> Unit)? = null,
+    onEditPlayUrl: (() -> Unit)? = null,
+    onSubtitleSettings: (() -> Unit)? = null,
+    onLoadSubtitle: (() -> Unit)? = null,
+    onSaveSubtitle: (() -> Unit)? = null,
+    onShowPlaybackInfo: (() -> Unit)? = null,
+    onReport: (() -> Unit)? = null,
+    onCast: (() -> Unit)? = null,
+    onEnterPip: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
+    playbackOrderLabel: String = "顺序播放",
+    playbackOrderOptions: List<String> = emptyList(),
+    onPlaybackOrderChange: ((Int) -> Unit)? = null,
+    playerVolume: Float = 1f,
+    onPlayerVolumeChange: ((Float) -> Unit)? = null,
+    playerVolumeUnavailableReason: String? = null,
+    isBackgroundPlaybackEnabled: Boolean = false,
+    onBackgroundPlaybackChange: ((Boolean) -> Unit)? = null,
+    availableCodecIds: List<String> = emptyList(),
+    sleepWaitForVideoEnd: Boolean = false,
+    onSleepWaitForVideoEndChange: ((Boolean) -> Unit)? = null,
+    sleepExitApp: Boolean = false,
+    onSleepExitAppChange: ((Boolean) -> Unit)? = null,
+    cdnServiceLabels: List<String> = emptyList(),
+    currentCdnServiceIndex: Int = 0,
+    onCdnServiceSelected: ((Int) -> Unit)? = null,
     // 关闭面板
     onDismiss: () -> Unit
 ) {
-    fun hasPermissionForQuality(qualityId: Int): Boolean {
-        return when {
-            qualityId >= 112 -> isVip
-            qualityId >= 80 -> isLoggedIn
-            else -> true
-        }
-    }
-
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    PlayerNativeMenuTheme {
+    var page by remember { mutableStateOf("main") }
+    var showPlayerVolumeDialog by remember { mutableStateOf(false) }
+    val controlCenterMotion: VideoControlCenterMotion? = null
     val useMiuixNonGlassPresentation = isMiuixNonGlassEnabled()
     val panelSpec = rememberVideoSettingsPanelVisualSpec()
     val customSectionHorizontalPadding = if (useMiuixNonGlassPresentation) {
@@ -320,6 +357,9 @@ fun VideoSettingsPanel(
         .effects
         .usesTonalContainerTreatment
     val context = androidx.compose.ui.platform.LocalContext.current
+    val playableAudioQualities = remember(availableAudioQualities) {
+        availableAudioQualities.filter { it.kind != null }
+    }
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val actionPolicy = remember(configuration.screenWidthDp) {
         resolveVideoSettingsPanelActionPolicy(widthDp = configuration.screenWidthDp)
@@ -383,27 +423,156 @@ fun VideoSettingsPanel(
     val gestureTapIcon = rememberAppGestureTapIcon()
     val settingsIcon = rememberAppSettingsIcon()
 
-    AppModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
+    if (showPlayerVolumeDialog && onPlayerVolumeChange != null) {
+        var draftVolume by remember { mutableFloatStateOf(playerVolume.coerceIn(1f, 3f)) }
+        AlertDialog(
+            onDismissRequest = { showPlayerVolumeDialog = false },
+            title = { Text("播放器音量") },
+            text = {
+                Column {
+                    Text("${(draftVolume * 100).toInt()}%")
+                    Slider(draftVolume, { draftVolume = it }, valueRange = 1f..3f, steps = 39)
+                }
+            },
+            dismissButton = { TextButton({ showPlayerVolumeDialog = false }) { Text("取消") } },
+            confirmButton = { TextButton({ onPlayerVolumeChange(draftVolume); showPlayerVolumeDialog = false }) { Text("确认") } },
+        )
+    }
+    PlayerNativeSettingsHost(
+        onDismiss = onDismiss,
+        isFullscreen = isFullscreen,
+        playerBounds = playerBounds,
     ) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding(),
-            contentPadding = PaddingValues(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(
-                if (useMiuixNonGlassPresentation) {
-                    AppSpacingTokens.ExtraSmall
-                } else if (usesTonalContainerTreatment) {
-                    4.dp
-                } else {
-                    8.dp
-                }
-            )
+            modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
+            contentPadding = PaddingValues(vertical = 14.dp),
         ) {
+            if (page != "advanced") {
+                item {
+                    if (page != "main") PlayerSettingsRow("返回", onClick = { page = "main" })
+                    val submenuTitle = when (page) { "quality" -> "选择画质"; "audio" -> "选择音质"; "codec" -> "选择解码格式"; "cdn" -> "CDN 设置"; else -> null }
+                    submenuTitle?.let { title ->
+                        Box(Modifier.fillMaxWidth().height(45.dp), contentAlignment = Alignment.Center) { Text(title, fontSize = 14.sp) }
+                    }
+                    when (page) {
+                        "main" -> {
+                            onWatchLater?.let { action -> PlayerSettingsRow("添加至「稍后再看」") { onDismiss(); action() } }
+                            onShowNotes?.let { action -> PlayerSettingsRow("查看笔记") { onDismiss(); action() } }
+                            onDownloadVideo?.let { action -> PlayerSettingsRow("离线缓存") { onDismiss(); action() } }
+                            PlayerSettingsRow("保存封面") { onDismiss(); onSaveCover() }
+                            PlayerSettingsRow("定时关闭", sleepTimerMinutes?.let { "剩余 $it 分钟" }) { page = "sleep" }
+                            onEditPlayUrl?.let { action -> PlayerSettingsRow("播放地址") { onDismiss(); action() } }
+                            PlayerSettingsRow("重载视频") { onDismiss(); onReload() }
+                            PlayerSettingsPopupRow(
+                                "超分辨率",
+                                when {
+                                    !anime4kEnabled -> "禁用"
+                                    videoEnhancementAlgorithm == VideoEnhancementAlgorithm.FSR_1_0 -> "FSR"
+                                    anime4kPreset == Anime4KPreset.FAST -> "效率"
+                                    else -> "画质"
+                                },
+                                listOf("禁用", "效率", "画质"),
+                                enabledOptions = listOf(true, anime4kAvailable, anime4kAvailable),
+                            ) { index ->
+                                if (index == 0) onAnime4kToggle(false)
+                                else if (anime4kAvailable) {
+                                    onVideoEnhancementAlgorithmChange(VideoEnhancementAlgorithm.ANIME4K)
+                                    onAnime4kPresetChange(if (index == 1) Anime4KPreset.FAST else Anime4KPreset.QUALITY)
+                                    onAnime4kToggle(true)
+                                }
+                            }
+                            if (onPlayerVolumeChange != null) {
+                                PlayerSettingsRow("播放器音量", "当前: ${(playerVolume * 100).toInt()}%") { showPlayerVolumeDialog = true }
+                            } else if (playerVolumeUnavailableReason != null) {
+                                PlayerSettingsRow("播放器音量", playerVolumeUnavailableReason, onClick = null)
+                            }
+                            if (cdnCount > 0 || cdnServiceLabels.isNotEmpty()) PlayerSettingsRow("CDN 设置", "当前：${cdnServiceLabels.getOrNull(currentCdnServiceIndex) ?: "线路 ${currentCdnIndex + 1}"}，无法播放请切换") { page = "cdn" }
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                FilterChip(isFlippedHorizontal, onFlipHorizontal, label = { Text("左右翻转") })
+                                FilterChip(isFlippedVertical, onFlipVertical, label = { Text("上下翻转") })
+                                FilterChip(isAudioOnly, onAudioOnlyToggle, label = { Text("听视频") })
+                                onBackgroundPlaybackChange?.let { change ->
+                                    FilterChip(isBackgroundPlaybackEnabled, { change(!isBackgroundPlaybackEnabled) }, label = { Text("后台播放") })
+                                }
+                            }
+                            if (qualityLabels.isNotEmpty()) PlayerSettingsRow("选择画质", "当前画质 $currentQualityLabel") { page = "quality" }
+                            if (playableAudioQualities.isNotEmpty()) PlayerSettingsRow("选择音质", playableAudioQualities.firstOrNull { it.preferenceId == selectedAudioQuality }?.label ?: "当前音质未知") { page = "audio" }
+                            PlayerSettingsRow("解码格式", "当前解码格式 ${piliCodecLabel(playingVideoCodec)}") {
+                                if (availableCodecIds.isNotEmpty()) page = "codec"
+                                else android.widget.Toast.makeText(context, "不支持选择解码格式", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                            onPlaybackOrderChange?.let { change -> PlayerSettingsPopupRow("播放顺序", playbackOrderLabel, playbackOrderOptions, onSelected = change) }
+                            onShowDanmakuPool?.let { action -> PlayerSettingsRow("弹幕列表") { onDismiss(); action() } }
+                            PlayerSettingsRow("弹幕设置") { onDismiss(); onDanmakuSettingsClick() }
+                            onSubtitleSettings?.let { action -> PlayerSettingsRow("字幕设置") { onDismiss(); action() } }
+                            onLoadSubtitle?.let { action -> PlayerSettingsRow("加载字幕") { onDismiss(); action() } }
+                            onSaveSubtitle?.let { action -> PlayerSettingsRow("保存字幕") { onDismiss(); action() } }
+                            onShowPlaybackInfo?.let { action -> PlayerSettingsRow("播放信息") { action() } }
+                            onReport?.let { action -> PlayerSettingsRow("举报") { onDismiss(); action() } }
+                            PlayerSettingsRow("高级设置") { page = "advanced" }
+                        }
+                        "sleep" -> PlayerSleepTimerSettings(
+                            sleepTimerMinutes, onSleepTimerChange,
+                            sleepWaitForVideoEnd, onSleepWaitForVideoEndChange,
+                            sleepExitApp, onSleepExitAppChange, onDismiss,
+                        )
+                        "quality" -> qualityLabels.forEachIndexed { index, label ->
+                            val id = qualityIds.getOrNull(index)
+                            PlayerSettingsSelectionRow(
+                                title = label,
+                                selected = label == currentQualityLabel,
+                                enabled = id != null && id in switchableQualityIds,
+                            ) { if (label != currentQualityLabel) { onQualitySelected(index); onDismiss() } }
+                        }
+                        "audio" -> playableAudioQualities.forEach { option ->
+                            PlayerSettingsSelectionRow(
+                                option.label, option.preferenceId == selectedAudioQuality,
+                                subtitle = option.codecDescription.takeIf { it.isNotBlank() },
+                            ) {
+                                if (option.preferenceId != currentAudioQuality) {
+                                    onAudioQualityChange(option.preferenceId)
+                                    onDismiss()
+                                }
+                            }
+                        }
+                        "codec" -> availableCodecIds.forEach { codec ->
+                            val family = normalizeCodecFamilyKey(codec) ?: return@forEach
+                            val selected = family == normalizeCodecFamilyKey(playingVideoCodec)
+                            PlayerSettingsSelectionRow(piliCodecLabel(codec), selected, subtitle = codec) {
+                                if (!selected) { onCodecChange(family); onDismiss() }
+                            }
+                        }
+                        "cdn", "cdnAdvanced" -> {
+                            if (page == "cdn") onCdnServiceSelected?.let { select ->
+                                cdnServiceLabels.forEachIndexed { index, label ->
+                                    PlayerSettingsSelectionRow(label, index == currentCdnServiceIndex) { select(index); onDismiss() }
+                                }
+                            }
+                            if (cdnServiceLabels.isNotEmpty() && page == "cdn") PlayerSettingsRow("线路诊断") { page = "cdnAdvanced" }
+                            if (cdnServiceLabels.isEmpty() || page == "cdnAdvanced") {
+                            repeat(cdnCount) { index ->
+                                val diagnostic = cdnLineDiagnostics.firstOrNull { it.index == index }
+                                PlayerSettingsRow(diagnostic?.displayName ?: "线路 ${index + 1}", if (index == currentCdnIndex) "当前" else null) {
+                                    com.android.purebilibili.feature.plugin.CdnTransferRuntime.preferHost(diagnostic?.host)
+                                    onSwitchCdnTo(index)
+                                }
+                            }
+                            PlaybackCdnDiagnostics(cdnLineDiagnostics, isCdnProbing, cdnCount > 0, onProbeCdnCandidates, onSwitchCdnTo, Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                }
+            } else {
+                item { PlayerSettingsRow("返回") { page = "main" } }
+                item {
+                    onCast?.let { action -> PlayerSettingsRow("投屏") { onDismiss(); action() } }
+                    onEnterPip?.let { action -> PlayerSettingsRow("画中画") { onDismiss(); action() } }
+                    onShare?.let { action -> PlayerSettingsRow("分享") { onDismiss(); action() } }
+                }
+            val groups = VideoControlCenterGroups(this, controlCenterMotion)
+
             //  定时关闭 - 垂直布局，选项在下一行
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -444,7 +613,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 //  重载视频
                 SettingsItem(
                     icon = refreshIcon,
@@ -457,7 +626,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 SettingsItem(
                     icon = settingsIcon,
                     title = "弹幕设置",
@@ -467,7 +636,7 @@ fun VideoSettingsPanel(
             }
 
             if (onShowDanmakuPool != null) {
-                item {
+                groups.item {
                     SettingsItem(
                         icon = rememberAppCommentIcon(),
                         title = "查看弹幕列表",
@@ -481,7 +650,7 @@ fun VideoSettingsPanel(
                 }
             }
 
-            item {
+            groups.item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     VideoSettingsSwitchRow(
                         icon = qualityIcon,
@@ -528,7 +697,7 @@ fun VideoSettingsPanel(
             }
 
             // [New] 资源下载
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -591,7 +760,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 //  镜像翻转按钮组
                 Row(
                     modifier = Modifier
@@ -644,7 +813,7 @@ fun VideoSettingsPanel(
 
             //  选择画质 - 内联选择
             if (qualityLabels.isNotEmpty()) {
-                item {
+                groups.item {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -688,8 +857,9 @@ fun VideoSettingsPanel(
                                 val isSelected = label == currentQualityLabel
                                 val qualityId = qualityIds.getOrNull(index) ?: 0
                                 val isSwitchable = qualityId in switchableQualityIds
-                                val hasPermission = hasPermissionForQuality(qualityId)
-                                val isEnabled = isSwitchable && hasPermission
+                                // Shared by glass, MD3 and Miuix: an actual server stream
+                                // remains selectable even when local membership is stale.
+                                val isEnabled = isSwitchable
                                 val containerColor = when {
                                     isSelected -> videoSettingsChipContainerColor(true)
                                     isEnabled -> videoSettingsChipContainerColor(false)
@@ -732,7 +902,7 @@ fun VideoSettingsPanel(
             }
 
             // [New] 编码格式选择
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -814,7 +984,7 @@ fun VideoSettingsPanel(
             }
 
             // [New] 次选编码格式选择
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -896,7 +1066,7 @@ fun VideoSettingsPanel(
             }
 
             // 音质入口始终保留，具体选项仍以当前播放资源真实返回的数据为准。
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -975,7 +1145,7 @@ fun VideoSettingsPanel(
 
              // [New] 音频语言选择 (AI Translation)
             if (aiAudioInfo?.items?.isNotEmpty() == true) {
-                item {
+                groups.item {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1048,7 +1218,7 @@ fun VideoSettingsPanel(
 
             // CDN 设置始终可见；候选线路由当前 playurl 会话提供。
             if (cdnCount > 0) {
-                item {
+                groups.item {
                     val diagnosticsByIndex = cdnLineDiagnostics.associateBy { it.index }
                     Column(
                         modifier = Modifier
@@ -1128,7 +1298,7 @@ fun VideoSettingsPanel(
             }
 
             //  播放倍速 - 内联选择
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1179,7 +1349,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     VideoSettingsSwitchRow(
                         icon = settingsIcon,
@@ -1223,7 +1393,7 @@ fun VideoSettingsPanel(
             }
 
             //  [新增] 双击跳转秒数设置 (带开关)
-            item {
+            groups.item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     val doubleTapSeekEnabled by com.android.purebilibili.core.store.SettingsManager
                         .getDoubleTapSeekEnabled(context)
@@ -1297,7 +1467,7 @@ fun VideoSettingsPanel(
             }
 
             //  [新增] 长按倍速设置
-            item {
+            groups.item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1345,7 +1515,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 VideoSettingsSwitchRow(
                     icon = gestureTapIcon,
                     title = "长按倍速锁定",
@@ -1365,7 +1535,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     VideoSettingsSwitchRow(
                         icon = flipVerticalIcon,
@@ -1396,7 +1566,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 VideoSettingsSwitchRow(
                     icon = rememberSettingsSemanticIcon(SettingsIconRole.PROGRESS_PEAK_DANMAKU),
                     title = "高能进度条趋势",
@@ -1412,7 +1582,7 @@ fun VideoSettingsPanel(
                 SettingsDivider()
             }
 
-            item {
+            groups.item {
                 VideoSettingsSwitchRow(
                     icon = rememberSettingsSemanticIcon(SettingsIconRole.PROGRESS_PEAK_DANMAKU),
                     title = "显示计数弹幕",
@@ -1427,7 +1597,9 @@ fun VideoSettingsPanel(
                 )
                 SettingsDivider()
             }
+            }
         }
+    }
     }
 }
 

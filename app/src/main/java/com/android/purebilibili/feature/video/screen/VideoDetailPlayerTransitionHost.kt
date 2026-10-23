@@ -83,17 +83,17 @@ internal data class ContinuousPlayerFullscreenExtras(
  * while the inline viewport grows into the landscape viewport.
  */
 /**
- * @param preferLayoutWidth16x9Inline 横屏 16:9 详情播放器：展开态按**实际布局宽度**算高度，
+ * @param preferLayoutWidthInline 普通视频竖屏详情播放器：展开态按**实际布局宽度**算高度，
  * 避免 `configuration.screenWidthDp` 与真机可用宽度不一致时出现左右黑边（vivo 等窄机更常见）。
- * 折叠/半折叠时必须仍尊重 [inlineHeight]（评论上滑缩小播放器），不能盖成固定 16:9。
- * @param inlineTopInset 沉浸状态栏额外高度；只加在 inline 高度上，不参与 16:9 比例本体。
+ * 折叠/半折叠时必须仍尊重 [inlineHeight]（评论上滑缩小播放器），不能盖成固定展开比例。
+ * @param inlineTopInset 沉浸状态栏额外高度；只加在 inline 高度上，不参与媒体比例本体。
  */
 internal fun Modifier.continuousPlayerViewportHeight(
     progressProvider: () -> Float,
     inlineHeight: Dp,
     fullscreenHeight: Dp,
     enabled: Boolean,
-    preferLayoutWidth16x9Inline: Boolean = false,
+    preferLayoutWidthInline: Boolean = false,
     inlineTopInset: Dp = 0.dp,
     removedInlineTopInsetProvider: () -> Dp = { 0.dp },
 ): Modifier {
@@ -104,7 +104,7 @@ internal fun Modifier.continuousPlayerViewportHeight(
         val callerInlinePx = (inlineHeight - removedInset).roundToPx().coerceAtLeast(0)
         val inlinePx = resolveContinuousPlayerInlineHeightPx(
             layoutWidthPx = layoutWidth,
-            preferLayoutWidth16x9Inline = preferLayoutWidth16x9Inline,
+            preferLayoutWidthInline = preferLayoutWidthInline,
             callerInlineHeightPx = callerInlinePx,
             inlineTopInsetPx = insetPx,
         )
@@ -140,23 +140,23 @@ internal fun Modifier.continuousPlayerViewportHeight(
  * 解析 continuous player 的 inline 高度。
  *
  * - 默认：直接使用调用方传入的 [callerInlineHeightPx]（已含评论上滑折叠进度）。
- * - [preferLayoutWidth16x9Inline]：展开时用真实布局宽算 16:9，消除 screenWidthDp 黑边；
+ * - [preferLayoutWidthInline]：展开时用真实布局宽计算加载封面与播放画面的统一 16:9 高度，消除 screenWidthDp 黑边；
  *   折叠时取与调用方高度的较小值，避免盖掉「上滑缩小播放器」。
  */
 internal fun resolveContinuousPlayerInlineHeightPx(
     layoutWidthPx: Int,
-    preferLayoutWidth16x9Inline: Boolean,
+    preferLayoutWidthInline: Boolean,
     callerInlineHeightPx: Int,
     inlineTopInsetPx: Int,
 ): Int {
     val callerPx = callerInlineHeightPx.coerceAtLeast(0)
-    if (!preferLayoutWidth16x9Inline) {
+    if (!preferLayoutWidthInline) {
         return callerPx.coerceAtLeast(1)
     }
     val expandedFromLayoutPx =
-        resolveLandscapeDetailPlayerContentHeightPx(layoutWidthPx = layoutWidthPx) +
+        resolvePhoneDetailPlayerContentHeightPx(layoutWidthPx = layoutWidthPx) +
             inlineTopInsetPx.coerceAtLeast(0)
-    // 展开：layout 宽 16:9 通常 ≤ screenWidthDp 估高，取 min 消黑边。
+    // 展开：layout 宽计算的高度通常 ≤ screenWidthDp 估高，取 min 消黑边。
     // 折叠/半折叠：caller 更小，取 min 保留上滑缩小。
     return minOf(expandedFromLayoutPx, callerPx).coerceAtLeast(1)
 }
@@ -203,6 +203,7 @@ internal fun PortraitInlineVideoPlayerHost(
     preserveCurrentFrameOnFullscreenChange: Boolean,
     liveBackPreview: Boolean,
     useTextureSurfaceForNavigation: Boolean,
+    isPlayerSurfaceReady: Boolean = true,
     predictiveBackCancelRecoveryGeneration: Int,
     allowLivePlayerSharedElement: Boolean,
     sourceRouteForSharedElement: String?,
@@ -301,6 +302,7 @@ internal fun PortraitInlineVideoPlayerHost(
                 isFollowSubmitting = fullscreenExtras?.isFollowSubmitting ?: engagementState.isFollowSubmitting,
                 isTripleSubmitting = fullscreenExtras?.isTripleSubmitting ?: engagementState.isTripleSubmitting,
                 isLiked = fullscreenExtras?.isLiked ?: engagementState.isLiked,
+                isDisliked = engagementState.isDisliked,
                 likeStatusKnown = fullscreenExtras?.likeStatusKnown ?: engagementState.likeStatusKnown,
                 isCoined = fullscreenExtras?.isCoined ?: (engagementState.coinCount > 0),
                 isFavorited = fullscreenExtras?.isFavorited ?: engagementState.isFavorited,
@@ -309,6 +311,7 @@ internal fun PortraitInlineVideoPlayerHost(
                 preserveCurrentFrameOnFullscreenChange = preserveCurrentFrameOnFullscreenChange,
                 liveBackPreview = liveBackPreview,
                 useTextureSurfaceForNavigation = useTextureSurfaceForNavigation,
+                isPlayerSurfaceReady = isPlayerSurfaceReady,
                 predictiveBackCancelRecoveryGeneration = predictiveBackCancelRecoveryGeneration,
                 allowLivePlayerSharedElement = allowLivePlayerSharedElement,
                 sourceRouteForSharedElement = sourceRouteForSharedElement,
@@ -324,6 +327,8 @@ internal fun PortraitInlineVideoPlayerHost(
                 onQualityChange = { qid -> playbackActions.changeQuality(qid) },
                 onBack = onBack,
                 onHomeClick = onHomeClick,
+                menuActions = playbackActions.menuActions,
+                onQuickFavorite = { engagementActions.onFavoriteAction(true) },
                 onLandscapeCommentClick = if (isFullscreen) {
                     fullscreenExtras?.onLandscapeCommentClick ?: {}
                 } else {
@@ -369,11 +374,11 @@ internal fun PortraitInlineVideoPlayerHost(
                 onToggleFollow = fullscreenExtras?.onToggleFollow ?: engagementActions.toggleFollow,
                 onFollow = fullscreenExtras?.onFollow ?: engagementActions.followOwner,
                 onToggleLike = fullscreenExtras?.onToggleLike ?: engagementActions.toggleLike,
-                onDislike = fullscreenExtras?.onDislike ?: playbackActions.markVideoNotInterested,
+                onDislike = fullscreenExtras?.onDislike ?: engagementActions.toggleDislike,
                 onCoin = fullscreenExtras?.onCoin ?: engagementActions.openCoinDialog,
                 onToggleFavorite = fullscreenExtras?.onToggleFavorite ?: engagementActions.toggleFavorite,
                 onTriple = fullscreenExtras?.onTriple ?: engagementActions.doTripleAction,
-                onPageSelect = fullscreenExtras?.onPageSelect ?: {},
+                onPageSelect = fullscreenExtras?.onPageSelect ?: playbackActions.switchPage,
                 onFavoritePlaylistClick = fullscreenExtras?.onFavoritePlaylistClick ?: {},
                 onSubtitleDisplayModePreferenceOverrideChange =
                     onSubtitleDisplayModePreferenceOverrideChange,

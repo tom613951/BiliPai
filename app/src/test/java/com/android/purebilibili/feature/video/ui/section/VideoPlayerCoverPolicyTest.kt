@@ -13,18 +13,15 @@ import kotlin.test.assertTrue
 class VideoPlayerCoverPolicyTest {
 
     @Test
-    fun firstFrameRevealHasNoFixedHoldOrSecondZoom() {
+    fun firstFrameReveal_usesShortFadeAndStartsHidden() {
         val motion = resolveVideoPlayerRevealMotionSpec()
-        assertEquals(0, motion.coverRevealHoldDelayMillis)
         assertTrue(motion.surfaceRevealDurationMillis in 100..160)
         val hidden = resolveVideoPlayerSurfaceRevealSpec(
             forceCoverDuringReturnAnimation = false,
             shouldKeepCoverForManualStart = false,
             hasStartedSmoothReveal = false,
-            surfaceRevealInitialScale = motion.surfaceRevealInitialScale,
         )
         assertEquals(0f, hidden.alpha)
-        assertEquals(1f, hidden.scale)
     }
 
     @Test
@@ -32,8 +29,6 @@ class VideoPlayerCoverPolicyTest {
         val normal = resolveVideoPlayerRevealMotionSpec()
         val reduced = resolveVideoPlayerRevealMotionSpec(reducedMotion = true)
         assertTrue(reduced.surfaceRevealDurationMillis < normal.surfaceRevealDurationMillis)
-        assertEquals(0, reduced.coverRevealHoldDelayMillis)
-        assertEquals(1f, reduced.surfaceRevealInitialScale)
         assertTrue(shouldHoldEntryCoverUnderlay(
             isFirstFrameRendered = true,
             forceCoverDuringReturnAnimation = false,
@@ -41,9 +36,6 @@ class VideoPlayerCoverPolicyTest {
             hasStartedSmoothReveal = true,
             isSurfaceRevealSettling = true,
         ))
-        assertTrue(resolveVideoPlayerCoverRevealSettleDelayMillis(
-            reduced.surfaceRevealDurationMillis,
-        ) > reduced.surfaceRevealDurationMillis)
         assertFalse(shouldHoldEntryCoverUnderlay(
             isFirstFrameRendered = true,
             forceCoverDuringReturnAnimation = false,
@@ -76,44 +68,48 @@ class VideoPlayerCoverPolicyTest {
     @Test
     fun verticalVideo_fillsPlayerViewportDuringCoverPhase() {
         assertTrue(
-            shouldFillPlayerViewportForManualStartCover(
+            resolveVideoPlayerEntryPresentationSpec(
                 shouldKeepCoverForManualStart = false,
                 forceCoverDuringReturnAnimation = false,
-                isVerticalVideo = true
-            )
+                isVerticalVideo = true,
+                targetMode = VideoSharedTransitionTargetMode.InlinePlayer,
+            ).fillCoverViewport
         )
     }
 
     @Test
     fun returnCoverSharedBounds_doesNotForceViewportFill() {
         assertFalse(
-            shouldFillPlayerViewportForManualStartCover(
+            resolveVideoPlayerEntryPresentationSpec(
                 shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = true,
-                isVerticalVideo = true
-            )
+                isVerticalVideo = true,
+                targetMode = VideoSharedTransitionTargetMode.InlinePlayer,
+            ).fillCoverViewport
         )
     }
 
     @Test
-    fun horizontalManualStartCover_keepsInlineCoverContainer() {
-        assertFalse(
-            shouldFillPlayerViewportForManualStartCover(
+    fun horizontalManualStartCover_fillsPlayerViewport() {
+        assertTrue(
+            resolveVideoPlayerEntryPresentationSpec(
                 shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = false,
-                isVerticalVideo = false
-            )
+                isVerticalVideo = false,
+                targetMode = VideoSharedTransitionTargetMode.InlinePlayer,
+            ).fillCoverViewport
         )
     }
 
     @Test
     fun verticalManualStartCover_canFillViewport() {
         assertTrue(
-            shouldFillPlayerViewportForManualStartCover(
+            resolveVideoPlayerEntryPresentationSpec(
                 shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = false,
-                isVerticalVideo = true
-            )
+                isVerticalVideo = true,
+                targetMode = VideoSharedTransitionTargetMode.InlinePlayer,
+            ).fillCoverViewport
         )
     }
 
@@ -128,15 +124,8 @@ class VideoPlayerCoverPolicyTest {
         assertTrue(reused.isFirstFrameRendered)
         assertFalse(reused.hasStartedSmoothReveal)
         assertTrue(
-            shouldStartSmoothCoverReveal(
-                isFirstFrameRendered = reused.isFirstFrameRendered,
-                forceCoverDuringReturnAnimation = false,
-                shouldKeepCoverForManualStart = false,
-            )
-        )
-        assertTrue(
             shouldCommitSmoothCoverReveal(
-                isFirstFrameRendered = true,
+                isFirstFrameRendered = reused.isFirstFrameRendered,
                 forceCoverDuringReturnAnimation = false,
                 shouldKeepCoverForManualStart = false,
             )
@@ -179,7 +168,7 @@ class VideoPlayerCoverPolicyTest {
         assertTrue(fullscreenSwitch.isFirstFrameRendered)
         assertTrue(fullscreenSwitch.hasStartedSmoothReveal)
         assertFalse(
-            shouldShowCoverImage(
+            shouldHoldEntryCoverUnderlay(
                 isFirstFrameRendered = fullscreenSwitch.isFirstFrameRendered,
                 forceCoverDuringReturnAnimation = false,
                 shouldKeepCoverForManualStart = false,
@@ -285,7 +274,7 @@ class VideoPlayerCoverPolicyTest {
             )
         )
         assertTrue(
-            shouldShowCoverImage(
+            shouldHoldEntryCoverUnderlay(
                 isFirstFrameRendered = true,
                 forceCoverDuringReturnAnimation = false,
                 shouldKeepCoverForManualStart = false,
@@ -306,40 +295,54 @@ class VideoPlayerCoverPolicyTest {
     }
 
     @Test
-    fun coverRevealSettleDelay_coversSurfaceRevealPlusBuffer() {
-        val delay = resolveVideoPlayerCoverRevealSettleDelayMillis(
-            surfaceRevealDurationMillis = 220
-        )
-        assertTrue(delay > 220L, "settle delay must outlast the surface reveal fade, got $delay")
+    fun coverHandoff_waitsForActualOpaqueSurface() {
+        for (alpha in listOf(0f, 0.5f, 0.9999f, Float.NaN)) {
+            assertFalse(shouldFinishVideoPlayerSurfaceReveal(
+                hasStartedSmoothReveal = true,
+                isPlayerSurfaceReady = true,
+                surfaceAlpha = alpha,
+            ))
+        }
+        assertTrue(shouldFinishVideoPlayerSurfaceReveal(
+            hasStartedSmoothReveal = true,
+            isPlayerSurfaceReady = true,
+            surfaceAlpha = 1f,
+        ))
     }
 
     @Test
-    fun surfaceViewKeepsOpaqueCoverUntilRevealSettlesEvenAfterFirstFrame() {
-        // SurfaceView 是独立硬件层，graphicsLayer.alpha 对它无效：一旦出帧就是不透明整块。
-        // 若此时按「已有首帧 → 允许叠化」放行，会露出「不透明帧 + 半透明封面」的黑底窗口。
-        assertFalse(canSurfaceParticipateInAlphaCrossfade(usesTextureSurface = false))
-        assertTrue(canSurfaceParticipateInAlphaCrossfade(usesTextureSurface = true))
-        assertTrue(
-            shouldHoldEntryCoverUnderlay(
-                isFirstFrameRendered = true,
-                forceCoverDuringReturnAnimation = false,
-                shouldKeepCoverForManualStart = false,
-                hasStartedSmoothReveal = true,
-                isSurfaceRevealSettling = false,
-                surfaceCanCrossfade = false,
-            )
+    fun coverHandoff_keepsCoverWhenRevealIsCancelledOrSurfaceUnavailable() {
+        assertFalse(shouldFinishVideoPlayerSurfaceReveal(
+            hasStartedSmoothReveal = false,
+            isPlayerSurfaceReady = true,
+            surfaceAlpha = 1f,
+        ))
+        assertFalse(shouldFinishVideoPlayerSurfaceReveal(
+            hasStartedSmoothReveal = true,
+            isPlayerSurfaceReady = false,
+            surfaceAlpha = 1f,
+        ))
+    }
+
+    @Test
+    fun surfaceViewRemovesSettledCoverWithoutFade() {
+        val holdUnderlay = shouldHoldEntryCoverUnderlay(
+            isFirstFrameRendered = true,
+            forceCoverDuringReturnAnimation = false,
+            shouldKeepCoverForManualStart = false,
+            hasStartedSmoothReveal = true,
+            isSurfaceRevealSettling = false,
         )
-        // TextureView 路径照旧：落定后移除垫底。
-        assertFalse(
-            shouldHoldEntryCoverUnderlay(
-                isFirstFrameRendered = true,
-                forceCoverDuringReturnAnimation = false,
-                shouldKeepCoverForManualStart = false,
-                hasStartedSmoothReveal = true,
-                isSurfaceRevealSettling = false,
-                surfaceCanCrossfade = true,
-            )
+        val motion = resolveVideoPlayerCoverMotionSpec(
+            forceCoverDuringReturnAnimation = false,
+            holdEntryCoverUnderlay = holdUnderlay,
+            surfaceCanCrossfade = canSurfaceParticipateInAlphaCrossfade(
+                usesTextureSurface = false,
+            ),
         )
+
+        assertFalse(holdUnderlay)
+        assertFalse(motion.shouldAnimateFade)
     }
 
     @Test
@@ -351,14 +354,22 @@ class VideoPlayerCoverPolicyTest {
             forceCoverDuringReturnAnimation = false,
             holdEntryCoverUnderlay = false,
             surfaceRevealDurationMillis = reveal.surfaceRevealDurationMillis,
+            surfaceCanCrossfade = canSurfaceParticipateInAlphaCrossfade(
+                usesTextureSurface = true,
+            ),
         )
+        assertTrue(cover.shouldAnimateFade)
         assertEquals(reveal.surfaceRevealDurationMillis, cover.exitFadeDurationMillis)
         val reduced = resolveVideoPlayerRevealMotionSpec(reducedMotion = true)
         val coverReduced = resolveVideoPlayerCoverMotionSpec(
             forceCoverDuringReturnAnimation = false,
             holdEntryCoverUnderlay = false,
             surfaceRevealDurationMillis = reduced.surfaceRevealDurationMillis,
+            surfaceCanCrossfade = canSurfaceParticipateInAlphaCrossfade(
+                usesTextureSurface = true,
+            ),
         )
+        assertTrue(coverReduced.shouldAnimateFade)
         assertEquals(reduced.surfaceRevealDurationMillis, coverReduced.exitFadeDurationMillis)
     }
 
@@ -472,6 +483,20 @@ class VideoPlayerCoverPolicyTest {
     }
 
     @Test
+    fun horizontalLoadingCoverFillsInlineSlotButKeepsFullscreenFit() {
+        for (manualStart in listOf(false, true)) {
+            for (target in listOf(VideoSharedTransitionTargetMode.InlineCover, VideoSharedTransitionTargetMode.InlinePlayer)) {
+                val spec = resolveVideoPlayerEntryPresentationSpec(manualStart, false, false, target)
+                assertEquals(VideoPlayerCoverContentScaleMode.Crop, spec.coverContentScaleMode)
+            }
+            val fullscreen = resolveVideoPlayerEntryPresentationSpec(
+                manualStart, false, false, VideoSharedTransitionTargetMode.LandscapeFullscreen,
+            )
+            assertEquals(VideoPlayerCoverContentScaleMode.Fit, fullscreen.coverContentScaleMode)
+        }
+    }
+
+    @Test
     fun verticalManualStartCover_usesViewportFillAndFitContentScale() {
         val spec = resolveVideoPlayerEntryPresentationSpec(
             shouldKeepCoverForManualStart = true,
@@ -505,8 +530,8 @@ class VideoPlayerCoverPolicyTest {
     fun forcedReturnCoverSharedBounds_keepsHomeCoverKeyMatchedDuringReturn() {
         // 返回阶段播放器容器会让出 sharedBounds，强制封面必须承接同一个 cover key。
         assertTrue(
-            shouldEnableForcedReturnCoverSharedBounds(
-                forceCoverDuringReturnAnimation = true,
+            shouldEnableCoverOverlaySharedBounds(
+                useCoverOverlaySharedBounds = true,
                 transitionEnabled = true,
                 hasSharedTransitionScope = true,
                 hasAnimatedVisibilityScope = true,
@@ -514,8 +539,8 @@ class VideoPlayerCoverPolicyTest {
             )
         )
         assertTrue(
-            shouldEnableForcedReturnCoverSharedBounds(
-                forceCoverDuringReturnAnimation = true,
+            shouldEnableCoverOverlaySharedBounds(
+                useCoverOverlaySharedBounds = true,
                 transitionEnabled = true,
                 hasSharedTransitionScope = true,
                 hasAnimatedVisibilityScope = true,
@@ -528,8 +553,8 @@ class VideoPlayerCoverPolicyTest {
     fun forcedReturnCoverSharedBounds_stillActiveForNonHomeCardReturnTargets() {
         listOf("dynamic", "search", "history", "favorite", "watch_later", "partition").forEach { route ->
             assertTrue(
-                shouldEnableForcedReturnCoverSharedBounds(
-                    forceCoverDuringReturnAnimation = true,
+                shouldEnableCoverOverlaySharedBounds(
+                    useCoverOverlaySharedBounds = true,
                     transitionEnabled = true,
                     hasSharedTransitionScope = true,
                     hasAnimatedVisibilityScope = true,
@@ -538,8 +563,6 @@ class VideoPlayerCoverPolicyTest {
                 "expected forced cover sharedBounds to remain enabled for sourceRoute=$route"
             )
         }
-        assertTrue(shouldUseReturnLandingMotionForForcedReturnCover(true))
-        assertFalse(shouldUseReturnLandingMotionForForcedReturnCover(false))
     }
 
     @Test
@@ -621,35 +644,34 @@ class VideoPlayerCoverPolicyTest {
     }
 
     @Test
-    fun verticalManualStart_usesBlackPlayerWithoutLoadingCover() {
+    fun verticalVideo_withoutSharedCard_keepsExistingCoverLoadingPolicy() {
         assertFalse(
             shouldLoadVideoPlayerCoverImage(
                 isVerticalVideo = true,
-                shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = false,
             )
         )
         assertTrue(
             shouldLoadVideoPlayerCoverImage(
                 isVerticalVideo = true,
-                shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = true,
-            )
-        )
-        assertFalse(
-            shouldLoadVideoPlayerCoverImage(
-                isVerticalVideo = true,
-                shouldKeepCoverForManualStart = false,
-                forceCoverDuringReturnAnimation = false,
             )
         )
         assertTrue(
             shouldLoadVideoPlayerCoverImage(
                 isVerticalVideo = false,
-                shouldKeepCoverForManualStart = true,
                 forceCoverDuringReturnAnimation = false,
             )
         )
+    }
+
+    @Test
+    fun verticalCardEntry_keepsCoverUntilRevealIndependentOfPlaybackIntent() {
+        assertTrue(shouldLoadVideoPlayerCoverImage(
+            isVerticalVideo = true,
+            forceCoverDuringReturnAnimation = false,
+            hasSharedCardTransition = true,
+        ))
     }
 
     @Test

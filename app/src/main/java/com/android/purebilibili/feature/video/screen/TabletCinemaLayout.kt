@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.video.screen
 
+import com.android.purebilibili.feature.video.ui.components.RelatedVideoList
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import com.android.purebilibili.feature.video.ambient.PlayerAmbientLayout
@@ -217,6 +219,7 @@ internal fun TabletCinemaLayout(
     predictiveBackCancelRecoveryGeneration: Int = 0,
     sponsorContributionState: SponsorContributionUiState = SponsorContributionUiState(),
     liveSurfaceCardTransitionEnabled: Boolean = true,
+    isPlayerSurfaceReady: Boolean = true,
 ) {
     val appContext = LocalContext.current
     val secondaryDefaultTab by SettingsManager
@@ -349,6 +352,7 @@ internal fun TabletCinemaLayout(
                     predictiveBackCancelRecoveryGeneration = predictiveBackCancelRecoveryGeneration,
                     sponsorContributionState = sponsorContributionState,
                     liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
+                    isPlayerSurfaceReady = isPlayerSurfaceReady,
                 )
 
                 if (success != null) {
@@ -488,6 +492,7 @@ private fun CinemaStagePlayer(
     predictiveBackCancelRecoveryGeneration: Int,
     sponsorContributionState: SponsorContributionUiState,
     liveSurfaceCardTransitionEnabled: Boolean = true,
+    isPlayerSurfaceReady: Boolean = true,
 ) {
     val success = uiState as? VideoPlaybackUiState.Success
     val sharedTransitionScope = LocalSharedTransitionScope.current
@@ -553,6 +558,7 @@ private fun CinemaStagePlayer(
                             cardTransitionEnabled = transitionEnabled,
                             liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
                         ),
+                        isPlayerSurfaceReady = isPlayerSurfaceReady,
                         allowLivePlayerSharedElement = resolveAllowLivePlayerSharedElementForMorph(
                             cardTransitionEnabled = transitionEnabled,
                             liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
@@ -584,6 +590,7 @@ private fun CinemaStagePlayer(
                         isFollowSubmitting = engagementState.isFollowSubmitting,
                         isTripleSubmitting = engagementState.isTripleSubmitting,
                         isLiked = engagementState.isLiked,
+                        isDisliked = engagementState.isDisliked,
                         likeStatusKnown = engagementState.likeStatusKnown,
                         isCoined = engagementState.coinCount > 0,
                         isFavorited = engagementState.isFavorited,
@@ -596,6 +603,8 @@ private fun CinemaStagePlayer(
                         onQualityChange = playbackActions.changeQuality,
                         onBack = onBack,
                         onHomeClick = onHomeClick,
+                        menuActions = playbackActions.menuActions,
+                        onQuickFavorite = { engagementActions.onFavoriteAction(true) },
                         onDoubleTapLike = engagementActions.toggleLike,
                         onReloadVideo = playbackActions.reloadVideo,
                         onSwitchCdn = playbackActions.switchCdn,
@@ -619,7 +628,7 @@ private fun CinemaStagePlayer(
                         onToggleFollow = engagementActions.toggleFollow,
                         onFollow = engagementActions.followOwner,
                         onToggleLike = engagementActions.toggleLike,
-                        onDislike = playbackActions.markVideoNotInterested,
+                        onDislike = engagementActions.toggleDislike,
                         onCoin = engagementActions.openCoinDialog,
                         onToggleFavorite = { engagementActions.onFavoriteAction(false) },
                         onTriple = engagementActions.doTripleAction,
@@ -710,6 +719,7 @@ private fun CinemaMetaPanel(
         if (showCollectionSheet) {
             CollectionSheet(
                 ugcSeason = season,
+                currentVideoInfo = success.info,
                 currentBvid = success.info.bvid,
                 currentCid = success.info.cid,
                 onDismiss = { showCollectionSheet = false },
@@ -1296,6 +1306,7 @@ private fun CinemaCommentsPane(
     onOpenBilibiliLink: ((String) -> Unit)?,
     onShareVideo: () -> Unit = {}
 ) {
+    val avatarPushEnabled = com.android.purebilibili.feature.video.ui.components.rememberCommentAvatarPushEnabled()
     val commentAppearance = rememberVideoCommentAppearance()
     val listState = rememberLazyListState()
     // 首屏骨架按视口高度铺够槽位：少铺会让列表在数据到达时被撑长、整体跳一下。
@@ -1336,15 +1347,12 @@ private fun CinemaCommentsPane(
     var previewInitialIndex by remember { mutableIntStateOf(0) }
     var sourceRect by remember { mutableStateOf<ImagePreviewSourceAnchor?>(null) }
     var previewTextContent by remember { mutableStateOf<ImagePreviewTextContent?>(null) }
-    val shouldLoadMore by remember {
+    // 这里只观察列表位置；加载、错误和末页状态由下面带 key 的 effect 读取最新参数。
+    val shouldLoadMore by remember(listState) {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
-            val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            totalItems > 0 &&
-                lastVisibleItem >= totalItems - 3 &&
-                !commentState.isRepliesLoading &&
-                !commentState.isRepliesRefreshing &&
-                commentState.repliesError == null
+            val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            totalItems > 0 && lastVisibleItem >= totalItems - 3
         }
     }
 
@@ -1355,6 +1363,7 @@ private fun CinemaCommentsPane(
         commentState.repliesError,
         commentState.isRepliesEnd,
         commentState.replies.size,
+        commentState.nextPage,
     ) {
         if (
             shouldLoadMore &&
@@ -1431,6 +1440,8 @@ private fun CinemaCommentsPane(
                     }
                 },
                 onSearchClick = { showCommentSearchSheet = true },
+                compactTypography = true,
+                scrollState = listState,
             )
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             AdaptivePullToRefreshBox(
@@ -1468,7 +1479,11 @@ private fun CinemaCommentsPane(
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        AppTextButton(onClick = commentActions.refreshComments) {
+                        AppTextButton(onClick = {
+                            if (commentState.replies.isNotEmpty() && !commentState.isRepliesEnd) {
+                                commentActions.loadComments()
+                            } else commentActions.refreshComments()
+                        }) {
                             AppText("重试")
                         }
                     }
@@ -1481,6 +1496,8 @@ private fun CinemaCommentsPane(
             ) { reply ->
                 ReplyItemView(
                     modifier = videoCommentItemModifier(),
+                    avatarListState = listState.takeIf { avatarPushEnabled },
+                    avatarItemKey = "curtain_reply_${reply.rpid}",
                     item = reply,
                     upMid = success.info.owner.mid,
                     showUpFlag = commentState.showUpFlag,
@@ -1636,12 +1653,22 @@ private fun CinemaRelatedPane(
     val backToTopButtonEnabled = rememberBackToTopButtonEnabled()
     val scope = rememberCoroutineScope()
 
+    val relatedChromeSource = if (com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
+        com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource()
+    } else {
+        null
+    }
+    val relatedChromeBackdrop = relatedChromeSource?.takeIf { it.isReady }?.backdrop
+
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+        RelatedVideoList(
+            cardLayout = relatedVideoCardLayout,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(relatedChromeSource?.modifier ?: Modifier),
             state = listState,
             contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
+        ) { cardPresentation ->
             val relatedRows = chunkRelatedVideosForHomeStyleGrid(visibleRelatedVideos)
             itemsIndexed(
                 items = relatedRows,
@@ -1662,6 +1689,7 @@ private fun CinemaRelatedPane(
                     RelatedVideoGridRow(
                         videos = row,
                         cardLayout = relatedVideoCardLayout,
+                        cardPresentation = cardPresentation,
                         followingMids = success.followingMids,
                         showUpBadge = showUpBadge,
                         onVideoClick = { video ->
@@ -1696,6 +1724,7 @@ private fun CinemaRelatedPane(
         }
 
         AppLiquidGlassBackToTopButton(
+            backdrop = relatedChromeBackdrop,
             visible = backToTopButtonEnabled && showBackToTop,
             onClick = {
                 scope.launch {

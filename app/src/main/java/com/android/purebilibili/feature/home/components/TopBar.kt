@@ -119,8 +119,7 @@ import com.android.purebilibili.core.ui.adaptive.MotionTier
 import com.android.purebilibili.core.ui.blur.currentUnifiedBlurIntensity
 import com.android.purebilibili.feature.home.components.liquid.rememberCombinedBackdrop as rememberMiuixCombinedBackdrop
 import top.yukonga.miuix.kmp.blur.Backdrop as MiuixBackdrop
-import top.yukonga.miuix.kmp.blur.layerBackdrop as miuixLayerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop as rememberMiuixLayerBackdrop
+import com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource
 import dev.chrisbanes.haze.HazeState
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -166,7 +165,7 @@ internal fun resolveTopTabDockIndicatorHorizontalGapDp(
 ): Float {
     val standardGap = if (hasOuterChromeSurface) 2f else 2f
     return if (isLiquidGlassReuseEnabled) {
-        (standardGap - 1f).coerceAtLeast(1f)
+        4f
     } else {
         standardGap
     }
@@ -959,7 +958,7 @@ internal fun resolveTopTabUnselectedColor(isLightMode: Boolean): Color {
 internal fun resolveIosTopTabSelectedContentColor(
     colorScheme: ColorScheme,
     uiStyle: AppUiStyle = AppUiStyle.MIUIX
-): Color = if (uiStyle == AppUiStyle.MIUIX) colorScheme.onSurface else colorScheme.primary
+): Color = colorScheme.primary
 
 internal fun resolveIosTopTabCapsuleContainerColor(
     isDarkTheme: Boolean,
@@ -1099,6 +1098,7 @@ private fun LightweightHomeTopTabs(
         resolvedLiquidGlassTuning.readabilityMode == LiquidGlassReadabilityMode.ADAPTIVE
     val adaptiveReadabilityState = rememberLiquidGlassAdaptiveReadabilityState(
         enabled = adaptiveReadabilityEnabled,
+        samplingAllowed = isViewportSyncEnabled && !isTransitionRunning,
     )
     val adaptiveTopTabContentColor = rememberLiquidGlassAdaptiveContentColor(
         stableColor = AppContentColors.primaryText(),
@@ -1192,9 +1192,45 @@ private fun LightweightHomeTopTabs(
     var tabViewportLeftInWindowPx by remember { mutableFloatStateOf(Float.NaN) }
     var selectedItemLeftInWindowPx by remember { mutableFloatStateOf(Float.NaN) }
     val pagerIsDragging = rememberTopTabPagerDragHeld(pagerState)
-    val currentPositionProvider = remember(pagerState, selectedIndex) {
+    // Glass taps own one destination; pager traversal must not select intervening slots.
+    // Native tabs retain their existing continuous selection and translation.
+    var glassTapTarget by remember(pagerState, categories) { mutableStateOf<Int?>(null) }
+    val glassTapScope = rememberCoroutineScope()
+    val glassTapMotion = remember(glassTapScope, categories.size) {
+        com.android.purebilibili.feature.home.components.miuix.DampedDragAnimation(
+            animationScope = glassTapScope,
+            initialValue = selectedIndex.toFloat(),
+            valueRange = 0f..categories.lastIndex.coerceAtLeast(0).toFloat(),
+            visibilityThreshold = 0.001f,
+            initialScale = 1f,
+            pressedScale = com.android.purebilibili.core.ui.animation.LiquidIndicatorMotion.pressedScale,
+            useMiuixIndicatorMotion = true,
+            onDragStarted = {}, onDragStopped = {}, onDrag = { _, _ -> },
+        )
+    }
+    LaunchedEffect(glassTapTarget, pagerState, pagerIsDragging, isLiquidGlassEnabled, selectedIndex) {
+        val target = glassTapTarget ?: return@LaunchedEffect
+        if (!isLiquidGlassEnabled || pagerIsDragging) {
+            glassTapTarget = null
+            return@LaunchedEffect
+        }
+        if (pagerState != null) {
+            snapshotFlow {
+                !pagerState.isScrollInProgress && pagerState.currentPage == target
+            }.first { it }
+        } else if (selectedIndex != target) {
+            return@LaunchedEffect
+        }
+        snapshotFlow {
+            kotlin.math.abs(glassTapMotion.value - target) < 0.001f &&
+                kotlin.math.abs(glassTapMotion.scaleX - 1f) < 0.001f &&
+                kotlin.math.abs(glassTapMotion.scaleY - 1f) < 0.001f
+        }.first { it }
+        glassTapTarget = null
+    }
+    val currentPositionProvider = remember(pagerState, selectedIndex, glassTapTarget, isLiquidGlassEnabled, glassTapMotion) {
         {
-            resolveTopTabIndicatorRenderPosition(
+            if (isLiquidGlassEnabled && glassTapTarget != null) glassTapMotion.value else resolveTopTabIndicatorRenderPosition(
                 selectedIndex = selectedIndex,
                 pagerCurrentPage = pagerState?.currentPage,
                 pagerTargetPage = pagerState?.targetPage,
@@ -1203,9 +1239,9 @@ private fun LightweightHomeTopTabs(
             )
         }
     }
-    val selectedContentPositionProvider = remember(pagerState, selectedIndex) {
+    val selectedContentPositionProvider = remember(pagerState, selectedIndex, glassTapTarget, isLiquidGlassEnabled, glassTapMotion) {
         {
-            resolveTopTabSelectedContentPosition(
+            if (isLiquidGlassEnabled && glassTapTarget != null) glassTapMotion.value else resolveTopTabSelectedContentPosition(
                 selectedIndex = selectedIndex,
                 pagerCurrentPage = pagerState?.currentPage,
                 pagerTargetPage = pagerState?.targetPage,
@@ -1222,7 +1258,9 @@ private fun LightweightHomeTopTabs(
     LaunchedEffect(selectedIndex, categories.size) {
         selectedItemLeftInWindowPx = Float.NaN
     }
-    KeepLazyTabSelectionVisible(listState, selectedIndex)
+    val glassTapSelectionActive = isLiquidGlassEnabled && glassTapTarget != null
+    val visualSelectedIndex = glassTapTarget?.takeIf { isLiquidGlassEnabled } ?: selectedIndex
+    KeepLazyTabSelectionVisible(listState, visualSelectedIndex)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -1303,7 +1341,12 @@ private fun LightweightHomeTopTabs(
             effectiveMaxDockWidth
         }
         if (useFloatingBottomBarDock) {
-            val floatingDockHeight = resolveHomeTopDockShellHeight(isFloatingStyle)
+            // Compact text geometry belongs only to liquid glass; native and icon layouts retain their sizes.
+            val floatingDockHeight = if (isLiquidGlassEnabled && showText && !showIcon) {
+                AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp
+            } else {
+                resolveHomeTopDockShellHeight(isFloatingStyle)
+            }
             val floatingDockWidth = resolveHomeTopTabFloatingDockWidth(
                 containerWidth = effectiveMaxDockWidth.dp,
                 itemCount = categories.size,
@@ -1315,15 +1358,29 @@ private fun LightweightHomeTopTabs(
                 showText = showText,
                 fontScale = density.fontScale,
             )
+            // Native pure-text top tabs were visually undersized; enlarge this mode only.
+            val resolvedFloatingLabelFontSize = if (!isLiquidGlassEnabled && showText && !showIcon) {
+                (floatingLabelFontSize.value + 2f).sp
+            } else {
+                floatingLabelFontSize
+            }
             val minimumSlotWidth = com.android.purebilibili.core.ui.components.rememberMeasuredTabMinWidth(
-                requestedMinWidth = maxOf(
-                    (floatingDockHeight - AppSpacingTokens.ExtraSmall * 2).coerceAtLeast(0.dp),
-                    if (showIcon) resolveTopTabIconSizeDp(if (showText) 0 else 1).dp +
-                        AppSpacingTokens.Small * 2 else AppChromeSizeTokens.MinimumTouchTarget,
+                // Only glass reserves a horizontal capsule; native MD3/Miuix retain their widths.
+                requestedMinWidth = resolveHomeTopDockMinimumSlotWidth(
+                    shellHeight = floatingDockHeight,
+                    liquidGlassEnabled = isLiquidGlassEnabled,
+                    contentMinWidth = maxOf(
+                        (floatingDockHeight - AppSpacingTokens.ExtraSmall * 2).coerceAtLeast(0.dp),
+                        if (showIcon) resolveHomeTopDockIconSizeDp(
+                            if (showText) 0 else 1,
+                            liquidGlassEnabled = isLiquidGlassEnabled,
+                        ).dp +
+                            AppSpacingTokens.Small * 2 else AppChromeSizeTokens.MinimumTouchTarget,
+                    ),
                 ),
                 labels = if (showText) categories else emptyList(),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(
-                    fontSize = floatingLabelFontSize,
+                    fontSize = resolvedFloatingLabelFontSize,
                     fontWeight = FontWeight.Bold,
                 ),
             )
@@ -1372,13 +1429,15 @@ private fun LightweightHomeTopTabs(
                     dockHeight = floatingDockHeight,
                     horizontalPadding = dockHorizontalPadding,
                     scrollState = dockScrollState.takeIf { needsDockScroll },
-                    labelFontSize = floatingLabelFontSize,
+                    labelFontSize = resolvedFloatingLabelFontSize,
                     liquidGlassEffectsEnabled = isLiquidGlassEnabled,
                     miuixBackdrop = miuixBackdrop,
                     liquidGlassPreset = liquidGlassPreset,
                     liquidGlassTuning = resolvedLiquidGlassTuning,
                     indicatorPositionProvider = currentPositionProvider,
                     isScrollInProgressProvider = pagerScrollingProvider,
+                    isPagerDraggingProvider = { pagerIsDragging },
+                    pagerTargetPositionProvider = { (pagerState?.targetPage ?: selectedIndex).toFloat() },
                     modifier = Modifier
                         .width(if (needsDockScroll) effectiveMaxDockWidth.dp else fittedDockWidth)
                         .height(floatingDockHeight),
@@ -1419,7 +1478,13 @@ private fun LightweightHomeTopTabs(
             else -> md3ContentPadding
         }
         val textMeasurer = rememberTextMeasurer()
-        val md3ContentWidths = remember(categories, normalizedLabelMode, density, textMeasurer) {
+        val md3ContentWidths = remember(
+            categories,
+            normalizedLabelMode,
+            isLiquidGlassEnabled,
+            density,
+            textMeasurer,
+        ) {
             categories.map { category ->
                 val textWidth = if (showText) {
                     with(density) {
@@ -1436,7 +1501,10 @@ private fun LightweightHomeTopTabs(
                     0.dp
                 }
                 val iconWidth = if (showIcon) {
-                    resolveTopTabIconSizeDp(normalizedLabelMode).dp
+                    resolveHomeTopDockIconSizeDp(
+                        normalizedLabelMode,
+                        liquidGlassEnabled = isLiquidGlassEnabled,
+                    ).dp
                 } else {
                     0.dp
                 }
@@ -1552,10 +1620,10 @@ private fun LightweightHomeTopTabs(
         // 位置以 State 形式持有：pager fraction 与指示器直拖位置均为 snapshot state。
         // 外层组合体不直接逐帧读取（那会让整个 chrome 在横滑期间每帧重组）；
         // 连续值由指示器 overlay 子组件和 derivedStateOf 离散包装在各自 scope 内读取。
-        val pagerIndicatorPositionState = remember(pagerState, selectedIndex) {
+        val pagerIndicatorPositionState = remember(currentPositionProvider) {
             derivedStateOf { currentPositionProvider() }
         }
-        val pagerContentPositionState = remember(pagerState, selectedIndex) {
+        val pagerContentPositionState = remember(selectedContentPositionProvider) {
             derivedStateOf { selectedContentPositionProvider() }
         }
         val topTabIndicatorOwnsPosition = topTabIndicatorDirectDragActive ||
@@ -1594,60 +1662,6 @@ private fun LightweightHomeTopTabs(
                 }
             }
         }
-        val indicatorIsInteracting = pagerIsDragging || pagerIsScrolling ||
-            topTabIndicatorDirectDragActive
-        val topTabShouldStretchIndicator by remember(indicatorIsInteracting, topTabIndicatorPositionState) {
-            derivedStateOf {
-                shouldDeformTopTabIndicator(
-                    position = topTabIndicatorPositionState.value,
-                    isInMotion = indicatorIsInteracting
-                )
-            }
-        }
-        // 速度跟踪器必须是普通可变字段而非 snapshot state：derivedStateOf 的
-        // 计算体既读又写它们，若为 state 会自失效形成重组死循环（静止时全局
-        // 锁 120Hz）。作为纯记忆字段写入不触发任何失效，仅位置 state 变化
-        // 才重算，空闲时无读取即无开销。
-        val topTabVelocityTracker = remember {
-            object {
-                var previousPosition = Float.NaN
-                var previousNanos = 0L
-            }
-        }
-        val topTabMotionVelocityItemsPerSecondState = remember(topTabIndicatorPositionState) {
-            derivedStateOf {
-                val position = topTabIndicatorPositionState.value
-                val now = System.nanoTime()
-                val previousPosition = topTabVelocityTracker.previousPosition
-                val velocity = if (previousPosition.isNaN()) {
-                    0f
-                } else {
-                    resolveTopTabPagerVelocityItemsPerSecond(
-                        currentPosition = position,
-                        previousPosition = previousPosition,
-                        elapsedNanos = (now - topTabVelocityTracker.previousNanos).coerceAtLeast(1L)
-                    )
-                }
-                topTabVelocityTracker.previousPosition = position
-                topTabVelocityTracker.previousNanos = now
-                velocity
-            }
-        }
-        val topTabMotionVelocityPxPerSecondState = remember(density, itemWidth, topTabMotionVelocityItemsPerSecondState) {
-            derivedStateOf {
-                topTabMotionVelocityItemsPerSecondState.value * with(density) {
-                    itemWidth.toPx()
-                }
-            }
-        }
-        val topTabIndicatorInteractionSource = remember { MutableInteractionSource() }
-        val topTabIndicatorPressed by topTabIndicatorInteractionSource.collectIsPressedAsState()
-        // 指示器缩放弹簧、折射面板偏移、胶囊宽高与平移等连续管线全部下沉到
-        // LightweightTopTabIndicatorOverlay，在子组件 scope 内逐帧求值，
-        // 避免横滑期间外层 chrome 整体重组。
-        // Selected-tab pill position: item slot center minus half the pill width, so the
-        // capsule follows the pager offset and the row scroll while staying inside the dock.
-        // （推导移入 LightweightTopTabIndicatorOverlay，位置经 State 注入。）
         val shouldUseMovingIosCapsule = effectivePresentation == AppTopTabPresentation.MOVING_CAPSULE &&
             !skinPlainStyle &&
             !hasSkinStickerIcons
@@ -1678,12 +1692,97 @@ private fun LightweightHomeTopTabs(
             !skinPlainStyle &&
             !hasSkinStickerIcons &&
             !shouldUseMd3NativeUnderline
+
+        val indicatorIsInteracting = glassTapSelectionActive || pagerIsDragging || pagerIsScrolling ||
+            topTabIndicatorDirectDragActive
+        val topTabShouldStretchIndicator by remember(indicatorIsInteracting, topTabIndicatorPositionState, shouldUseLiquidGlassIndicator) {
+            derivedStateOf {
+                if (shouldUseLiquidGlassIndicator) indicatorIsInteracting else shouldDeformTopTabIndicator(
+                    position = topTabIndicatorPositionState.value,
+                    isInMotion = indicatorIsInteracting
+                )
+            }
+        }
+        // 速度跟踪器必须是普通可变字段而非 snapshot state：derivedStateOf 的
+        // 计算体既读又写它们，若为 state 会自失效形成重组死循环（静止时全局
+        // 锁 120Hz）。作为纯记忆字段写入不触发任何失效，仅位置 state 变化
+        // 才重算，空闲时无读取即无开销。
+        val topTabVelocityTracker = remember {
+            object {
+                var previousPosition = Float.NaN
+                var previousNanos = 0L
+            }
+        }
+        val legacyTopTabMotionVelocityItemsPerSecondState = remember(topTabIndicatorPositionState) {
+            derivedStateOf {
+                val position = topTabIndicatorPositionState.value
+                val now = System.nanoTime()
+                val previousPosition = topTabVelocityTracker.previousPosition
+                val velocity = if (previousPosition.isNaN()) {
+                    0f
+                } else {
+                    resolveTopTabPagerVelocityItemsPerSecond(
+                        currentPosition = position,
+                        previousPosition = previousPosition,
+                        elapsedNanos = (now - topTabVelocityTracker.previousNanos).coerceAtLeast(1L)
+                    )
+                }
+                topTabVelocityTracker.previousPosition = position
+                topTabVelocityTracker.previousNanos = now
+                velocity
+            }
+        }
+        // Glass motion uses frame timestamps, not the timing of derived-state reads.
+        // Sampling the latest position once per frame also observes zero velocity at rest.
+        val glassTopTabVelocity = remember { mutableFloatStateOf(0f) }
+        LaunchedEffect(shouldUseLiquidGlassIndicator, indicatorIsInteracting, topTabIndicatorPositionState) {
+            glassTopTabVelocity.floatValue = 0f
+            if (!shouldUseLiquidGlassIndicator || !indicatorIsInteracting) return@LaunchedEffect
+            var previousPosition = topTabIndicatorPositionState.value
+            var previousFrame = withFrameNanos { it }
+            try {
+                while (true) {
+                    val frame = withFrameNanos { it }
+                    val position = topTabIndicatorPositionState.value
+                    glassTopTabVelocity.floatValue = resolveTopTabPagerVelocityItemsPerSecond(
+                        currentPosition = position,
+                        previousPosition = previousPosition,
+                        elapsedNanos = frame - previousFrame,
+                    )
+                    previousPosition = position
+                    previousFrame = frame
+                }
+            } finally {
+                glassTopTabVelocity.floatValue = 0f
+            }
+        }
+        val topTabMotionVelocityItemsPerSecondState: State<Float> =
+            if (shouldUseLiquidGlassIndicator) glassTopTabVelocity else legacyTopTabMotionVelocityItemsPerSecondState
+        val topTabMotionVelocityPxPerSecondState = remember(density, itemWidth, topTabMotionVelocityItemsPerSecondState) {
+            derivedStateOf {
+                topTabMotionVelocityItemsPerSecondState.value * with(density) {
+                    itemWidth.toPx()
+                }
+            }
+        }
+        val topTabIndicatorInteractionSource = remember { MutableInteractionSource() }
+        val topTabIndicatorPressed by topTabIndicatorInteractionSource.collectIsPressedAsState()
+        // 指示器缩放弹簧、折射面板偏移、胶囊宽高与平移等连续管线全部下沉到
+        // LightweightTopTabIndicatorOverlay，在子组件 scope 内逐帧求值，
+        // 避免横滑期间外层 chrome 整体重组。
+        // Selected-tab pill position: item slot center minus half the pill width, so the
+        // capsule follows the pager offset and the row scroll while staying inside the dock.
+        // （推导移入 LightweightTopTabIndicatorOverlay，位置经 State 注入。）
         val shouldPrimeTopTabLiquidGlassCapture =
             isLiquidGlassEnabled &&
                 !skinPlainStyle &&
                 !hasSkinStickerIcons
-        // Miuix-only capture (no legacy dual path).
-        val topTabMiuixContentBackdrop = rememberMiuixLayerBackdrop()
+        // Record the glass export without a transparent graphics layer: navigation
+        // fades must not let the renderer skip the labels sampled by the capsule.
+        val topTabCaptureSource = if (shouldPrimeTopTabLiquidGlassCapture) {
+            rememberChromeBackdropSource(drawContentToScreen = false)
+        } else null
+        val topTabMiuixContentBackdrop = topTabCaptureSource?.backdrop
         // 视觉策略只产出离散决策（是否折射/中性着色），包一层 derivedStateOf：
         // 位置/速度仍逐帧进入推导，但只有布尔结果变化才通知外层重组。
         val topTabIndicatorVisualPolicy by remember(
@@ -1710,7 +1809,7 @@ private fun LightweightHomeTopTabs(
         // already-frosted dock material and tinted labels, so the indicator never falls
         // back to a raw-page-only frame during idle/gesture transitions.
         val effectiveTopTabMiuixContentBackdrop = when {
-            !topTabIndicatorBackdropPolicy.useIndicatorBackdrop -> null
+            !topTabIndicatorBackdropPolicy.useIndicatorBackdrop || topTabMiuixContentBackdrop == null -> null
             topTabIndicatorBackdropPolicy.useCombinedBackdrop && miuixBackdrop != null ->
                 rememberMiuixCombinedBackdrop(miuixBackdrop, topTabMiuixContentBackdrop)
             else -> topTabMiuixContentBackdrop
@@ -1725,7 +1824,7 @@ private fun LightweightHomeTopTabs(
             liquidGlassEnabled = shouldUseLiquidGlassIndicator,
         )
         val topTabVisibleContentZIndex = if (useTopTabGlassColorPath) 0f else 2f
-        val topTabThemeColor = AppContentColors.accent()
+        val topTabThemeColor = AppContentColors.selectionAccent(shouldUseLiquidGlassIndicator)
         val stableTopTabExportTintColor = resolveAndroidNativeExportTintColor(
             themeColor = topTabThemeColor,
             darkTheme = isDarkTheme
@@ -1736,9 +1835,13 @@ private fun LightweightHomeTopTabs(
         val topTabExportMonochromeColor = resolveSharedLiquidExportMonochromeColor(
             darkTheme = isDarkTheme
         )
-        val measuredSelectedItemLeftPxState = remember(shouldUseMovingIosCapsule) {
+        val measuredSelectedItemLeftPxState = remember(shouldUseMovingIosCapsule, isLiquidGlassEnabled) {
             derivedStateOf {
-                if (!shouldUseMovingIosCapsule ||
+                // Equal-width glass slots use local pager/scroll geometry. Window bounds
+                // are clipped and transformed while the page exits, so subtracting
+                // them can move the capsule even though its selected tab is unchanged.
+                // Keep the native non-glass measurement path unchanged.
+                if (isLiquidGlassEnabled || !shouldUseMovingIosCapsule ||
                     tabViewportLeftInWindowPx.isNaN() ||
                     selectedItemLeftInWindowPx.isNaN()
                 ) {
@@ -1781,9 +1884,13 @@ private fun LightweightHomeTopTabs(
         val shouldAnimateMd3Tap = shouldUseMd3NativeUnderline &&
             !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current &&
             shouldAnimateMd3TopTabUnderline(
-            pagerIsDragging = pagerIsDragging,
-            topTabIndicatorOwnsPosition = topTabIndicatorOwnsPosition
-        )
+                pagerIsDragging = pagerIsDragging,
+                topTabIndicatorOwnsPosition = topTabIndicatorOwnsPosition,
+                // Native MD3 follows the pager for taps, drags and release alike, as in
+                // video detail. Glass and Miuix retain their existing animation owners.
+                pagerDrivesIndicator = pagerState != null && !isLiquidGlassEnabled &&
+                    LocalAppUiStyle.current == AppUiStyle.MATERIAL3,
+            )
         val isMiuixUnderline = LocalAppUiStyle.current == AppUiStyle.MIUIX
         val leftAnimationSpec: androidx.compose.animation.core.AnimationSpec<Float> = if (shouldAnimateMd3Tap) {
             if (isMiuixUnderline) {
@@ -1886,7 +1993,9 @@ private fun LightweightHomeTopTabs(
                     .weight(1f)
                     .fillMaxHeight()
                     .onGloballyPositioned { coordinates ->
-                        tabViewportLeftInWindowPx = coordinates.boundsInWindow().left
+                        if (!isLiquidGlassEnabled) {
+                            tabViewportLeftInWindowPx = coordinates.boundsInWindow().left
+                        }
                     }
             ) {
                 val topTabContentPadding = PaddingValues(horizontal = topTabHorizontalPadding)
@@ -1918,6 +2027,16 @@ private fun LightweightHomeTopTabs(
                         )
                     }
                 } else null
+                SideEffect {
+                    topTabCaptureHighlight?.drawPositionProvider = { size ->
+                        // The capture row is in content coordinates; its layer already
+                        // applies padding/scroll. Keep tap light on the moving capsule.
+                        androidx.compose.ui.geometry.Offset(
+                            (topTabContentPositionState.value + 0.5f) * with(density) { itemWidth.toPx() },
+                            size.height / 2f,
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier.fillMaxSize()
                         .then(topTabCaptureHighlight?.gestureModifier ?: Modifier),
@@ -1932,17 +2051,16 @@ private fun LightweightHomeTopTabs(
                             .height(topTabCaptureHeight)
                             .align(Alignment.Center)
                             .clearAndSetSemantics {}
-                            .alpha(0f)
                             .zIndex(0f)
+                            .then(topTabCaptureSource?.modifier ?: Modifier)
                             .run {
                                 if (miuixBackdrop != null) {
-                                    miuixLayerBackdrop(topTabMiuixContentBackdrop)
-                                        .graphicsLayer {
-                                            // Only mirror LazyRow content origin (padding - scroll).
-                                            translationX =
-                                                topTabHorizontalPaddingPx -
-                                                    topTabListScrollOffsetPxProvider()
-                                        }
+                                    graphicsLayer {
+                                        // Only mirror LazyRow content origin (padding - scroll).
+                                        translationX =
+                                            topTabHorizontalPaddingPx -
+                                                topTabListScrollOffsetPxProvider()
+                                    }
                                         .biliPaiFloatingDockCaptureSurface(
                                             backdrop = miuixBackdrop,
                                             containerColor = topTabIndicatorCaptureSurfaceColor,
@@ -1955,12 +2073,11 @@ private fun LightweightHomeTopTabs(
                                         )
                                 } else {
                                     // No page backdrop: still record local tint layer for indicator.
-                                    miuixLayerBackdrop(topTabMiuixContentBackdrop)
-                                        .graphicsLayer {
-                                            translationX =
-                                                topTabHorizontalPaddingPx -
-                                                    topTabListScrollOffsetPxProvider()
-                                        }
+                                    graphicsLayer {
+                                        translationX =
+                                            topTabHorizontalPaddingPx -
+                                                topTabListScrollOffsetPxProvider()
+                                    }
                                         .background(topTabIndicatorCaptureSurfaceColor)
                                 }
                             }
@@ -1980,7 +2097,7 @@ private fun LightweightHomeTopTabs(
                                     categoryKey = categoryKey,
                                     index = index,
                                     selectionFraction = 1f,
-                                    selectedIndex = selectedIndex,
+                                    selectedIndex = visualSelectedIndex,
                                     showIcon = showIcon,
                                     showText = showText,
                                     itemWidth = itemWidth,
@@ -2027,7 +2144,7 @@ private fun LightweightHomeTopTabs(
                             skinPlainStyle = skinPlainStyle,
                             hasSkinStickerIcon = hasSkinStickerIcons
                         )
-                        val measuredItemModifier = if (shouldUseMovingIosCapsule && index == selectedIndex) {
+                        val measuredItemModifier = if (!isLiquidGlassEnabled && shouldUseMovingIosCapsule && index == selectedIndex) {
                             Modifier.onGloballyPositioned { coordinates ->
                                 selectedItemLeftInWindowPx = coordinates.boundsInWindow().left
                             }
@@ -2041,7 +2158,7 @@ private fun LightweightHomeTopTabs(
                             categoryKey = categoryKey,
                             index = index,
                             selectionFraction = selectionFraction,
-                            selectedIndex = selectedIndex,
+                            selectedIndex = visualSelectedIndex,
                             showIcon = showIcon,
                             showText = showText,
                             itemWidth = itemWidth,
@@ -2073,8 +2190,14 @@ private fun LightweightHomeTopTabs(
                             },
                             onClick = {
                                 performHomeTopBarTap(haptic = haptic, onClick = {
-                                    when (resolveTopTabClickAction(index, selectedIndex)) {
+                                    when (resolveTopTabClickAction(index, visualSelectedIndex)) {
                                         TopTabClickAction.SELECT_TAB -> {
+                                            if (shouldUseLiquidGlassIndicator) {
+                                                if (glassTapTarget == null) glassTapMotion.snapTo(currentPositionProvider())
+                                                topTabIndicatorSettlingTarget = null
+                                                glassTapTarget = index
+                                                glassTapMotion.animateToValue(index.toFloat())
+                                            }
                                             md3UnderlineTargetIndex = index
                                             onCategorySelected(index)
                                         }
@@ -2091,6 +2214,7 @@ private fun LightweightHomeTopTabs(
                 // 内逐帧求值；外层仅以 State/lambda 注入位置与离散开关。
                 LightweightTopTabIndicatorOverlay(
                     positionState = topTabIndicatorPositionState,
+                    pagerTargetPositionProvider = { (pagerState?.targetPage ?: selectedIndex).toFloat() },
                     capsulePositionState = iosCapsulePositionState,
                     measuredSelectedItemLeftPxState = measuredSelectedItemLeftPxState,
                     velocityItemsPerSecondState = topTabMotionVelocityItemsPerSecondState,
@@ -2108,6 +2232,8 @@ private fun LightweightHomeTopTabs(
                     shouldUseMd3DockBackedCapsule = shouldUseMd3DockBackedCapsule,
                     shouldUseMd3LiquidCapsule = shouldUseMd3LiquidCapsule,
                     shouldUseLiquidGlassIndicator = shouldUseLiquidGlassIndicator,
+                    tapSelectionActive = glassTapSelectionActive,
+                    tapMotion = glassTapMotion,
                     indicatorCombinedBackdrop = effectiveTopTabMiuixContentBackdrop,
                     isDarkTheme = isDarkTheme,
                     liquidGlassTuning = resolvedLiquidGlassTuning,
@@ -2116,6 +2242,7 @@ private fun LightweightHomeTopTabs(
                     pagerIsDragging = pagerIsDragging,
                     pagerIsScrolling = pagerIsScrolling,
                     ownsPosition = topTabIndicatorOwnsPosition,
+                    directDragging = topTabIndicatorDirectDragActive,
                     indicatorPressed = topTabIndicatorPressed,
                     shouldStretchIndicator = topTabShouldStretchIndicator,
                     md3ContentWidths = md3ContentWidths,
@@ -2126,8 +2253,10 @@ private fun LightweightHomeTopTabs(
                     indicatorDraggableState = indicatorDraggableState,
                     indicatorDragEnabled = pagerState != null && categories.size > 1,
                     onIndicatorDragStarted = {
+                        val interruptedPosition = currentPositionProvider()
+                        glassTapTarget = null
                         topTabIndicatorSettlingTarget = null
-                        topTabIndicatorDirectDragPosition = currentPositionProvider()
+                        topTabIndicatorDirectDragPosition = interruptedPosition
                             .coerceIn(0f, categories.lastIndex.toFloat())
                         topTabIndicatorDirectDragActive = true
                     },
@@ -2269,6 +2398,7 @@ private fun HomeTopTabMotionLayer(
 @Composable
 private fun BoxScope.LightweightTopTabIndicatorOverlay(
     positionState: androidx.compose.runtime.State<Float>,
+    pagerTargetPositionProvider: () -> Float,
     capsulePositionState: androidx.compose.runtime.State<Float>,
     measuredSelectedItemLeftPxState: androidx.compose.runtime.State<Float?>,
     velocityItemsPerSecondState: androidx.compose.runtime.State<Float>,
@@ -2286,6 +2416,8 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
     shouldUseMd3DockBackedCapsule: Boolean,
     shouldUseMd3LiquidCapsule: Boolean,
     shouldUseLiquidGlassIndicator: Boolean,
+    tapSelectionActive: Boolean,
+    tapMotion: com.android.purebilibili.feature.home.components.miuix.DampedDragAnimation,
     indicatorCombinedBackdrop: MiuixBackdrop?,
     isDarkTheme: Boolean,
     liquidGlassTuning: LiquidGlassTuning,
@@ -2294,6 +2426,7 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
     pagerIsDragging: Boolean,
     pagerIsScrolling: Boolean,
     ownsPosition: Boolean,
+    directDragging: Boolean,
     indicatorPressed: Boolean,
     shouldStretchIndicator: Boolean,
     md3ContentWidths: List<Dp>,
@@ -2308,10 +2441,10 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
     onIndicatorTap: () -> Unit,
 ) {
     val topTabIndicatorScaleProgress = rememberBottomBarIndicatorDragScaleProgress(
-        isDragging = shouldStretchIndicator || indicatorPressed
+        isDragging = !tapSelectionActive && (shouldStretchIndicator || indicatorPressed)
     )
     val topTabPressProgress = rememberBottomBarIndicatorDragScaleProgress(
-        isDragging = indicatorPressed
+        isDragging = !tapSelectionActive && indicatorPressed
     )
     val topTabIndicatorLayerScaleProgress = resolveTopTabIndicatorScaleProgress(
         dragScaleProgress = topTabIndicatorScaleProgress,
@@ -2319,7 +2452,7 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
     )
     // Pager swipes have no direct press event. Reuse the bottom-bar drag-scale animation
     // as their effective press so the indicator surface fades and lens ramps identically.
-    val topTabLensProgress = topTabIndicatorLayerScaleProgress
+    val topTabLensProgress = if (tapSelectionActive) tapMotion.pressProgress else topTabIndicatorLayerScaleProgress
     val topTabIndicatorPosition = positionState.value
     val topTabRefractionMotionProfile = resolveBottomBarRefractionMotionProfile(
         position = topTabIndicatorPosition,
@@ -2370,11 +2503,20 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
         ),
         motionSpec = topTabMotionSpec
     )
-    val indicatorScaleX = topTabIndicatorLayerTransform.scaleX
-    val indicatorScaleY = topTabIndicatorLayerTransform.scaleY
+    val indicatorScaleX = if (tapSelectionActive) tapMotion.scaleX else topTabIndicatorLayerTransform.scaleX
+    val indicatorScaleY = if (tapSelectionActive) tapMotion.scaleY else topTabIndicatorLayerTransform.scaleY
     // Velocity stretch is already folded into the shared bottom-bar transform.
     // Keep the BiliPai layer velocity neutral to avoid applying it twice.
     val indicatorVelocity = 0f
+    // Glass recoil follows the shrink at the landing; held gestures never start it.
+    val topTabLandingTarget = if (tapSelectionActive) tapMotion.targetValue else pagerTargetPositionProvider()
+    val topTabCanRecoil = com.android.purebilibili.core.ui.animation.canStartLiquidIndicatorRecoil(
+        position = topTabIndicatorPosition,
+        target = topTabLandingTarget,
+        range = categoriesLastIndex.toFloat(),
+        interactionActive = pagerIsDragging || directDragging || indicatorPressed,
+        returning = !tapSelectionActive || tapMotion.isReadyForRecoil,
+    )
     val capsuleTargetTranslationXPx by remember(
         density,
         itemWidth,
@@ -2399,7 +2541,7 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
             }
         }
     }
-    val shouldAnimateIosCapsule = shouldAnimateIosTopTabCapsule(
+    val shouldAnimateIosCapsule = !tapSelectionActive && shouldAnimateIosTopTabCapsule(
         pagerIsDragging = pagerIsDragging || ownsPosition,
         pagerIsScrolling = pagerIsScrolling
     )
@@ -2469,6 +2611,22 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
                 scaleX = indicatorScaleX,
                 scaleY = indicatorScaleY,
                 velocity = indicatorVelocity,
+                highlightEnabled = tapSelectionActive || pagerIsDragging || directDragging,
+                wobbleEnabled = shouldUseLiquidGlassIndicator,
+                wobblePosition = topTabIndicatorPosition,
+                wobbleSelection = topTabLandingTarget.roundToInt(),
+                wobbleInteracting = pagerIsDragging || directDragging,
+                wobbleSelectionMotionActive = when {
+                    pagerIsDragging || ownsPosition -> false
+                    tapSelectionActive -> true
+                    pagerIsScrolling -> true
+                    else -> null
+                },
+                wobbleLastIndex = categoriesLastIndex,
+                wobbleEdgeInset = dockIndicatorHorizontalGap + topTabHorizontalPadding,
+                wobbleCanSettle = topTabCanRecoil &&
+                    abs(iosCapsuleTranslationXPx - capsuleTargetTranslationXPx) <=
+                    with(density) { itemWidth.toPx() } * 0.025f,
                 isDark = isDarkTheme,
                 shape = resolveTopTabIndicatorShape(
                     showIcon = showIcon,
@@ -2491,6 +2649,20 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
                 scaleX = indicatorScaleX,
                 scaleY = indicatorScaleY,
                 velocity = indicatorVelocity,
+                highlightEnabled = tapSelectionActive || pagerIsDragging || directDragging,
+                wobbleEnabled = shouldUseLiquidGlassIndicator,
+                wobblePosition = topTabIndicatorPosition,
+                wobbleSelection = topTabLandingTarget.roundToInt(),
+                wobbleInteracting = pagerIsDragging || directDragging,
+                wobbleSelectionMotionActive = when {
+                    pagerIsDragging || ownsPosition -> false
+                    tapSelectionActive -> true
+                    pagerIsScrolling -> true
+                    else -> null
+                },
+                wobbleLastIndex = categoriesLastIndex,
+                wobbleEdgeInset = dockIndicatorHorizontalGap + topTabHorizontalPadding,
+                wobbleCanSettle = topTabCanRecoil,
                 isDark = isDarkTheme,
                 shape = resolveTopTabIndicatorShape(
                     showIcon = showIcon,
@@ -2513,6 +2685,20 @@ private fun BoxScope.LightweightTopTabIndicatorOverlay(
                 scaleX = indicatorScaleX,
                 scaleY = indicatorScaleY,
                 velocity = indicatorVelocity,
+                highlightEnabled = tapSelectionActive || pagerIsDragging || directDragging,
+                wobbleEnabled = shouldUseLiquidGlassIndicator,
+                wobblePosition = topTabIndicatorPosition,
+                wobbleSelection = topTabLandingTarget.roundToInt(),
+                wobbleInteracting = pagerIsDragging || directDragging,
+                wobbleSelectionMotionActive = when {
+                    pagerIsDragging || ownsPosition -> false
+                    tapSelectionActive -> true
+                    pagerIsScrolling -> true
+                    else -> null
+                },
+                wobbleLastIndex = categoriesLastIndex,
+                wobbleEdgeInset = dockIndicatorHorizontalGap + topTabHorizontalPadding,
+                wobbleCanSettle = topTabCanRecoil,
                 isDark = isDarkTheme,
                 shape = resolveTopTabIndicatorShape(
                     showIcon = showIcon,
@@ -2595,7 +2781,6 @@ private fun BoxScope.LightweightTopTabMd3Underline(
 ) {
     val indicatorColor = when {
         skinPlainContentColor != null -> resolveHomeSkinTopTabIndicatorColor(skinPlainContentColor)
-        LocalAppUiStyle.current == AppUiStyle.MIUIX -> AppContentColors.primaryText()
         else -> AppContentColors.accent()
     }
     val iconOnlyIndicator = showIcon && !showText
@@ -2716,6 +2901,7 @@ private fun LightweightTopTabItem(
     )
     val selectedColor = when {
         skinPlainStyle -> skinPlainContentColor ?: colorScheme.onSurface
+        com.android.purebilibili.core.ui.isMiuixNonGlassEnabled() -> AppContentColors.accent()
         uiStyle == AppUiStyle.MIUIX -> colorScheme.onSurface
         presentation == AppTopTabPresentation.MOVING_CAPSULE ->
             resolveIosTopTabSelectedContentColor(colorScheme, uiStyle)
@@ -2742,6 +2928,12 @@ private fun LightweightTopTabItem(
     val containerColor = when {
         !drawContainer || colorMode == TopTabLiquidColorMode.GLASS_EXPORT -> Color.Transparent
         skinPlainStyle -> Color.Transparent
+        com.android.purebilibili.core.ui.isMiuixNonGlassEnabled() &&
+            presentation == AppTopTabPresentation.MOVING_CAPSULE &&
+            colorMode == TopTabLiquidColorMode.NORMAL ->
+            AppSurfaceTokens.selectionContainer().let { selectionColor ->
+                selectionColor.copy(alpha = selectionColor.alpha * selectionFraction.coerceIn(0f, 1f))
+            }
         presentation == AppTopTabPresentation.MOVING_CAPSULE && colorMode == TopTabLiquidColorMode.NORMAL ->
             resolveIosTopTabCapsuleContainerColor(
                 isDarkTheme = isDarkTheme,
@@ -2806,7 +2998,10 @@ private fun LightweightTopTabItem(
                         selectedAlpha = selectionFraction,
                         tint = contentColor,
                         modifier = Modifier.size(
-                            resolveTopTabIconSizeDp(if (showText) 0 else 1).dp
+                            resolveHomeTopDockIconSizeDp(
+                                if (showText) 0 else 1,
+                                liquidGlassEnabled = colorMode != TopTabLiquidColorMode.NORMAL,
+                            ).dp
                         )
                     )
                 }
@@ -3313,7 +3508,10 @@ fun CategoryTabItem(
          iconFamily = chromePolicy.effectiveIconFamily,
          selected = true
      )
-     val iconSize = resolveTopTabIconSizeDp(normalizedLabelMode).dp
+     val iconSize = resolveHomeTopDockIconSizeDp(
+         normalizedLabelMode,
+         liquidGlassEnabled = false,
+     ).dp
      val textSize = resolveTopTabLabelTextSizeSp(normalizedLabelMode).sp
      val textLineHeight = resolveTopTabLabelLineHeightSp(normalizedLabelMode).sp
      val contentMinHeight = resolveTopTabContentMinHeightDp(normalizedLabelMode).dp

@@ -1,10 +1,13 @@
 // 文件路径: feature/video/screen/TabletVideoLayout.kt
 package com.android.purebilibili.feature.video.screen
 
+import com.android.purebilibili.feature.video.ui.components.RelatedVideoList
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import com.android.purebilibili.feature.video.ambient.PlayerAmbientLayout
 import com.android.purebilibili.navigation.animatePagerSelection
+import kotlinx.coroutines.flow.collect
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.AppText
@@ -38,6 +41,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.unit.dp // Add this back
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.lazy.LazyRow
 import com.android.purebilibili.core.ui.AppChromeSizeTokens
@@ -174,13 +179,30 @@ internal fun TabletSecondaryLiquidTabRow(
     isScrollInProgressProvider: () -> Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val liquidGlassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
     AppThemeAdaptiveTabRow(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
         centerContent = false,
         options = labels.mapIndexed { index, label -> AppSegmentOption(index, label) },
         selectedValue = selectedIndex,
         onSelectionChange = onSelected,
-        modifier = modifier,
+        // The weighted slot is the right pane's real viewport, after reserving
+        // the danmaku actions. Glass capture/press overflow must not escape it
+        // into the player or adjacent buttons. Keep native MD3/Miuix unchanged.
+        modifier = modifier.then(
+            if (liquidGlassEnabled) {
+                Modifier.drawWithContent {
+                    clipRect(
+                        left = 0f,
+                        right = size.width,
+                        top = -size.height,
+                        bottom = size.height * 2f,
+                    ) { this@drawWithContent.drawContent() }
+                }
+            } else Modifier
+        ),
         scrollable = true,
         compactMiuixWhenTwoOptions = false,
         height = AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
@@ -206,10 +228,10 @@ internal fun TabletVideoLayout(
     playerState: VideoPlayerState,
     uiState: VideoPlaybackUiState,
     detailContentState: VideoPlaybackUiState.Success? = null,
-    commentState: CommentUiState,
+    commentStateHandle: androidx.compose.runtime.State<CommentUiState>,
     engagementState: VideoEngagementUiState,
-    subReplyState: SubReplyUiState,
-    downloadProgress: Float,
+    subReplyStateHandle: androidx.compose.runtime.State<SubReplyUiState>,
+    downloadProgress: androidx.compose.runtime.State<Float>,
     commentMemberDecorationsEnabled: Boolean,
     playbackActions: VideoDetailPlaybackActions,
     engagementActions: VideoDetailEngagementActions,
@@ -252,6 +274,7 @@ internal fun TabletVideoLayout(
     forceCoverOnlyOnReturn: Boolean = false,
     predictiveBackCancelRecoveryGeneration: Int = 0,
     liveSurfaceCardTransitionEnabled: Boolean = true,
+    isPlayerSurfaceReady: Boolean = true,
     paneControlsEnabled: Boolean = true,
     videoAiSummaryEntryEnabled: Boolean = true,
     videoNoteEnabled: Boolean = true,
@@ -409,6 +432,7 @@ internal fun TabletVideoLayout(
                                     playerState = playerState,
                                     uiState = uiState,
                                     isLiked = engagementState.isLiked,
+                                    isDisliked = engagementState.isDisliked,
                                     likeStatusKnown = engagementState.likeStatusKnown,
                                     isFollowed = engagementState.isFollowing,
                                     followStatusKnown = engagementState.followStatusKnown,
@@ -422,6 +446,7 @@ internal fun TabletVideoLayout(
                                         cardTransitionEnabled = transitionEnabled && !hasHingePartition,
                                         liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
                                     ),
+                                    isPlayerSurfaceReady = isPlayerSurfaceReady,
                                     allowLivePlayerSharedElement = !hasHingePartition &&
                                         resolveAllowLivePlayerSharedElementForMorph(
                                             cardTransitionEnabled = transitionEnabled,
@@ -454,9 +479,15 @@ internal fun TabletVideoLayout(
                                     onQualityChange = playbackActions.changeQuality,
                                     onBack = onBack,
                                     onHomeClick = onHomeClick,
+                                    menuActions = playbackActions.menuActions,
+                                    onQuickFavorite = { engagementActions.onFavoriteAction(true) },
                                     onDoubleTapLike = engagementActions.toggleLike,
                                     onToggleFollow = engagementActions.toggleFollow,
                                     onFollow = engagementActions.followOwner,
+                                    onToggleLike = engagementActions.toggleLike,
+                                    onDislike = engagementActions.toggleDislike,
+                                    onCoin = engagementActions.openCoinDialog,
+                                    onToggleFavorite = { engagementActions.onFavoriteAction(false) },
                                     onTriple = engagementActions.doTripleAction,
                                     onReloadVideo = playbackActions.reloadVideo,
                                     onSwitchCdn = playbackActions.switchCdn,
@@ -539,8 +570,8 @@ internal fun TabletVideoLayout(
                     Box(modifier = Modifier.fillMaxSize()) {
                         TabletSecondaryContent(
                             success = success,
-                            commentState = commentState,
-                            subReplyState = subReplyState,
+                            commentStateHandle = commentStateHandle,
+                            subReplyStateHandle = subReplyStateHandle,
                             playbackActions = playbackActions,
                             engagementState = engagementState,
                             engagementActions = engagementActions,
@@ -604,8 +635,8 @@ internal fun TabletVideoLayout(
                     if (contentState != null) {
                         TabletSecondaryContent(
                             success = contentState,
-                            commentState = commentState,
-                            subReplyState = subReplyState,
+                            commentStateHandle = commentStateHandle,
+                            subReplyStateHandle = subReplyStateHandle,
                             playbackActions = playbackActions,
                             engagementState = engagementState,
                             engagementActions = engagementActions,
@@ -641,7 +672,7 @@ internal fun TabletVideoLayout(
 internal fun TabletVideoInfoPane(
     success: VideoPlaybackUiState.Success,
     engagementState: VideoEngagementUiState,
-    downloadProgress: Float,
+    downloadProgress: androidx.compose.runtime.State<Float>,
     playbackActions: VideoDetailPlaybackActions,
     engagementActions: VideoDetailEngagementActions,
     onBgmClick: (BgmInfo) -> Unit,
@@ -693,7 +724,7 @@ internal fun TabletVideoInfoPane(
         isDisliked = engagementState.isDisliked,
         coinCount = engagementState.coinCount,
         currentPageIndex = currentPageIndex,
-        downloadProgress = downloadProgress,
+        downloadProgress = downloadProgress.value,
         isInWatchLater = engagementState.isInWatchLater,
         onShareClick = {
             pendingVideoShare = buildVideoSharePayload(
@@ -778,8 +809,8 @@ internal fun TabletVideoInfoPane(
 @Composable
 internal fun TabletSecondaryContent(
     success: VideoPlaybackUiState.Success,
-    commentState: CommentUiState,
-    subReplyState: SubReplyUiState,
+    commentStateHandle: androidx.compose.runtime.State<CommentUiState>,
+    subReplyStateHandle: androidx.compose.runtime.State<SubReplyUiState>,
     playbackActions: VideoDetailPlaybackActions,
     engagementState: VideoEngagementUiState,
     engagementActions: VideoDetailEngagementActions,
@@ -805,6 +836,8 @@ internal fun TabletSecondaryContent(
     onDanmakuSendClick: () -> Unit = {},
     onDanmakuToggle: () -> Unit = {},
 ) {
+    val commentState by commentStateHandle
+    val subReplyState by subReplyStateHandle
     val commentAppearance = rememberVideoCommentAppearance()
     // 首屏骨架按视口高度铺够槽位：少铺会让列表在数据到达时被撑长、整体跳一下。
     val commentSkeletonSlotCount = resolveVideoCommentSkeletonSlotCount(
@@ -844,10 +877,12 @@ internal fun TabletSecondaryContent(
             )
         )
     }
-    val pagerState = rememberPagerState(
-        initialPage = selectedTab,
-        pageCount = { tabs.size }
-    )
+    val pagerState = key(success.info.bvid, fixedTab, relatedTabFirst) {
+        rememberPagerState(
+            initialPage = selectedTab.coerceIn(0, tabs.lastIndex),
+            pageCount = { tabs.size },
+        )
+    }
 
     // 评论图片预览状态
     var showImagePreview by remember { mutableStateOf(false) }
@@ -856,18 +891,19 @@ internal fun TabletSecondaryContent(
     var sourceRect by remember { mutableStateOf<ImagePreviewSourceAnchor?>(null) }
     var previewTextContent by remember { mutableStateOf<ImagePreviewTextContent?>(null) }
 
+    val avatarPushEnabled = com.android.purebilibili.feature.video.ui.components.rememberCommentAvatarPushEnabled()
     val context = androidx.compose.ui.platform.LocalContext.current
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
     val latestOnRequestedTabConsumed by rememberUpdatedState(onRequestedTabConsumed)
-    LaunchedEffect(selectedTab) {
-        if (pagerState.currentPage != selectedTab) {
-            animatePagerSelection(pagerState, selectedTab)
-        }
+    // All material modes share this synchronization: requests drive the pager once;
+    // only its settled page is persisted. Intermediate pages never become new requests.
+    fun selectSecondaryTab(index: Int) {
+        scope.launch { animatePagerSelection(pagerState, index) }
     }
-    LaunchedEffect(pagerState.currentPage) {
-        if (selectedTab != pagerState.currentPage) {
-            selectedTab = pagerState.currentPage
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { settledPage ->
+            selectedTab = settledPage
         }
     }
     LaunchedEffect(requestedTabName, tabs) {
@@ -877,7 +913,7 @@ internal fun TabletSecondaryContent(
         }
         if (requestedTab != null) {
             val index = tabs.indexOf(requestedTab)
-            if (index >= 0) selectedTab = index
+            if (index >= 0) selectSecondaryTab(index)
             latestOnRequestedTabConsumed()
         }
     }
@@ -885,7 +921,7 @@ internal fun TabletSecondaryContent(
         if (subReplyState.visible && fixedTab != TabletSecondaryTab.RELATED) {
             resolveTabletCommentTabIndex(tabs)
                 .takeIf { it >= 0 }
-                ?.let { selectedTab = it }
+                ?.let { selectSecondaryTab(it) }
             if (paneMode == TabletSecondaryPaneMode.COLLAPSED) {
                 onPaneModeChange(TabletSecondaryPaneMode.COMPACT)
             }
@@ -955,7 +991,7 @@ internal fun TabletSecondaryContent(
             Spacer(modifier = Modifier.height(8.dp))
             tabs.forEachIndexed { index, tab ->
                 AppTextButton(onClick = {
-                    selectedTab = index
+                    selectSecondaryTab(index)
                     onPaneModeChange(TabletSecondaryPaneMode.COMPACT)
                 }) {
                     AppText(tab.label)
@@ -989,9 +1025,7 @@ internal fun TabletSecondaryContent(
                 TabletSecondaryLiquidTabRow(
                     labels = tabs.map { it.label },
                     selectedIndex = pagerState.currentPage,
-                    onSelected = { index ->
-                        scope.launch { animatePagerSelection(pagerState, index) }
-                    },
+                    onSelected = ::selectSecondaryTab,
                     indicatorPositionProvider = {
                         pagerState.currentPage + pagerState.currentPageOffsetFraction
                     },
@@ -1069,6 +1103,7 @@ internal fun TabletSecondaryContent(
                         repliesError,
                         commentState.isRepliesEnd,
                         commentState.replies.size,
+                        commentState.nextPage,
                     ) {
                         if (
                             shouldLoadMore &&
@@ -1130,6 +1165,8 @@ internal fun TabletSecondaryContent(
                                     }
                                 },
                                 onSearchClick = { showCommentSearchSheet = true },
+                                compactTypography = true,
+                                scrollState = listState,
                             )
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             AdaptivePullToRefreshBox(
@@ -1171,7 +1208,11 @@ internal fun TabletSecondaryContent(
                                             modifier = Modifier.weight(1f),
                                             style = MaterialTheme.typography.bodySmall,
                                         )
-                                        AppTextButton(onClick = commentActions.refreshComments) {
+                                        AppTextButton(onClick = {
+                                            if (commentState.replies.isNotEmpty() && !commentState.isRepliesEnd) {
+                                                commentActions.loadComments()
+                                            } else commentActions.refreshComments()
+                                        }) {
                                             AppText("重试")
                                         }
                                     }
@@ -1190,6 +1231,8 @@ internal fun TabletSecondaryContent(
                                     modifier = videoCommentItemModifier().padding(bottom = 1.dp)
                                 ) {
                                     ReplyItemView(
+                                        avatarListState = listState.takeIf { avatarPushEnabled },
+                                        avatarItemKey = "reply_${reply.rpid}",
                                         item = reply,
                                         emoteMap = success.emoteMap,
                                         upMid = success.info.owner.mid,
@@ -1364,16 +1407,21 @@ internal fun TabletSecondaryContent(
                     }
                     val relatedVideoCardLayout = rememberRelatedVideoCardLayout()
                     val relatedListState = rememberLazyListState()
-                    LazyColumn(
+                    RelatedVideoList(
+                        cardLayout = relatedVideoCardLayout,
                         modifier = Modifier.fillMaxSize(),
                         state = relatedListState,
                         contentPadding = PaddingValues(8.dp)
-                    ) {
+                    ) { cardPresentation ->
                             val relatedRows = chunkRelatedVideosForHomeStyleGrid(visibleRelatedVideos)
                             if (success.relatedLoadState == VideoPlaybackUiState.RelatedLoadState.LOADING) {
                                 item(key = "tablet_related_loading") {
                                     Column {
-                                        repeat(3) { com.android.purebilibili.core.ui.skeleton.MediaListRowSkeleton() }
+                                        repeat(3) {
+                                            com.android.purebilibili.feature.video.ui.components.RelatedVideoGridRowSkeleton(
+                                                cardLayout = relatedVideoCardLayout,
+                                            )
+                                        }
                                     }
                                 }
                             } else if (visibleRelatedVideos.isEmpty()) {
@@ -1404,6 +1452,7 @@ internal fun TabletSecondaryContent(
                                     RelatedVideoGridRow(
                                         videos = row,
                                         cardLayout = relatedVideoCardLayout,
+                                        cardPresentation = cardPresentation,
                                         followingMids = success.followingMids,
                                         showUpBadge = showUpBadge,
                                         onVideoClick = { video ->
@@ -1483,15 +1532,23 @@ private fun TabletCollectionPane(
                 shape = AppShapes.container(ContainerLevel.Card),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                coil3.compose.AsyncImage(
-                    model = com.android.purebilibili.core.util.FormatUtils.fixImageUrl(episode.arc?.pic.orEmpty()),
-                    contentDescription = episode.title,
-                    contentScale = ContentScale.Crop,
+                Box(
                     modifier = Modifier
                         .width(112.dp)
                         .aspectRatio(16f / 9f)
-                        .clip(AppShapes.container(ContainerLevel.Chip))
-                )
+                        .clip(AppShapes.container(ContainerLevel.Chip)),
+                ) {
+                    coil3.compose.AsyncImage(
+                        model = com.android.purebilibili.core.util.FormatUtils.fixImageUrl(episode.arc?.pic.orEmpty()),
+                        contentDescription = episode.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    com.android.purebilibili.feature.video.ui.components.CollectionAccessBadge(
+                        episode = episode,
+                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                    )
+                }
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     AppText(
@@ -1737,7 +1794,7 @@ private fun ScrollableVideoInfoSection(
 
         if (showRelatedVideos && relatedLoadState == VideoPlaybackUiState.RelatedLoadState.LOADING) {
             item(key = "tablet_intro_related_loading") {
-                com.android.purebilibili.core.ui.skeleton.MediaListRowSkeleton()
+                TabletRelatedCarouselSkeleton()
             }
         } else if (showRelatedVideos && relatedVideos.isEmpty()) {
             item(key = "tablet_intro_related_empty") {
@@ -1931,5 +1988,52 @@ private fun TabletVideoInfoStaggeredItem(
         ),
     ) {
         content()
+    }
+}
+
+
+@Composable
+private fun TabletRelatedCarouselSkeleton(modifier: Modifier = Modifier) {
+    val color = com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonBlockColor(
+        com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulse(),
+    )
+    Column(modifier = modifier) {
+        Spacer(Modifier.height(24.dp))
+        AppText(
+            text = "更多推荐",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            color = AppContentColors.primaryText(),
+        )
+        Spacer(Modifier.height(12.dp))
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(end = 4.dp),
+            userScrollEnabled = false,
+        ) {
+            items(3) {
+                Column(Modifier.width(160.dp)) {
+                    com.android.purebilibili.core.ui.skeleton.ContentSkeletonBlock(
+                        color = color,
+                        shape = AppShapes.container(ContainerLevel.Chip),
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1.6f),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    com.android.purebilibili.core.ui.skeleton.ContentSkeletonText(
+                        text = "推荐视频标题占位\n第二行标题占位",
+                        style = MaterialTheme.typography.bodySmall,
+                        colorProvider = { color },
+                        maxLines = 2,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    com.android.purebilibili.core.ui.skeleton.ContentSkeletonText(
+                        text = "UP 主名称",
+                        style = MaterialTheme.typography.labelSmall,
+                        colorProvider = { color },
+                    )
+                }
+            }
+        }
     }
 }

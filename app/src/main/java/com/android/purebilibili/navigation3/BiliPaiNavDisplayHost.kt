@@ -10,6 +10,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +46,9 @@ import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventState
 import com.android.purebilibili.feature.settings.screen.settingsHasPersistentPanes
 import com.android.purebilibili.core.ui.AppSurfaceTokens
+import com.android.purebilibili.core.ui.globalWallpaperAwareBackground
+import com.android.purebilibili.feature.home.shouldRenderGlobalHomeWallpaperBackdrop
+import com.android.purebilibili.core.store.HomeWallpaperEffectScope
 import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
 import com.android.purebilibili.core.ui.LocalSharedTransitionEnabled
 import com.android.purebilibili.core.ui.LocalVideoDetailNavigationTransitionScope
@@ -154,7 +158,16 @@ internal fun BiliPaiNavDisplayHost(
         resolveVideoHeroMotionSpec(videoSharedTransitionDurationMillis,
             sourceMetadata.sourceBounds, hostBounds, density, reduceMotion)
     }
-    val application = LocalContext.current.applicationContext as Application
+    val context = LocalContext.current
+    val application = context.applicationContext as Application
+    val visualGuard = com.android.purebilibili.core.ui.performance.LocalRuntimeVisualGuard.current
+    // 在图层阶段读取运行时预算，降级不重建整棵导航树；玻璃与原生路径共用此保护。
+    val navBlurMotionTierProvider = remember(visualGuard) {
+        {
+            val decision = visualGuard.value
+            if (decision.forceLowBlurBudget) MotionTier.Reduced else decision.effectiveMotionTier
+        }
+    }
     val speedSettings = LocalVideoSharedTransitionSpeedSettings.current
     val diagnosticConfiguration by rememberUpdatedState(
         "speed=${speedSettings.speed} custom_duration=${speedSettings.customDurationMillis} " +
@@ -228,6 +241,7 @@ internal fun BiliPaiNavDisplayHost(
         isLightBackground,
         miuixTransitionBlurEnabled,
         miuixPredictiveBackMaxProgressPercent,
+        navBlurMotionTierProvider,
     ) {
         biliPaiMiuixNavTransition(
             animation = style,
@@ -236,6 +250,7 @@ internal fun BiliPaiNavDisplayHost(
             miuixTransitionBlurEnabled = miuixTransitionBlurEnabled,
             miuixPredictiveBackMaxProgressPercent =
                 miuixPredictiveBackMaxProgressPercent,
+            blurMotionTierProvider = navBlurMotionTierProvider,
         )
     }
     val predictiveBackExcludedTransition = remember(
@@ -244,6 +259,7 @@ internal fun BiliPaiNavDisplayHost(
         predictiveBackExitDirection,
         isLightBackground,
         miuixTransitionBlurEnabled,
+        navBlurMotionTierProvider,
     ) {
         if (shouldUseMiuixPredictiveBackProgress(style, enabled = true)) {
             biliPaiMiuixNavTransition(
@@ -252,6 +268,7 @@ internal fun BiliPaiNavDisplayHost(
                 isLightBackground = isLightBackground,
                 miuixTransitionBlurEnabled = miuixTransitionBlurEnabled,
                 miuixPredictiveBackProgressEnabled = false,
+                blurMotionTierProvider = navBlurMotionTierProvider,
             )
         } else {
             globalTransition
@@ -445,6 +462,13 @@ internal fun BiliPaiNavDisplayHost(
     ) {
         if (!cardMorphAvailable) return@LaunchedEffect
         fun finishCardReturn() {
+            // Publish before Idle: cards recreated on the landing frame need not have
+            // observed Returning locally. Opening and cancelled gestures cannot publish.
+            videoCardClock.landingFeedback.publish(
+                sourceKey = sourceMetadata.sourceKey,
+                sourceLayout = sourceMetadata.sourceLayout,
+                committedReturn = videoCardClock.phase == VideoCardTransitionBackgroundPhase.RETURNING,
+            )
             videoCardClock.followNavigationDriver(VideoCardTransitionSettleState.Idle)
             videoCardTransitionProgress.clear()
         }
@@ -514,7 +538,7 @@ internal fun BiliPaiNavDisplayHost(
     ) {
         {
             if (cardMorphAvailable) {
-                videoCardTransitionProgress.depthOr(videoCardClock.depthProgress())
+                videoCardTransitionProgress.depthOrNull() ?: videoCardClock.depthProgress()
             } else {
                 videoCardClock.depthProgress()
             }
@@ -523,12 +547,13 @@ internal fun BiliPaiNavDisplayHost(
     val videoCardGestureProvider = remember(cardMorphAvailable, videoCardTransitionProgress) {
         { cardMorphAvailable && videoCardTransitionProgress.isGestureInProgress() }
     }
-    val videoCardExposureProvider = remember(
+    val videoCardExposure = remember(
         videoCardClock,
         videoCardGestureProvider,
         videoCardTransitionProgress,
     ) {
-        {
+        // Readable from composition or draw: only exposure boundaries propagate, never frames.
+        derivedStateOf(structuralEqualityPolicy()) {
             val settleState = videoCardTransitionProgress.settleStateOrNull()
             val effectivePhase = when (settleState) {
                 // Reveal the list slot on the same endpoint frame that removes the flying
@@ -546,6 +571,7 @@ internal fun BiliPaiNavDisplayHost(
             )
         }
     }
+    val videoCardExposureProvider = remember(videoCardExposure) { { videoCardExposure.value } }
     val effectiveVideoCardExposure = videoCardExposureProvider()
     // Ordinary related-video slides have no card clock. Read their actual navigation settle
     // instead of restoring the parent's morph while the child is still moving off screen.
@@ -731,15 +757,12 @@ internal fun BiliPaiNavDisplayHost(
             // The fixed host backing must sit BELOW the retained source snapshot. A second
             // opaque backing inside NavDisplay would cover that snapshot on its preparation frame.
             backdropColor = if (videoCardMorphOwnsCorners) Color.Unspecified else backdropColor,
-            blockInputDuringTransition = false,
         )
     }
     // 全屏滑动返回默认关闭（仅系统边缘预测返回），可在设置中开启。
     // 开启后仅对列表/设置等纵向页面生效，播放器、详情、WebView 等
     // 横滑冲突页面始终禁用（见 BiliPaiNavEntryProvider）。
-    val fullScreenSwipeBackEnabled by
-        com.android.purebilibili.core.store.SettingsManager
-            .getFullScreenSwipeBackEnabled(LocalContext.current)
+    val fullScreenSwipeBackEnabled by remember(context) { com.android.purebilibili.core.store.SettingsManager.getFullScreenSwipeBackEnabled(context) }
             .collectAsStateWithLifecycle(initialValue = false)
     val swipeBackDirection = if (fullScreenSwipeBackEnabled) {
         when (LocalLayoutDirection.current) {
@@ -752,16 +775,13 @@ internal fun BiliPaiNavDisplayHost(
     val interceptPredictiveBack =
         style == BiliPaiPredictiveBackAnimationStyle.NONE && backStack.size > 1
     val globalWallpaperVisible = LocalGlobalWallpaperBackdropVisible.current
-    val clickToPlayEnabled by com.android.purebilibili.core.store.SettingsManager
-        .getClickToPlay(LocalContext.current)
+    val clickToPlayEnabled by remember(context) { com.android.purebilibili.core.store.SettingsManager.getClickToPlay(context) }
         .collectAsStateWithLifecycle(
             initialValue = com.android.purebilibili.core.store.SettingsManager.getClickToPlaySync(LocalContext.current)
         )
-    val dynamicImagePreviewTextVisible by com.android.purebilibili.core.store.SettingsManager
-        .getDynamicImagePreviewTextVisible(LocalContext.current)
+    val dynamicImagePreviewTextVisible by remember(context) { com.android.purebilibili.core.store.SettingsManager.getDynamicImagePreviewTextVisible(context) }
         .collectAsStateWithLifecycle(initialValue = true)
-    val dynamicCommentPreviewVisible by com.android.purebilibili.core.store.home.DynamicSettingsStore
-        .observeCommentPreviewVisible(LocalContext.current)
+    val dynamicCommentPreviewVisible by remember(context) { com.android.purebilibili.core.store.home.DynamicSettingsStore.observeCommentPreviewVisible(context) }
         .collectAsStateWithLifecycle(initialValue = false)
 
     Box(
@@ -839,7 +859,12 @@ internal fun BiliPaiNavDisplayHost(
                     CompositionLocalProvider(
                         LocalVideoDetailNavigationTransitionScope provides LocalNavTransitionScope.current,
                         LocalGlobalWallpaperBackdropVisible provides
-                            (globalWallpaperVisible && !opaqueVideoChild),
+                            (globalWallpaperVisible && !opaqueVideoChild &&
+                                shouldRenderGlobalHomeWallpaperBackdrop(
+                                    effectScope = HomeWallpaperEffectScope.GLOBAL,
+                                    currentRoute = key.toLegacyRoute(),
+                                    mainHostTabRoute = activeMainHostRoute,
+                                )),
                         LocalVideoCardSharedElementSourceRoute provides key.toLegacyRoute(),
                         LocalVideoCardTransitionClock provides videoCardClock,
                         LocalVideoCardTransitionBackgroundState provides transitionBackgroundState,
@@ -850,16 +875,16 @@ internal fun BiliPaiNavDisplayHost(
                         LocalDynamicCommentPreviewVisible provides dynamicCommentPreviewVisible,
                         LocalSharedTransitionEnabled provides cardTransitionEnabled,
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize().then(
-                                if (opaqueVideoChild) {
-                                    Modifier.background(AppSurfaceTokens.groupedListContainer().copy(alpha = 1f))
-                                } else Modifier
-                            ),
-                        ) {
-                            ProvideMiuixNavViewModelApplicationExtras(application) {
-                                content(key)
-                            }
+                        ProvideMiuixNavViewModelApplicationExtras(application) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().then(
+                                    if (opaqueVideoChild) {
+                                        Modifier.background(AppSurfaceTokens.groupedListContainer().copy(alpha = 1f))
+                                    } else if (LocalGlobalWallpaperBackdropVisible.current) {
+                                        Modifier.globalWallpaperAwareBackground()
+                                    } else Modifier
+                                ),
+                            ) { content(key) }
                         }
                     }
                 }
@@ -880,7 +905,7 @@ private fun BiliPaiMiuixNavEntry(
         isBackEnabled = interceptPredictiveBack,
         onBackCompleted = onBack,
     )
-    content()
+    com.android.purebilibili.core.ui.animation.ProvideNavigationEntranceState(content)
 }
 
 @Composable

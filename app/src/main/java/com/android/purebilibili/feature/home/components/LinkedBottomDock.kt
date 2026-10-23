@@ -92,7 +92,10 @@ internal fun LinkedBottomDock(
     onDockPhaseChange: ((LinkedDockPhase) -> Unit)? = null,
     isTopLevelDestination: Boolean = true,
     mergeOnScrollDownEnabled: Boolean = true,
+    compactOnScrollEnabled: Boolean = false,
+    currentLabel: String = firstLabel,
     animateNowPlayingPresence: Boolean = true,
+    hasUiSkinDecoration: Boolean = false,
     modifier: Modifier = Modifier,
     blurEnabled: Boolean = false,
     hazeState: HazeState? = null,
@@ -100,6 +103,13 @@ internal fun LinkedBottomDock(
 ) {
     com.android.purebilibili.core.ui.components.ProvideAppElasticFeedback {
         val hasAudio = nowPlayingContent != null
+        var keepSlotComposed by remember { mutableStateOf(hasAudio) }
+        val useNavigationCompact = shouldUseScrollCompactNavigation(
+            enabled = compactOnScrollEnabled,
+            hasAudio = hasAudio,
+            retainingAudio = keepSlotComposed,
+        )
+        var compactNavigation by remember(currentItem, useNavigationCompact) { mutableStateOf(false) }
         var internalPhase by remember(currentItem, searchEnabled) {
             mutableStateOf(
                 resolveLinkedDockInitialPhase(
@@ -117,6 +127,14 @@ internal fun LinkedBottomDock(
             } else {
                 internalPhase = newPhase
             }
+        }
+        LaunchedEffect(useNavigationCompact, currentItem, isTopLevelDestination) {
+            if (useNavigationCompact && isTopLevelDestination && phase != LinkedDockPhase.Search) {
+                updatePhase(LinkedDockPhase.Expanded)
+            }
+        }
+        LaunchedEffect(phase) {
+            if (phase == LinkedDockPhase.Search) compactNavigation = false
         }
         LaunchedEffect(hasAudio, dockPhase) {
             if (dockPhase == null) {
@@ -136,7 +154,7 @@ internal fun LinkedBottomDock(
         val currentPhase by rememberUpdatedState(phase)
         val scrolling by rememberUpdatedState(isFeedScrollInProgress)
         val threshold = with(LocalDensity.current) { 24.dp.toPx() }
-        LaunchedEffect(currentItem, hasAudio, searchEnabled, scroll, threshold, isTopLevelDestination, mergeOnScrollDownEnabled) {
+        LaunchedEffect(currentItem, hasAudio, searchEnabled, scroll, threshold, isTopLevelDestination, mergeOnScrollDownEnabled, glassEnabled, useNavigationCompact) {
             var previous = scroll.floatValue
             var accumulated = 0f
             snapshotFlow { scroll.floatValue to scrolling }.collect { (offset, active) ->
@@ -144,16 +162,27 @@ internal fun LinkedBottomDock(
                 previous = offset
                 if (!active || !isTopLevelDestination || currentPhase == LinkedDockPhase.Search) {
                     accumulated = 0f
+                } else if (useNavigationCompact) {
+                    // Without playback, only navigation compacts; playback retains its original phases.
+                    accumulated = accumulateDockScroll(accumulated, delta)
+                    resolveScrollCompactIntent(accumulated, threshold)?.let { compact ->
+                        compactNavigation = compact
+                        accumulated = 0f
+                    }
                 } else if (!mergeOnScrollDownEnabled) {
                     // 用户选择下滑不合体：只保留向上滚动回到展开（分体）的能力。
                     accumulated = accumulateDockScroll(accumulated, delta)
-                    if ((offset <= 0f && delta < 0f) || accumulated <= -threshold) {
+                    // The shared offset is a relative accumulator, not distance from the top.
+                    // Glass requires the full direction threshold even when it becomes negative.
+                    if ((!glassEnabled && offset <= 0f && delta < 0f) || accumulated <= -threshold) {
                         updatePhase(LinkedDockPhase.Expanded)
                         accumulated = 0f
                     }
                 } else {
                     accumulated = accumulateDockScroll(accumulated, delta)
-                    if ((offset <= 0f && delta < 0f) || accumulated <= -threshold) {
+                    // The shared offset is a relative accumulator, not distance from the top.
+                    // Glass requires the full direction threshold even when it becomes negative.
+                    if ((!glassEnabled && offset <= 0f && delta < 0f) || accumulated <= -threshold) {
                         updatePhase(LinkedDockPhase.Expanded)
                         accumulated = 0f
                     } else if (hasAudio && accumulated >= threshold) {
@@ -167,9 +196,9 @@ internal fun LinkedBottomDock(
         // by isTopLevelDestination made the returning page re-expand/re-collapse the playback strip,
         // which also shifted the predictive-back target after the gesture had started.
         // Skip while the list is scrolling so resting phase does not fight scroll-driven search size.
-        LaunchedEffect(currentItem, collapseRequested, hasAudio) {
+        LaunchedEffect(currentItem, collapseRequested, hasAudio, useNavigationCompact) {
             if (
-                isTopLevelDestination &&
+                isTopLevelDestination && !useNavigationCompact &&
                 currentItem != BottomNavItem.HOME &&
                 currentPhase != LinkedDockPhase.Search &&
                 !isFeedScrollInProgress
@@ -229,7 +258,6 @@ internal fun LinkedBottomDock(
         // Shared morph owns both directions. Keep the real slot at its endpoint while
         // handoff alpha hides it; replaying an entrance spring causes a second landing.
         val presence = remember { Animatable(if (hasAudio) 1f else 0f) }
-        var keepSlotComposed by remember { mutableStateOf(hasAudio) }
         val slotEntering = remember { mutableStateOf(false) }
         LaunchedEffect(hasAudio, animateNowPlayingPresence, reduceMotion) {
             val target = if (hasAudio) 1f else 0f
@@ -294,7 +322,8 @@ internal fun LinkedBottomDock(
 
         val shape = resolveSharedBottomBarCapsuleShape()
         val contentColor = AppContentColors.primaryText()
-        val accentColor = AppContentColors.accent()
+        // Only glass accents use the exact picked color; native and neutral actions retain their roles.
+        val accentColor = AppContentColors.selectionAccent(glassEnabled)
         BoxWithConstraints(
             modifier = modifier.fillMaxWidth().imePadding().navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -310,7 +339,10 @@ internal fun LinkedBottomDock(
             with(density) {
                 maximumWidth = constraints.maxWidth.coerceAtMost(600.dp.roundToPx())
                 button = resolveBiliPaiBottomBarSearchCircleSize().roundToPx()
-                barHeight = resolveBiliPaiBottomBarDockHeight(searchExpanded = false).roundToPx()
+                barHeight = resolveBiliPaiBottomBarDockHeight(
+                    searchExpanded = false,
+                    hasUiSkinDecoration = hasUiSkinDecoration,
+                ).roundToPx()
                 controlHeight = barHeight
                 gap = 8.dp.roundToPx()
                 verticalGap = 4.dp.roundToPx()
@@ -348,8 +380,9 @@ internal fun LinkedBottomDock(
             // 两行胶囊长度一致、左右边缘对齐。
             val bottomBarClusterWidth = (navWidth + reservedSearchWidth).coerceAtMost(maximumWidth)
 
-            // 折叠落定时不组合导航行（等价旧实现 progress>=0.999 不放置），
-            // 避免透明导航层在静止折叠态拦截底栏区域外的触摸。
+            // Glass keeps the navigation/backdrop mounted across both endpoints. At the compact
+            // endpoint skip placement so the hidden row neither draws nor intercepts touches.
+            // Native toolbars retain their original composition and motion behavior.
             val collapsedAtRest = phase != LinkedDockPhase.Expanded && !transition.isRunning
 
             Box(
@@ -358,7 +391,7 @@ internal fun LinkedBottomDock(
                     with(density) { containerHeight.toDp() },
                 )
             ) {
-                if (!collapsedAtRest) {
+                if (glassEnabled || !collapsedAtRest) {
                     Box(
                         modifier = Modifier
                             .offset { IntOffset(navigationX, navRowY) }
@@ -366,11 +399,23 @@ internal fun LinkedBottomDock(
                                 with(density) { navWidth.toDp() },
                                 with(density) { barHeight.toDp() },
                             )
+                            .then(
+                                if (glassEnabled) Modifier.layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    layout(placeable.width, placeable.height) {
+                                        if (merge.value < 1f) {
+                                            placeable.placeRelative(0, 0)
+                                        }
+                                    }
+                                } else Modifier
+                            )
                             .graphicsLayer {
                                 // 退出窗口（前 34%）ease-in 淡出；全程向左侧圆钮方向
                                 // 轻微收拢缩放，读作"并入圆钮"而非原地溶解。
                                 val exitProgress = (merge.value / 0.34f).coerceIn(0f, 1f)
-                                alpha = 1f - EaseInCubic.transform(exitProgress)
+                                alpha = if (glassEnabled) {
+                                    1f - resolveLinkedDockGlassHandoffProgress(merge.value)
+                                } else 1f - EaseInCubic.transform(exitProgress)
                                 val collapse = EaseOutCubic.transform(merge.value)
                                 scaleX = 1f - 0.10f * collapse
                                 scaleY = 1f - 0.10f * collapse
@@ -394,7 +439,25 @@ internal fun LinkedBottomDock(
                                 }
                             ),
                     ) {
-                        navigationContent()
+                        if (compactOnScrollEnabled) {
+                            ScrollCompactNavigation(
+                                compact = useNavigationCompact && compactNavigation && phase == LinkedDockPhase.Expanded,
+                                currentItem = currentItem,
+                                currentLabel = currentLabel,
+                                iconStyle = iconStyle,
+                                expandedWidthPx = navWidth,
+                                expandedHeightPx = barHeight,
+                                buttonSizePx = button.coerceAtMost(navWidth),
+                                backdrop = backdrop,
+                                containerColor = containerColor,
+                                glassEnabled = glassEnabled,
+                                blurEnabled = blurEnabled,
+                                hazeState = hazeState,
+                                liquidGlassTuning = liquidGlassTuning,
+                                onExpand = { compactNavigation = false },
+                                content = navigationContent,
+                            )
+                        } else navigationContent()
                     }
                 }
                 val homeElasticState = rememberAppElasticPressState(
@@ -447,7 +510,11 @@ internal fun LinkedBottomDock(
                                 // 进入窗口（前 50%）ease-out 淡入并从 92% 缩放弹出，落定干净无过冲。
                                 val enterProgress = (merge.value / 0.5f).coerceIn(0f, 1f)
                                 val eased = EaseOutCubic.transform(enterProgress)
-                                alpha = eased
+                                // One complementary handoff prevents both glass shells from
+                                // brightening the same region during merge and reversal.
+                                alpha = if (glassEnabled) {
+                                    resolveLinkedDockGlassHandoffProgress(merge.value)
+                                } else eased
                                 val scale = 0.92f + 0.08f * eased
                                 scaleX = scale
                                 scaleY = scale

@@ -78,6 +78,7 @@ internal data class VideoPlayerSectionState(
     val followStatusKnown: Boolean,
     val isFollowSubmitting: Boolean,
     val isLiked: Boolean = false,
+    val isDisliked: Boolean = false,
     val likeStatusKnown: Boolean,
     val isCoined: Boolean = false,
     val isFavorited: Boolean = false,
@@ -87,6 +88,7 @@ internal data class VideoPlayerSectionState(
     val preserveCurrentFrameOnFullscreenChange: Boolean = false,
     val liveBackPreview: Boolean = false,
     val useTextureSurfaceForNavigation: Boolean = false,
+    val isPlayerSurfaceReady: Boolean = true,
     val predictiveBackCancelRecoveryGeneration: Int = 0,
     val allowLivePlayerSharedElement: Boolean = true,
     val sourceRouteForSharedElement: String? = null,
@@ -163,4 +165,7 @@ internal data class VideoPlayerSectionActions(
         kotlinx.coroutines.flow.MutableStateFlow(emptySet()),
     val onReportDanmaku: (dmid: Long, reason: Int) -> Unit = { _, _ -> },
     val onRecallDanmaku: (Long) -> Unit = {},
+    val menuActions: com.android.purebilibili.feature.video.ui.overlay.PiliPlayerMenuActions =
+        com.android.purebilibili.feature.video.ui.overlay.PiliPlayerMenuActions(),
+    val onQuickFavorite: () -> Unit = {},
 )

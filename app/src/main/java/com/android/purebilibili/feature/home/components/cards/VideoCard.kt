@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.home.components.cards
 
+import com.android.purebilibili.core.ui.components.VideoStatusBadges
 import com.android.purebilibili.core.ui.AppContentColors
 
 
@@ -29,6 +30,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import com.android.purebilibili.core.ui.wallpaper.sharedGlobalWallpaperBackground
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
@@ -47,6 +50,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onVisibilityChanged
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
@@ -62,6 +66,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.android.purebilibili.feature.home.LocalHomeCardCoverLoadingAllowed
 import com.android.purebilibili.core.ui.components.PageAwareAsyncImage
 import com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed
 import coil3.request.ImageRequest
@@ -69,6 +74,7 @@ import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.util.rememberHapticFeedback
 import com.android.purebilibili.core.util.animateEnter
 import com.android.purebilibili.core.util.CardPositionManager
+import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import com.android.purebilibili.core.util.HomeCoverReturnPrefetchEntry
 import com.android.purebilibili.core.util.HomeCoverReturnPrefetchRegistry
 import com.android.purebilibili.core.ui.transition.VideoCardSourceChromeSnapshot
@@ -99,6 +105,8 @@ import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.ui.feedContentTypography
 import com.android.purebilibili.feature.home.LocalHomeWallpaperBackdrop
+import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
+import com.android.purebilibili.core.ui.wallpaper.LocalGlobalWallpaperBackdropSource
 import com.android.purebilibili.feature.home.LocalHomeWallpaperBackdropReady
 import com.android.purebilibili.feature.home.LocalHomeWallpaperIsStatic
 import com.android.purebilibili.feature.home.HomeCoverRequestSpec
@@ -116,6 +124,9 @@ import com.android.purebilibili.core.ui.transition.LocalVideoCardSharedElementSo
 import com.android.purebilibili.core.ui.transition.LocalMiuixVideoCardTransitionState
 import com.android.purebilibili.core.ui.transition.captureNativeCoverOverlayLayer
 import com.android.purebilibili.core.ui.transition.captureNativeVideoCardImage
+import com.android.purebilibili.core.ui.transition.captureWholeCardReturnBitmap
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import com.android.purebilibili.core.ui.transition.recordNativeVideoCardLayer
 import com.android.purebilibili.core.ui.transition.rememberNativeVideoCardLayer
 import com.android.purebilibili.core.ui.transition.LocalClickToPlayEnabled
@@ -286,34 +297,42 @@ private fun VideoCardOwnerMetadata(
             followerCount = upFollowerCount,
             videoCount = upVideoCount
         ),
-        nameLeadingContent = if (isFollowing) {
+        nameLeadingContent = if (isFollowing || video.isFollowed || video.recommendationReason.isNotBlank()) {
             {
-                if (infoBadgeStyle == HomeVideoBadgeStyle.GLASS) {
-                    AppSurface(
-                        modifier = Modifier.wrapContentSize(),
-                        shape = AppShapes.container(ContainerLevel.Pill),
-                        color = inlinePillColors.containerColor,
-                        border = BorderStroke(
-                            AppSpacingTokens.Micro * 0.4f,
-                            inlinePillColors.borderColor
-                        )
-                    ) {
-                        AppText(
-                            text = "已关注",
-                            style = contentTypography.coverBadge,
-                            color = AppContentColors.accent(),
-                            modifier = Modifier.padding(
-                                horizontal = AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro,
-                                vertical = AppSpacingTokens.Micro
+                Row(
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    VideoRecommendationBadge(video.recommendationReason)
+                    if (isFollowing || video.isFollowed) {
+                        if (infoBadgeStyle == HomeVideoBadgeStyle.GLASS) {
+                            AppSurface(
+                                modifier = Modifier.wrapContentSize(),
+                                shape = AppShapes.container(ContainerLevel.Pill),
+                                color = inlinePillColors.containerColor,
+                                border = BorderStroke(
+                                    AppSpacingTokens.Micro * 0.4f,
+                                    inlinePillColors.borderColor,
+                                ),
+                            ) {
+                                AppText(
+                                    text = "已关注",
+                                    style = contentTypography.coverBadge,
+                                    color = AppContentColors.accent(),
+                                    modifier = Modifier.padding(
+                                        horizontal = AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro,
+                                        vertical = AppSpacingTokens.Micro,
+                                    ),
+                                )
+                            }
+                        } else {
+                            AppText(
+                                text = "已关注",
+                                style = contentTypography.coverBadge,
+                                color = AppContentColors.accent(),
                             )
-                        )
+                        }
                     }
-                } else {
-                    AppText(
-                        text = "已关注",
-                        style = contentTypography.coverBadge,
-                        color = AppContentColors.accent()
-                    )
                 }
             }
         } else {
@@ -516,8 +535,8 @@ internal fun ElegantVideoCard(
     showUpBadge: Boolean? = null,
     showUpAvatar: Boolean? = null,
     homeDurationStyle: HomeDurationStyle = HomeDurationStyle.OUTSIDE_COVER,
-    // 默认跟官方双列 4:3；首页会传入 resolveHomeFeedCardLayout 的比例覆盖
-    coverAspectRatio: Float = 4f / 3f,
+    // All video cards follow the selected ratio; callers can explicitly override artwork geometry.
+    coverAspectRatio: Float = com.android.purebilibili.core.ui.videoCardCoverAspectRatio(),
     compactMetadata: Boolean = true,
     titleMinLines: Int = 2,
     titleMaxLines: Int = 2,
@@ -528,7 +547,7 @@ internal fun ElegantVideoCard(
     onDismiss: (() -> Unit)? = null,    //  [新增] 删除/过滤回调（长按触发）
     onWatchLater: (() -> Unit)? = null,  //  [新增] 稍后再看回调
     onUnfavorite: (() -> Unit)? = null,  //  [新增] 取消收藏回调
-    dismissMenuText: String = "\uD83D\uDEAB 不感兴趣", //  [新增] 自定义长按菜单删除文案
+    dismissMenuText: String = "不感兴趣", //  [新增] 自定义长按菜单删除文案
     onLongClick: ((VideoItem) -> Unit)? = null, // [Feature] Long Press Preview
     onUpClick: ((Long) -> Unit)? = null,
     singleColumn: Boolean = false,
@@ -536,6 +555,10 @@ internal fun ElegantVideoCard(
     modifier: Modifier = Modifier,
     onClick: (String, Long) -> Unit
 ) {
+    val globalWallpaperSource = LocalGlobalWallpaperBackdropSource.current
+    val globalCardWallpaperVisible = LocalGlobalWallpaperBackdropVisible.current &&
+        LocalHomeCardFrostedGlassEnabled.current && globalWallpaperSource != null
+    val resolvedWallpaperTintEnabled = wallpaperTintEnabled || globalCardWallpaperVisible
     val isLongPressEnabled = com.android.purebilibili.core.ui.LocalVideoCardLongPressEnabled.current
     if (singleColumn) {
         val actions = buildList {
@@ -611,8 +634,10 @@ internal fun ElegantVideoCard(
     val inlinePillBaseColor = AppSurfaceTokens.cardContainer()
     val wallpaperHazeState = LocalWallpaperHazeState.current
     val homeWallpaperBackdrop = LocalHomeWallpaperBackdrop.current
-    val homeWallpaperBackdropReady = LocalHomeWallpaperBackdropReady.current
-    val homeWallpaperIsStatic = LocalHomeWallpaperIsStatic.current
+        ?: globalWallpaperSource?.takeIf { globalCardWallpaperVisible && it.isReady }?.backdrop
+    val homeWallpaperBackdropReady = LocalHomeWallpaperBackdropReady.current ||
+        (globalCardWallpaperVisible && globalWallpaperSource?.isReady == true)
+    val homeWallpaperIsStatic = LocalHomeWallpaperIsStatic.current || globalCardWallpaperVisible
     val badgeEffectVisual = remember(badgeEffectMode, wallpaperHazeState != null) {
         resolveHomeCardBadgeEffectVisual(
             mode = badgeEffectMode,
@@ -639,7 +664,7 @@ internal fun ElegantVideoCard(
     val homeWallpaperSurfaceMode = remember(
         homeCardDynamicTintEnabled,
         homeCardFrostedGlassEnabled,
-        wallpaperTintEnabled,
+        resolvedWallpaperTintEnabled,
         homeWallpaperIsStatic,
         homeWallpaperBackdropReady,
         blurEnabled,
@@ -650,7 +675,7 @@ internal fun ElegantVideoCard(
         resolveHomeCardWallpaperSurfaceMode(
             dynamicTintEnabled = homeCardDynamicTintEnabled,
             frostedGlassEnabled = homeCardFrostedGlassEnabled,
-            wallpaperVisible = wallpaperTintEnabled,
+            wallpaperVisible = resolvedWallpaperTintEnabled,
             wallpaperIsStatic = homeWallpaperIsStatic,
             backdropReady = homeWallpaperBackdropReady,
             blurEnabled = blurEnabled,
@@ -665,7 +690,7 @@ internal fun ElegantVideoCard(
     val infoLayoutCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
     val homeScrollTickProvider = LocalHomeScrollTickProvider.current
     val infoSurfaceAppearance = remember(
-        wallpaperTintEnabled,
+        resolvedWallpaperTintEnabled,
         wallpaperEffectMode,
         isDarkCardTheme,
         isDataSaverActive,
@@ -674,7 +699,7 @@ internal fun ElegantVideoCard(
         blurEnabled
     ) {
         resolveHomeCardInfoSurfaceAppearance(
-            wallpaperTintEnabled = wallpaperTintEnabled,
+            wallpaperTintEnabled = resolvedWallpaperTintEnabled,
             wallpaperEffectMode = wallpaperEffectMode,
             isDarkTheme = isDarkCardTheme,
             isDataSaverActive = isDataSaverActive,
@@ -767,7 +792,7 @@ internal fun ElegantVideoCard(
     val adaptiveContentColors = remember(
         wallpaperPalette,
         animatedCoverTint,
-        wallpaperTintEnabled,
+        resolvedWallpaperTintEnabled,
         isDarkCardTheme,
         defaultOnSurface,
         defaultOnSurfaceVariant,
@@ -781,7 +806,7 @@ internal fun ElegantVideoCard(
             } else {
                 null
             },
-            wallpaperTintEnabled = wallpaperTintEnabled,
+            wallpaperTintEnabled = resolvedWallpaperTintEnabled,
             isDarkTheme = isDarkCardTheme,
             defaultOnSurface = defaultOnSurface,
             defaultOnSurfaceVariant = defaultOnSurfaceVariant,
@@ -792,20 +817,24 @@ internal fun ElegantVideoCard(
             )
         )
     }
-    // 返回预热：组合即可见，上报 (bvid, url, cacheKey)，供详情返回时按同一 cacheKey
-    // prefetch，避免首页 scene 重建后封面重新解码造成落位闪变。
-    SideEffect {
+    var cardVisibleInWindow by remember(video.bvid, video.cid) { mutableStateOf(false) }
+    val coverReturnPrefetchAllowed = LocalPageImageLoadingAllowed.current && cardVisibleInWindow
+    LaunchedEffect(video.bvid, coverUrl, coverCacheKey, coverRequestSpec, coverReturnPrefetchAllowed) {
+        if (!coverReturnPrefetchAllowed) return@LaunchedEffect
         HomeCoverReturnPrefetchRegistry.onCardVisible(
             HomeCoverReturnPrefetchEntry(
                 bvid = video.bvid.trim(),
                 url = coverUrl,
                 cacheKey = coverCacheKey,
+                decodeWidthPx = coverRequestSpec?.widthPx ?: 0,
+                decodeHeightPx = coverRequestSpec?.heightPx ?: 0,
             )
         )
     }
     val onlineCount = rememberVideoCardOnlineCount(
         video = video,
-        showOnlineCount = showOnlineCount
+        showOnlineCount = showOnlineCount,
+        isVisibleInWindow = cardVisibleInWindow,
     )
     val publishTimeRowText: String
     val emphasizePublishTime: Boolean
@@ -872,14 +901,23 @@ internal fun ElegantVideoCard(
     val hasOverflowMenu = onDismiss != null || onWatchLater != null
     val hasTrailingCardAction = onUnfavorite != null || hasOverflowMenu
     val nativeCardLayer = rememberNativeVideoCardLayer()
+    val wholeCardCaptureScope = rememberCoroutineScope()
     val nativeCoverOverlayLayer = rememberNativeVideoCardLayer()
     val freezeNativeCardLayer = remember(video.bvid) { mutableStateOf(false) }
 
+    val infoBaseContainerColor = AppSurfaceTokens.cardContainer()
+    fun resolvedInfoBackingColor(yFraction: Float): Color =
+        if (resolvedWallpaperTintEnabled && wallpaperPalette != null) {
+            interpolateWallpaperColor(wallpaperPalette, yFraction).copy(alpha = 1f)
+        } else {
+            infoBaseContainerColor.copy(alpha = 1f)
+        }
+
     val triggerCardClick = {
-        cardCoordsRef.value?.takeIf { it.isAttached }?.boundsInRoot()?.let { bounds ->
+        cardCoordsRef.value?.takeIf { it.isAttached }?.videoCardSourceBoundsInRoot()?.let { bounds ->
             val sourceCoverBounds = coverCoordsRef.value
                 ?.takeIf { it.isAttached }
-                ?.boundsInRoot()
+                ?.videoCardSourceBoundsInRoot()
             val frozenCompactStatsLayout = resolveVideoCardCompactCoverStatsLayout(
                 availableWidthDp = sourceCoverBounds?.let { coverBounds ->
                     (
@@ -914,9 +952,35 @@ internal fun ElegantVideoCard(
                 // survives Loading and does not wait for destination ViewInfo.
                 sourceLayout = VideoCardSourceLayout.STACKED,
                 sourceChromeSnapshot = VideoCardSourceChromeSnapshot(
+                    infoContainerColor = if (useCardEffectSurface && resolvedWallpaperTintEnabled) {
+                        val infoY = infoLayoutCoordinates.value
+                            ?.takeIf { it.isAttached }?.positionInRoot()?.y
+                        val fraction = if (infoY != null && screenMetrics.heightPx > 0f) {
+                            (infoY / screenMetrics.heightPx).coerceIn(0f, 1f)
+                        } else cardYFraction.floatValue
+                        val backing = resolvedInfoBackingColor(fraction)
+                        val plate = if (useRealtimeWallpaperBackdrop) {
+                            infoBaseContainerColor.copy(alpha = if (isDarkCardTheme) 0.44f else 0.36f)
+                        } else {
+                            resolveVideoCardAmbientDrawSpec(
+                                wallpaperPalette = wallpaperPalette,
+                                yFraction = fraction,
+                                coverTint = animatedCoverTint.takeIf { it.alpha > 0f },
+                                wallpaperTintEnabled = resolvedWallpaperTintEnabled,
+                                isDarkTheme = isDarkCardTheme,
+                                defaultContainerColor = infoBaseContainerColor,
+                                defaultBorderColor = MediaContrastPalette.Foreground,
+                                isDataSaverActive = isDataSaverActive,
+                                frostedGlassEnabled = homeCardFrostedGlassEnabled,
+                                dynamicTintEnabled = homeCardDynamicTintEnabled,
+                            ).containerColor
+                        }
+                        plate.compositeOver(backing)
+                    } else null,
                     title = video.title,
                     ownerName = video.owner.name,
                     ownerFaceUrl = video.owner.face,
+                    recommendationReason = video.recommendationReason,
                     viewText = if (video.stat.view > 0) {
                         FormatUtils.formatStat(video.stat.view.toLong())
                     } else {
@@ -925,12 +989,13 @@ internal fun ElegantVideoCard(
                     danmakuText = secondaryStatText
                         ?: FormatUtils.formatStat(video.stat.danmaku.toLong()),
                     durationText = durationText,
-                    followed = video.isFollowed,
+                    followed = isFollowing || video.isFollowed,
                     // Remember what the list info column actually paints (not cover badges).
                     infoPresentation = com.android.purebilibili.core.ui.transition
                         .resolveVideoCardSourceInfoPresentation(
                             publishTimeText = publishTimeRowText,
                             showStatsInInfo = scrollLitePolicy.showSecondaryStatsRow,
+                            ownerBeforeStats = true,
                             showDurationInInfo = showDurationOutside,
                             useTintedInfoSurface = useCardEffectSurface,
                             showOverflowMenu = hasOverflowMenu,
@@ -962,7 +1027,7 @@ internal fun ElegantVideoCard(
                 // 点击时冻结的信息面矩形：重建壳的信息板按它落位，而不是「卡底 − 封面底」。
                 infoBounds = infoLayoutCoordinates.value
                     ?.takeIf { it.isAttached }
-                    ?.boundsInRoot(),
+                    ?.videoCardSourceBoundsInRoot(),
             )
             // The mounted draw modifier reads this latch directly, so the layer freezes
             // before OPENING can hide the stationary title and statistics.
@@ -971,16 +1036,24 @@ internal fun ElegantVideoCard(
                 freezeNativeCardLayer.value = true
                 captureNativeVideoCardImage(nativeCardLayer)
                 captureNativeCoverOverlayLayer(nativeCoverOverlayLayer)
+                val expectedSourceKey = CardPositionManager.lastClickedVideoSourceKey
+                if (expectedSourceKey != null) {
+                    wholeCardCaptureScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        captureWholeCardReturnBitmap(nativeCardLayer, expectedSourceKey)
+                    }
+                }
             }
         }
         onClick(video.bvid, video.cid)
     }
+    val homeCardScrolling = LocalHomeCardScrolling.current
     val enterAnimationEnabledAtMount = remember(video.bvid) {
         resolveHomeCardEnterAnimationEnabledAtMount(
             baseAnimationEnabled = animationEnabled,
             isReturningFromDetail = isReturningFromVideoDetail,
             isSwitchingCategory = CardPositionManager.isSwitchingCategory,
-            isScrollInProgress = scrollLiteModeEnabled
+            // Read only at mount: stopping a scroll must not replay skipped entrances.
+            isScrollInProgress = scrollLiteModeEnabled || homeCardScrolling?.value == true
         )
     }
     val coordinateEnterWithTransition = remember(animationEnabled, transitionEnabled) {
@@ -991,6 +1064,9 @@ internal fun ElegantVideoCard(
         propagateMinConstraints = true,
         modifier = modifier
             .fillMaxWidth()
+            .onVisibilityChanged(minFractionVisible = 0.01f, minDurationMs = 0L) {
+                cardVisibleInWindow = it
+            }
             .adaptiveCardHoverEffect(shape = adaptiveHoverShape)
             // 进场动画：挂载门控已含滚动/返回/切分类；与过渡并存时仅淡入不改几何
             .animateEnter(
@@ -1001,7 +1077,7 @@ internal fun ElegantVideoCard(
                 coordinateWithSharedTransition = coordinateEnterWithTransition
             )
             //  [新增] 记录卡片位置（仅存引用，boundsInRoot() 在交互时惰性计算）
-            .onGloballyPositioned { coordinates ->
+            .onPlaced { coordinates ->
                 cardCoordsRef.value = coordinates
             }
     ) {
@@ -1108,6 +1184,7 @@ internal fun ElegantVideoCard(
                     bvid = video.bvid,
                     sourceRoute = effectiveSharedElementSourceRoute,
                     enabled = effectiveTransitionEnabled,
+                    landingFeedbackEnabled = true,
                 ),
         ) {
             val cardShellBaseColor = if (useCardEffectSurface) {
@@ -1189,13 +1266,17 @@ internal fun ElegantVideoCard(
                 .testTag("home_video_cover")
                 .aspectRatio(coverAspectRatio)
                 .clip(coverShape)
-                .onGloballyPositioned { coordinates ->
-                    coverCoordsRef.value = coordinates
-                    val rootTop = coordinates.boundsInRoot().top
-                    if (screenMetrics.heightPx > 0f) {
-                        cardYFraction.floatValue = (rootTop / screenMetrics.heightPx).coerceIn(0f, 1f)
-                    }
-                }
+                .onPlaced { coordinates -> coverCoordsRef.value = coordinates }
+                .then(
+                    // Only wallpaper backing uses the scrolling cover position. Interaction
+                    // bounds are queried from the live coordinates when the user acts.
+                    if (resolvedWallpaperTintEnabled) Modifier.onGloballyPositioned { coordinates ->
+                        if (screenMetrics.heightPx > 0f) {
+                            cardYFraction.floatValue =
+                                (coordinates.boundsInRoot().top / screenMetrics.heightPx).coerceIn(0f, 1f)
+                        }
+                    } else Modifier
+                )
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 //  [交互优化] 封面区域：点击跳转
                 .pointerInput(isLongPressEnabled, onLongClick, onDismiss, onWatchLater, onUnfavorite) {
@@ -1242,7 +1323,8 @@ internal fun ElegantVideoCard(
                     .build()
             }
             var loadedCoverCacheKey by remember(requestCoverCacheKey) { mutableStateOf<String?>(null) }
-            val coverWorkAllowed = LocalPageImageLoadingAllowed.current
+            val coverWorkAllowed = LocalPageImageLoadingAllowed.current &&
+                LocalHomeCardAuxiliaryWorkAllowed.current
             LaunchedEffect(
                 loadedCoverCacheKey,
                 requestCoverCacheKey,
@@ -1264,6 +1346,8 @@ internal fun ElegantVideoCard(
             }
             PageAwareAsyncImage(
                 model = coverImageRequest,
+                loadingAllowed = LocalHomeCardCoverLoadingAllowed.current
+                    ?: LocalPageImageLoadingAllowed.current,
                 contentDescription = null,
                 onSuccess = {
                     loadedCoverCacheKey = requestCoverCacheKey
@@ -1291,26 +1375,10 @@ internal fun ElegantVideoCard(
                         enabled = effectiveTransitionEnabled,
                     ),
             ) {
-            if (premiumBadgeLabel != null) {
-                HomeVideoBadgePill(
-                    style = badgeStylePolicy.coverStyle,
-                    useRealtimeHaze = badgeEffectVisual.useRealtimeHaze,
-                    shape = AppShapes.container(ContainerLevel.Tag),
-                    containerColor = BiliPink.copy(alpha = if (badgeStylePolicy.coverStyle == HomeVideoBadgeStyle.GLASS) 0.78f else 1f),
-                    borderColor = MediaContrastPalette.Foreground.copy(alpha = 0.24f),
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(AppSpacingTokens.Small)
-                ) {
-                    AppText(
-                        text = premiumBadgeLabel,
-                        color = MediaContrastPalette.Foreground,
-                        fontSize = MaterialTheme.typography.labelSmall.fontSize,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-            }
+            VideoStatusBadges(
+                labels = video.statusLabels,
+                modifier = Modifier.align(Alignment.TopEnd).padding(AppSpacingTokens.Small),
+            )
 
             //  底部渐变遮罩
 
@@ -1592,6 +1660,18 @@ internal fun ElegantVideoCard(
             Modifier
                 .fillMaxWidth()
                 .clip(infoSurfaceShape)
+                // Include the wallpaper in the recorded native pixels before freezing on click.
+                // A translucent plate alone would blend with the detail page during handoff.
+                .then(
+                    if (resolvedWallpaperTintEnabled) {
+                        Modifier.sharedGlobalWallpaperBackground(
+                            fallbackColor = resolvedInfoBackingColor(0.5f),
+                            fallbackColorProvider = {
+                                resolvedInfoBackingColor(cardYFraction.floatValue)
+                            },
+                        )
+                    } else Modifier
+                )
                 .then(hazeModifier)
                 .then(wallpaperBackdropModifier)
                 .onPlaced { coordinates ->
@@ -1602,7 +1682,7 @@ internal fun ElegantVideoCard(
                         wallpaperPalette = wallpaperPalette,
                         yFraction = 0.5f,
                         coverTint = if (animatedCoverTint.alpha > 0f) animatedCoverTint else null,
-                        wallpaperTintEnabled = wallpaperTintEnabled,
+                        wallpaperTintEnabled = resolvedWallpaperTintEnabled,
                         isDarkTheme = isDarkCardTheme,
                         defaultContainerColor = baseContainerColor,
                         defaultBorderColor = baseBorderColor,
@@ -1611,7 +1691,7 @@ internal fun ElegantVideoCard(
                         dynamicTintEnabled = homeCardDynamicTintEnabled,
                     )
                     val followsWallpaperPosition = homeCardDynamicTintEnabled &&
-                        !useRealtimeWallpaperBackdrop && wallpaperTintEnabled && wallpaperPalette != null
+                        !useRealtimeWallpaperBackdrop && resolvedWallpaperTintEnabled && wallpaperPalette != null
                     val glowBrush = if (cachedSpec.coverGlowAlpha > 0f && animatedCoverTint.alpha > 0f) {
                         Brush.verticalGradient(
                             colors = listOf(
@@ -1668,7 +1748,7 @@ internal fun ElegantVideoCard(
                         val borderAlpha = if (isDarkCardTheme) 0.30f else 0.45f
                         val baseBorder = Color.White.copy(alpha = borderAlpha)
                         if (
-                            shouldUseCoverTintForCard(wallpaperTintEnabled, coverTint) &&
+                            shouldUseCoverTintForCard(resolvedWallpaperTintEnabled, coverTint) &&
                             animatedCoverTint.alpha > 0f
                         ) {
                             val borderBlend = if (isDarkCardTheme) 0.50f else 0.40f
@@ -1690,7 +1770,7 @@ internal fun ElegantVideoCard(
         } else {
             val ambientCoverGlowModifier = if (
                 homeCardDynamicTintEnabled &&
-                shouldUseCoverTintForCard(wallpaperTintEnabled, coverTint) &&
+                shouldUseCoverTintForCard(resolvedWallpaperTintEnabled, coverTint) &&
                 animatedCoverTint.alpha > 0f
             ) {
                 Modifier.drawWithCache {
@@ -1753,7 +1833,7 @@ internal fun ElegantVideoCard(
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics { contentDescription = "视频标题: ${video.title}" }
-                .onGloballyPositioned { coordinates ->
+                .onPlaced { coordinates ->
                     titleCoordsRef.value = coordinates
                 }
                 //  [交互优化] 标题区域：长按弹出菜单，点击跳转
@@ -1794,6 +1874,20 @@ internal fun ElegantVideoCard(
         )
 
         val resolvedUpBadgeVisibility = com.android.purebilibili.core.ui.LocalUpBadgeVisibility.current
+        VideoCardOwnerMetadata(
+            video = video,
+            isFollowing = isFollowing,
+            showUpBadge = showUpBadge ?: resolvedUpBadgeVisibility.showBadges,
+            showUpAvatar = showUpAvatar ?: resolvedUpBadgeVisibility.showAvatars,
+            upFollowerCount = upFollowerCount,
+            upVideoCount = upVideoCount,
+            infoBadgeStyle = badgeStylePolicy.infoStyle,
+            inlinePillColors = inlinePillColors,
+            metadataColors = metadataColors,
+            onUpClick = onUpClick,
+            modifier = resolveVideoCardMetadataRowModifier()
+        )
+
         if (scrollLitePolicy.showSecondaryStatsRow) {
             Spacer(modifier = Modifier.height(AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro))
             Column(
@@ -1832,20 +1926,6 @@ internal fun ElegantVideoCard(
                 }
             }
         }
-
-        VideoCardOwnerMetadata(
-            video = video,
-            isFollowing = isFollowing,
-            showUpBadge = showUpBadge ?: resolvedUpBadgeVisibility.showBadges,
-            showUpAvatar = showUpAvatar ?: resolvedUpBadgeVisibility.showAvatars,
-            upFollowerCount = upFollowerCount,
-            upVideoCount = upVideoCount,
-            infoBadgeStyle = badgeStylePolicy.infoStyle,
-            inlinePillColors = inlinePillColors,
-            metadataColors = metadataColors,
-            onUpClick = onUpClick,
-            modifier = resolveVideoCardMetadataRowModifier()
-        )
 
         VideoCardDurationPublishRow(
             // 数据贴封面时，时长已随统计行以 pill 呈现，不再在信息区重复显示
@@ -1896,7 +1976,7 @@ internal fun ElegantVideoCard(
                         modifier = Modifier
                             .size(AppChromeSizeTokens.MinimumTouchTarget)
                             .semantics { contentDescription = "更多操作" }
-                            .onGloballyPositioned { coordinates ->
+                            .onPlaced { coordinates ->
                                 menuButtonCoordsRef.value = coordinates
                             }
                             .clickable {
@@ -1950,7 +2030,7 @@ internal fun ElegantVideoCard(
                         AppDropdownMenuItem(
                             text = {
                                 AppText(
-                                    "🕐 稍后再看",
+                                    "稍后再看",
                                     color = AppContentColors.primaryText()
                                 )
                             },
@@ -1966,7 +2046,7 @@ internal fun ElegantVideoCard(
                          AppDropdownMenuItem(
                             text = {
                                 AppText(
-                                    "💔 取消收藏",
+                                    "取消收藏",
                                     color = AppContentColors.error()  // 使用错误色强调删除操作
                                 )
                             },

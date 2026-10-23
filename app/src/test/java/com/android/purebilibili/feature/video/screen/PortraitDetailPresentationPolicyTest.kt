@@ -9,34 +9,20 @@ import kotlin.test.assertTrue
 class PortraitDetailPresentationPolicyTest {
 
     @Test
-    fun commentTabUsesCompactPlayerWhenCoverRecognitionMissesShortViewport() {
-        assertTrue(
-            shouldUseCompactInlinePortraitPlayerForCommentTab(
-                useOfficialInlinePortraitDetailExperience = true,
-                selectedTabIndex = 1,
-                isPortraitFullscreen = false,
-                isCompactFoldableCoverWindow = false,
-                availableCommentHeightDp = 180f,
-            )
-        )
-    }
-
-    @Test
-    fun viewportProtectionDoesNotCollapseIntroFullscreenOrRoomyCommentPage() {
-        for ((tab, fullscreen, remainingHeight) in listOf(
-            Triple(0, false, 180f),
-            Triple(1, true, 180f),
-            Triple(1, false, MIN_INLINE_COMMENT_VIEWPORT_HEIGHT_DP),
-            Triple(1, false, 360f),
-        )) {
-            assertFalse(
-                shouldUseCompactInlinePortraitPlayerForCommentTab(
-                    useOfficialInlinePortraitDetailExperience = true,
-                    selectedTabIndex = tab,
-                    isPortraitFullscreen = fullscreen,
-                    availableCommentHeightDp = remainingHeight,
+    fun switchingToCommentsNeverForcesCompactPlayerForAnyModeOrPauseState() {
+        PortraitPlayerCollapseMode.entries.forEach { mode ->
+            listOf(false, true).forEach { paused ->
+                assertFalse(
+                    shouldUseCompactInlinePortraitPlayerForCommentTab(
+                        useOfficialInlinePortraitDetailExperience = true,
+                        selectedTabIndex = 1,
+                        isPortraitFullscreen = false,
+                        collapseMode = mode,
+                        isVerticalVideo = true,
+                        isPlaybackPaused = paused,
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -334,11 +320,11 @@ class PortraitDetailPresentationPolicyTest {
     }
 
     @Test
-    fun landscapeDetailPlayerHeight_matchesActualLayoutWidthFor16By9() {
-        // vivo 类窄机：按真实布局宽算 9/16，避免 screenWidthDp 偏差导致左右黑边
-        assertEquals(608, resolveLandscapeDetailPlayerContentHeightPx(layoutWidthPx = 1080))
-        assertEquals(684, resolveLandscapeDetailPlayerContentHeightPx(layoutWidthPx = 1216))
-        assertEquals(1, resolveLandscapeDetailPlayerContentHeightPx(layoutWidthPx = 0))
+    fun phoneDetailPlayerHeight_keepsLoadingCoverAndPlayback16By9() {
+        // Loading cover and playback share 16:9 at the actual layout width.
+        assertEquals(608, resolvePhoneDetailPlayerContentHeightPx(layoutWidthPx = 1080))
+        assertEquals(684, resolvePhoneDetailPlayerContentHeightPx(layoutWidthPx = 1216))
+        assertEquals(1, resolvePhoneDetailPlayerContentHeightPx(layoutWidthPx = 0))
     }
 
     @Test
@@ -606,9 +592,9 @@ class PortraitDetailPresentationPolicyTest {
     }
 
     @Test
-    fun inlinePortraitPlayer_scrollProgressFollowsManualOffsetForRestore() {
+    fun inlinePortraitPlayer_compactCommentsAffectLayoutWithoutPausingPlayback() {
         assertEquals(
-            0f,
+            1f,
             resolveInlinePortraitPlayerCollapseProgress(
                 manualCollapseProgress = 0f,
                 compactForCommentTabProgress = 1f
@@ -622,7 +608,7 @@ class PortraitDetailPresentationPolicyTest {
             )
         )
         assertEquals(
-            0.2f,
+            0.6f,
             resolveInlinePortraitPlayerCollapseProgress(
                 manualCollapseProgress = 0.2f,
                 compactForCommentTabProgress = 0.6f
@@ -634,6 +620,18 @@ class PortraitDetailPresentationPolicyTest {
                 manualCollapseProgress = 1f,
                 compactForCommentTabProgress = 1f,
                 restoreRequested = true
+            )
+        )
+    }
+
+    @Test
+    fun inlinePortraitPlayer_pausedCommentsKeepManualHideProgress() {
+        assertEquals(
+            0.2f,
+            resolveInlinePortraitPlayerCollapseProgress(
+                manualCollapseProgress = 0.2f,
+                compactForCommentTabProgress = 1f,
+                hidePausedPlayerForComments = true,
             )
         )
     }
@@ -673,23 +671,23 @@ class PortraitDetailPresentationPolicyTest {
     fun continuousPlayerInlineHeight_prefersLayoutWidthWhenExpandedButHonorsCollapse() {
         val layoutWidth = 1080
         val layoutExpanded =
-            resolveLandscapeDetailPlayerContentHeightPx(layoutWidthPx = layoutWidth) + 80
+            resolvePhoneDetailPlayerContentHeightPx(layoutWidthPx = layoutWidth) + 80
         // screenWidthDp 估高：caller 展开高度大于真布局宽 → 取 layout 消黑边
         assertEquals(
             layoutExpanded,
             resolveContinuousPlayerInlineHeightPx(
                 layoutWidthPx = layoutWidth,
-                preferLayoutWidth16x9Inline = true,
+                preferLayoutWidthInline = true,
                 callerInlineHeightPx = layoutExpanded + 40,
                 inlineTopInsetPx = 80,
             ),
         )
-        // 评论上滑折叠：caller 更小 → 必须跟着缩小，不能卡死在 16:9
+        // 评论上滑折叠：caller 更小 → 必须跟着缩小，不能卡死在展开高度
         assertEquals(
             120,
             resolveContinuousPlayerInlineHeightPx(
                 layoutWidthPx = layoutWidth,
-                preferLayoutWidth16x9Inline = true,
+                preferLayoutWidthInline = true,
                 callerInlineHeightPx = 120,
                 inlineTopInsetPx = 80,
             ),
@@ -699,7 +697,7 @@ class PortraitDetailPresentationPolicyTest {
             200,
             resolveContinuousPlayerInlineHeightPx(
                 layoutWidthPx = layoutWidth,
-                preferLayoutWidth16x9Inline = false,
+                preferLayoutWidthInline = false,
                 callerInlineHeightPx = 200,
                 inlineTopInsetPx = 80,
             ),

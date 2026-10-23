@@ -947,7 +947,14 @@ private fun LiveAreaHomeChipRow(
         ?.value
         ?: LIVE_HOME_RECOMMEND_INDEX
     val uiStyle = LocalAppUiStyle.current
-    val categoryMinWidth = if (uiStyle == AppUiStyle.MATERIAL3) {
+    val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    // The 82dp compact-chrome slot belongs to native Miuix. Glass categories should use
+    // the common text measurement rather than inherit that larger fixed minimum.
+    val categoryMinWidth = if (liquidGlassEnabled) {
+        // Short category labels should stay close to the rail's leading edge;
+        // the touch-target wrapper still preserves accessible hit regions.
+        40.dp
+    } else if (uiStyle == AppUiStyle.MATERIAL3) {
         AppChromeSizeTokens.MinimumTouchTarget
     } else {
         rememberAppTopChromePolicy()
@@ -972,6 +979,9 @@ private fun LiveAreaHomeChipRow(
             onSelectionChange = onAreaSelected,
             scrollable = true,
             minTabWidth = categoryMinWidth,
+            liquidGlassLabelHorizontalPadding = if (liquidGlassEnabled) 4.dp else null,
+            // Keep the first/last capsule inset equal to the rail inset, even for 推荐.
+            liquidGlassAdaptIndicatorToLabel = false,
             modifier = Modifier.weight(1f),
         )
         AppIconButton(
@@ -1030,14 +1040,18 @@ internal fun LiveSortTagChipRow(
         ?.takeIf { selected -> options.any { it.value == selected } }
         ?: options.first().value
     val uiStyle = LocalAppUiStyle.current
-    val sortTagMinWidth = if (uiStyle == AppUiStyle.MATERIAL3) {
+    val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    val sortTagMinWidth = if (liquidGlassEnabled || uiStyle == AppUiStyle.MATERIAL3) {
         AppChromeSizeTokens.MinimumTouchTarget
     } else {
         72.dp
     }
     AppThemeAdaptiveTabRow(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
-        centerContent = false,
+        // This filter owns the full row. The category row beside action buttons keeps its start anchor.
+        centerContent = LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
         options = options,
         selectedValue = selectedValue,
         onSelectionChange = { value ->

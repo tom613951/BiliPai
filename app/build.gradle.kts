@@ -12,11 +12,26 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     // Compose 预组合兼容补丁：guard LayoutNodeSubcompositionsState 的 detached-root owner 查找
     id("com.android.bilipai.compose-detached-owner-guard")
+    // Foundation 拖拽兼容补丁：在进入拖拽状态前过滤不受支持的输入类型。
+    id("com.android.bilipai.compose-drag-start-guard")
+    // 导航分发器被父级级联释放后，容忍子页面重复清理及延后的启用状态更新。
+    id("com.android.bilipai.navigationevent-disposal-guard")
+    id("com.android.bilipai.workmanager-namespace-guard")
+    // Miuix 0.9.4 的取色字节码适配 MaterialKolor 6，保留 SPEC_2026 / CMF。
+    id("com.android.bilipai.miuix-materialkolor-compat")
     // Room 数据库编译插件
     id("com.google.devtools.ksp")
     // 🔥 Firebase 相关插件
     // id("com.google.gms.google-services")
     // id("com.google.firebase.crashlytics")
+}
+
+// 发布使用已保存的规则；交互采集仅通过显式生成任务执行。
+// 采集结果独立写入 generated/baselineProfiles，不覆盖 main/baseline-prof.txt 的热点补充。
+baselineProfile {
+    automaticGenerationDuringBuild = false
+    saveInSrc = true
+    mergeIntoMain = true
 }
 
 abstract class PrepareKspGeneratedDirsTask : org.gradle.api.DefaultTask() {
@@ -140,6 +155,11 @@ android {
         }
     }
     namespace = "com.android.purebilibili"
+    androidResources {
+        generateLocaleConfig = true
+        // localeFilters is forwarded to aapt2's -c option; use Android resource qualifier syntax.
+        localeFilters += listOf("en", "zh-rCN", "zh-rTW")
+    }
     compileSdk {
         version = release(37) {
             minorApiLevel = 0
@@ -152,8 +172,8 @@ android {
         targetSdk = 37
         // 版本名按发行计划确定；versionCode 每次发布单调 +1
         // 规范：docs/wiki/VERSIONING.md · 更新日志：CHANGELOG.md
-        versionCode = 465
-        versionName = "0.3.9"
+        versionCode = 510
+        versionName = "0.5.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -474,7 +494,7 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:3.0.0")
     // Official converter since Retrofit 2.10; binary-compatible with Retrofit 3
     implementation("com.squareup.retrofit2:converter-kotlinx-serialization:3.0.0")
-    implementation("com.squareup.okhttp3:okhttp:5.3.2")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0")
     // 🔥 Brotli Decompression (for Bilibili Live Danmaku ProtoVer=3)
@@ -488,7 +508,7 @@ dependencies {
     
     // --- 3.1 Palette (颜色提取 - 动态取色) ---
     implementation("androidx.palette:palette-ktx:1.0.0")
-    implementation("com.materialkolor:material-kolor:4.1.1")
+    implementation("com.materialkolor:material-kolor-material3:6.0.0-beta01")
     implementation("com.github.skydoves:colorpicker-compose:1.1.4")
     
     // --- 3.2 Lottie (动画效果) ---
@@ -517,6 +537,10 @@ dependencies {
     
     // --- 3.7 Startup (应用初始化) ---
     implementation("androidx.startup:startup-runtime:1.2.0")
+
+    // Offline article extraction; no WebView or website JavaScript execution.
+    implementation("net.dankito.readability4j:readability4j:1.0.8")
+    implementation("org.jsoup:jsoup:1.23.2")
     
     // --- 4. Player (视频播放器 Media3) ---
     implementation("androidx.media3:media3-exoplayer:$media3Version")
@@ -654,10 +678,14 @@ tasks.register("installFastRelease") {
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
     apply(plugin = "com.google.firebase.crashlytics")
-    tasks.matching { task ->
-        task.name.startsWith("uploadCrashlyticsMappingFile")
-    }.configureEach {
-        // 本地构建不上传 mapping，避免 release/dev 在离线环境失败。
-        enabled = false
+    // Offline/local builds stay opt-in. The release workflow explicitly supplies this flag.
+    val uploadReleaseMapping = providers.gradleProperty("bili.firebase.uploadMapping")
+        .map { it.toBoolean() }
+        .getOrElse(false)
+    android.buildTypes.configureEach {
+        val uploadMappingForBuildType = name == "release" && uploadReleaseMapping
+        configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+            mappingFileUploadEnabled = uploadMappingForBuildType
+        }
     }
 }

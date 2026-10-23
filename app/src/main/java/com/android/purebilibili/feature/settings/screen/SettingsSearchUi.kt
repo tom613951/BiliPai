@@ -1,9 +1,19 @@
 package com.android.purebilibili.feature.settings
 
 import com.android.purebilibili.core.ui.AppContentColors
+import com.android.purebilibili.core.ui.AppChromeSizeTokens
 import com.android.purebilibili.core.ui.components.appElasticPress
 
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.res.painterResource
@@ -39,6 +50,21 @@ import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.core.ui.components.rememberAdaptiveListVisualCapabilities
 import com.android.purebilibili.core.ui.components.rememberAdaptivePreferenceIconContainerColor
 import com.android.purebilibili.core.ui.components.rememberAdaptivePreferenceIconContentColor
+import com.android.purebilibili.core.ui.LocalAppThemeConfig
+import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
+import com.android.purebilibili.core.ui.wallpaper.LocalGlobalWallpaperBackdropSource
+import com.android.purebilibili.feature.home.components.BottomBarMatchedReusableLiquidDock
+import top.yukonga.miuix.kmp.blur.Backdrop
+
+@Composable
+private fun settingsSearchWallpaperBackdrop(): Backdrop? {
+    // Search lives inside the page recording. Only the independent wallpaper source is
+    // safe here; passing the scroll/header source back into its child would sample itself.
+    val source = LocalGlobalWallpaperBackdropSource.current
+    return if (LocalAppThemeConfig.current.liquidGlassEnabled &&
+        LocalGlobalWallpaperBackdropVisible.current
+    ) source?.takeIf { it.isReady }?.backdrop else null
+}
 
 @Composable
 internal fun SettingsSearchBarSection(
@@ -54,6 +80,7 @@ internal fun SettingsSearchBarSection(
         onSearch = onSearch,
         placeholder = placeholder,
         presentation = AppSearchFieldPresentation.TOP_BAR,
+        backdrop = settingsSearchWallpaperBackdrop(),
         autoFocusEnabled = autoFocusEnabled,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
     )
@@ -66,12 +93,51 @@ internal fun SettingsHomeSearchEntry(
 ) {
     val visualSpec = resolveSettingsVisualSpec()
     val placeholder = stringResource(R.string.settings_search_placeholder)
-    AppSearchEntry(
-        onClick = onClick,
-        placeholder = placeholder,
-        modifier = modifier
-            .padding(horizontal = visualSpec.screenHorizontalPadding),
-    )
+    val entryModifier = modifier.padding(horizontal = visualSpec.screenHorizontalPadding)
+    // Material boundary: keep the disabled MD3/Miuix entry and its defaults intact.
+    if (!LocalAppThemeConfig.current.liquidGlassEnabled) {
+        AppSearchEntry(
+            onClick = onClick,
+            placeholder = placeholder,
+            modifier = entryModifier,
+        )
+        return
+    }
+    BottomBarMatchedReusableLiquidDock(
+        shape = CircleShape,
+        modifier = entryModifier,
+        backdrop = settingsSearchWallpaperBackdrop(),
+        reuseEnabled = true,
+        elasticFeedbackEnabled = true,
+        elasticFeedbackStrength = com.android.purebilibili.core.ui.components.APP_SEARCH_ELASTIC_FEEDBACK_STRENGTH,
+        useNeutralLiquidContainer = true,
+    ) {
+        // Glass entry is a compact click target, independent of native input-field metrics.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = AppChromeSizeTokens.LiquidSearchFieldHeightDp.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppIcon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = AppContentColors.secondaryText(),
+                modifier = Modifier.size(24.dp),
+            )
+            AppText(
+                text = placeholder,
+                color = AppContentColors.secondaryText(),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }
 
 @Composable
@@ -131,6 +197,10 @@ internal fun SettingsSearchResultsSection(
             AppPreferenceGroup {
                 results.forEachIndexed { index, result ->
                     key(result.settingId) {
+                    val titleResId = settingsSearchResultTitleResource(result.settingId)
+                    val localizedTitle = if (titleResId != null) stringResource(titleResId) else result.title
+                    val summaryResId = settingsSearchResultSummaryResource(result.settingId)
+                    val localizedSummary = if (summaryResId != null) stringResource(summaryResId) else result.subtitle
                     val item = settingsItemDirectory.firstOrNull { it.settingId == result.settingId }
                     val context = LocalContext.current
                     val valueFlow = remember(item, context) { item?.observeValue?.invoke(context) }
@@ -146,8 +216,8 @@ internal fun SettingsSearchResultsSection(
                         AppPreference(
                             icon = visual.icon,
                             iconPainter = visual.iconResId?.let { painterResource(id = it) },
-                            title = result.title,
-                            subtitle = listOf(result.path, resolveSettingsSearchDescriptionSnippet(result.subtitle, query)).filter { it.isNotBlank() }.joinToString("\n"),
+                            title = localizedTitle,
+                            subtitle = listOf(result.path, resolveSettingsSearchDescriptionSnippet(localizedSummary, query)).filter { it.isNotBlank() }.joinToString("\n"),
                             value = currentValue,
                             onClick = { onResultClick(result) },
                             iconTint = visual.iconTint,

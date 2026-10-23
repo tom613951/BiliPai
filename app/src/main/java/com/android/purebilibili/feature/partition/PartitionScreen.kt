@@ -2,6 +2,10 @@
 package com.android.purebilibili.feature.partition
 
 import com.android.purebilibili.core.ui.AppContentColors
+import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
+import com.android.purebilibili.core.ui.wallpaper.LocalGlobalWallpaperBackdropSource
+import com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource
+import com.android.purebilibili.feature.home.LocalHomeWallpaperBackdrop
 
 import android.os.Build
 import com.android.purebilibili.core.util.animateScrollToTop
@@ -12,6 +16,9 @@ import com.android.purebilibili.core.theme.LocalAppUiStyle
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.overscroll
+import androidx.compose.foundation.rememberOverscrollEffect
+import androidx.compose.foundation.withoutVisualEffect
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,6 +32,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.Checkroom
@@ -160,8 +169,6 @@ import dev.chrisbanes.haze.hazeSource
 import com.android.purebilibili.core.ui.blur.unifiedBlur
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -525,7 +532,7 @@ fun PartitionContent(
     val topPadding = contentPadding.calculateTopPadding()
     val bottomPadding = contentPadding.calculateBottomPadding()
     var sideRailVideoPushTargetPx by remember { mutableFloatStateOf(0f) }
-    val sideRailVideoPushPx by animateFloatAsState(
+    val sideRailVideoPushPx = animateFloatAsState(
         targetValue = sideRailVideoPushTargetPx,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -568,7 +575,9 @@ fun PartitionContent(
                 selectedId = state.selectedPartition.id,
                 labelMode = homeSettings.topTabLabelMode,
                 iconFamily = topChromeIconFamily,
-                modifier = Modifier.width(92.dp),
+                modifier = Modifier
+                    .width(92.dp)
+                    .zIndex(if (liquidGlassIndicatorEnabled) 1f else 0f),
                 contentPadding = PaddingValues(
                     start = startPadding,
                     top = topPadding + 8.dp,
@@ -597,7 +606,7 @@ fun PartitionContent(
                 indicatorTopInset = partitionRefreshIndicatorTopInset,
                 modifier = Modifier
                     .weight(1f)
-                    .graphicsLayer { translationX = sideRailVideoPushPx }
+                    .graphicsLayer { translationX = sideRailVideoPushPx.value }
             ) {
                 PartitionVideoList(
                     state = state,
@@ -631,6 +640,10 @@ private fun PartitionSideRail(
     onPartitionSelected: (PartitionCategory) -> Unit
 ) {
     val listState = rememberLazyListState()
+    val railOverscrollEffect = rememberOverscrollEffect()
+    val listOverscrollEffect = remember(railOverscrollEffect) {
+        railOverscrollEffect?.withoutVisualEffect()
+    }
     val selectedIndex = partitions.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
     val density = LocalDensity.current
     val animationScope = rememberCoroutineScope()
@@ -648,12 +661,24 @@ private fun PartitionSideRail(
     val maxTabIndex = (itemCount - 1).coerceAtLeast(0)
     val onSelectedLatest by rememberUpdatedState(onPartitionSelected)
     val partitionsLatest by rememberUpdatedState(partitions)
-    var currentIndex by remember { mutableIntStateOf(selectedIndex) }
-    var selectionCameFromDrag by remember { mutableStateOf(false) }
     val offsetAnimation = remember { Animatable(0f) }
     val holder = remember { PartitionSideRailDragHolder() }
 
-    val dampedDragAnimation = remember(animationScope, itemCount, density) {
+    // LazyList offsets include the real measured slot sizes and dynamic header padding.
+    // Use the same anchor for the visible indicator, its hit test, and the glyph recording.
+    fun railOffset(position: Float): Float {
+        val layout = listState.layoutInfo
+        val anchor = layout.visibleItemsInfo.minByOrNull { kotlin.math.abs(it.index - position) }
+            ?: return holder.contentTopPaddingPx + position * holder.itemSlotHeightPx
+        val next = layout.visibleItemsInfo.firstOrNull { it.index == anchor.index + 1 }
+        val step = next?.let { (it.offset - anchor.offset).toFloat() }
+            ?.takeIf { it > 0f } ?: (anchor.size + with(density) { PartitionSideRailItemSpacing.toPx() })
+        return resolvePartitionSideRailMeasuredOffsetPx(
+            position, anchor.index, anchor.offset, layout.viewportStartOffset, step,
+        )
+    }
+
+    val dampedDragAnimation = remember(animationScope, itemCount, density, liquidGlassIndicatorEnabled) {
         DampedDragAnimation(
             animationScope = animationScope,
             initialValue = selectedIndex.toFloat(),
@@ -662,25 +687,21 @@ private fun PartitionSideRail(
             initialScale = 1f,
             pressedScale = indicatorGeometry.pressedScale,
             trackingMode = DampedDragTrackingMode.DIRECT,
+            useMiuixIndicatorMotion = liquidGlassIndicatorEnabled,
             canDrag = { offset ->
                 val animation = holder.instance ?: return@DampedDragAnimation true
                 if (holder.itemSlotHeightPx <= 0f) return@DampedDragAnimation false
-                val indicatorY = resolvePartitionSideRailIndicatorOffsetPx(
-                    indicatorPosition = animation.value,
-                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                    firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
-                    contentTopPaddingPx = holder.contentTopPaddingPx,
-                    itemSlotHeightPx = holder.itemSlotHeightPx,
-                )
+                val indicatorY = railOffset(animation.value)
                 val globalTouchY = indicatorY + offset.y
-                globalTouchY in 0f..holder.totalHeightPx
+                globalTouchY in 0f..holder.totalHeightPx &&
+                    shouldStartPartitionSideRailIndicatorDrag(offset.y, 0f, holder.itemHeightPx)
             },
             onDragStarted = {},
             onDragStopped = {
                 val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, maxTabIndex)
-                selectionCameFromDrag = targetIndex != currentIndex
-                currentIndex = targetIndex
-                animateToValue(targetIndex.toFloat(), animatePress = false)
+                if (liquidGlassIndicatorEnabled) updateValue(targetIndex.toFloat())
+                else animateToValue(targetIndex.toFloat(), animatePress = false)
+                partitionsLatest.getOrNull(targetIndex)?.let(onSelectedLatest)
                 holder.offsetJob?.cancel()
                 holder.offsetJob = animationScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
@@ -701,54 +722,46 @@ private fun PartitionSideRail(
         ).also { holder.instance = it }
     }
 
-    LaunchedEffect(selectedIndex) {
-        currentIndex = selectedIndex
-    }
-    LaunchedEffect(dampedDragAnimation) {
-        snapshotFlow { currentIndex }
-            .drop(1)
-            .collectLatest { index ->
-                if (selectionCameFromDrag) {
-                    selectionCameFromDrag = false
-                } else {
-                    dampedDragAnimation.animateToValue(index.toFloat())
-                }
-                partitionsLatest.getOrNull(index)?.let(onSelectedLatest)
-            }
-    }
-
-    val interactiveHighlight =
-        if (liquidGlassIndicatorEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            remember(animationScope) {
-                InteractiveHighlight(
-                    animationScope = animationScope,
-                    position = { size, _ ->
-                        val animation = holder.instance
-                        val itemSlotHeightPx = holder.itemSlotHeightPx
-                        val itemHeightPx = holder.itemHeightPx
-                        if (animation == null || itemSlotHeightPx <= 0f) {
-                            Offset(size.width / 2f, size.height / 2f)
-                        } else {
-                            resolvePartitionSideRailInteractiveHighlightPosition(
-                                railWidthPx = size.width,
-                                indicatorOffsetPx = resolvePartitionSideRailIndicatorOffsetPx(
-                                    indicatorPosition = animation.value,
-                                    firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                                    firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
-                                    contentTopPaddingPx = holder.contentTopPaddingPx,
-                                    itemSlotHeightPx = itemSlotHeightPx,
-                                ),
-                                itemHeightPx = itemHeightPx,
-                            )
-                        }
-                    },
-                )
-            }
-        } else {
-            null
+    LaunchedEffect(selectedIndex, dampedDragAnimation, liquidGlassIndicatorEnabled) {
+        // Glass clicks start their spring before submitting selection. Do not restart it
+        // when the selected content changes; external selections use the same feedback.
+        if (!liquidGlassIndicatorEnabled || dampedDragAnimation.targetValue != selectedIndex.toFloat()) {
+            dampedDragAnimation.animateToValue(
+                selectedIndex.toFloat(),
+                animatePress = liquidGlassIndicatorEnabled,
+            )
         }
+    }
+    val activatePartition: (Int) -> Unit = { index ->
+        partitions.getOrNull(index)?.let { partition ->
+            if (liquidGlassIndicatorEnabled) dampedDragAnimation.animateToValue(index.toFloat())
+            onPartitionSelected(partition)
+        }
+    }
+    val railHighlight = if (liquidGlassIndicatorEnabled &&
+        com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current
+    ) {
+        remember(animationScope, dampedDragAnimation, listState) {
+            InteractiveHighlight(
+                animationScope = animationScope,
+                position = { size, _ ->
+                    resolvePartitionSideRailInteractiveHighlightPosition(
+                        railWidthPx = size.width,
+                        indicatorOffsetPx = railOffset(dampedDragAnimation.value),
+                        itemHeightPx = holder.itemHeightPx,
+                    )
+                },
+            )
+        }
+    } else null
 
-    BoxWithConstraints(modifier = modifier.fillMaxHeight()) {
+    // Overscroll stretches drawing without changing LazyList layout offsets. Render it once
+    // around the list, indicator and glyph source so they cannot separate during edge pulls.
+    // This shared placement applies to glass and native MD3/Miuix; their styling stays separate.
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxHeight(),
+    ) {
         val itemHeightPx = with(density) { PartitionSideRailItemHeight.toPx() }
         val itemSlotHeightPx = with(density) { (PartitionSideRailItemHeight + PartitionSideRailItemSpacing).toPx() }
         val contentTopPaddingPx = with(density) { contentPadding.calculateTopPadding().toPx() }
@@ -756,22 +769,12 @@ private fun PartitionSideRail(
         holder.itemHeightPx = itemHeightPx
         holder.totalHeightPx = with(density) { maxHeight.toPx() }
         holder.contentTopPaddingPx = contentTopPaddingPx
-        holder.firstVisibleItemIndex = listState.firstVisibleItemIndex
-        holder.firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset
         val indicatorHorizontalPadding = resolvePartitionSideRailIndicatorHorizontalPadding(
             contentPadding = contentPadding,
             layoutDirection = LocalLayoutDirection.current
         )
         val maxVideoPushPx = with(density) { PartitionVideoListMaxPush.toPx() }
-        val currentIndicatorOffsetPxProvider = {
-            resolvePartitionSideRailIndicatorOffsetPx(
-                indicatorPosition = dampedDragAnimation.value,
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                firstVisibleItemScrollOffsetPx = listState.firstVisibleItemScrollOffset,
-                contentTopPaddingPx = contentTopPaddingPx,
-                itemSlotHeightPx = itemSlotHeightPx
-            )
-        }
+        val currentIndicatorOffsetPxProvider = { railOffset(dampedDragAnimation.value) }
         val indicatorWidth = (maxWidth - indicatorHorizontalPadding.start - indicatorHorizontalPadding.end)
             .coerceAtLeast(0.dp)
         val fullIndicatorLensSpec = resolveBottomBarBackdropPresetIndicatorLens(progress = 1f)
@@ -782,130 +785,163 @@ private fun PartitionSideRail(
             panelOffsetDp = 0f,
             dragScaleTarget = indicatorGeometry.pressedScale,
         ).dp
-        val railPageBackdrop = rememberLayerBackdrop()
-        val railContentBackdrop = rememberLayerBackdrop()
-        val combinedBackdrop = rememberCombinedBackdrop(railPageBackdrop, railContentBackdrop)
-        val isDarkTheme = com.android.purebilibili.core.ui.isAppInDarkTheme()
-        // Reserve the same overflow as the home dock so the indicator lens can
-        // sample pixels just outside the rail bounds without clipping.
+        // 扩大滚动效果的横向绘制边界，再还原内部布局宽度；玻璃关闭时保持原生边界。
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .bottomBarMatchedCaptureOverflow(captureSafeInset)
-                .alpha(0f)
-                .layerBackdrop(railPageBackdrop)
-                .background(AppSurfaceTokens.background())
-        )
-
-        if (liquidGlassIndicatorEnabled) {
-            // Separate export material from the visible list: only resting indicator bands
-            // are opaque, leaving their gaps available to the shared upstream lens.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                    .clearAndSetSemantics {}
-                    .alpha(0f)
-                    .graphicsLayer {
-                        translationY = contentTopPaddingPx -
-                            listState.firstVisibleItemIndex * itemSlotHeightPx -
-                            listState.firstVisibleItemScrollOffset
-                        clip = false
-                    }
-                    .layerBackdrop(railContentBackdrop)
-                    .then(interactiveHighlight?.modifier ?: Modifier),
-                verticalArrangement = Arrangement.spacedBy(PartitionSideRailItemSpacing),
-            ) {
-                partitions.forEach { partition ->
-                    Box(
-                        Modifier.fillMaxWidth().height(PartitionSideRailItemHeight),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        PartitionSideRailItem(
-                            partition = partition,
-                            selected = true,
-                            selectionProgress = 1f,
-                            showIcon = showIcon,
-                            showText = showText,
-                            iconFamily = iconFamily,
-                            onClick = {},
-                            interactive = false,
-                            contentColorOverride = AppContentColors.accent(),
-                            itemHeight = PartitionSideRailIndicatorHeight,
-                            modifier = Modifier
-                                .width(indicatorWidth)
-                                .background(
-                                    com.android.purebilibili.feature.home.components.resolveBiliPaiBottomBarContainerColor(
-                                        darkTheme = isDarkTheme,
-                                        liquidGlassTuning = liquidGlassTuning,
-                                        surfaceColor = AppSurfaceTokens.surfaceContainer(),
-                                    ),
-                                    resolveSharedBottomBarCapsuleShape(),
-                                ),
+                .then(
+                    if (liquidGlassIndicatorEnabled) {
+                        Modifier.bottomBarMatchedCaptureOverflow(
+                            horizontalInset = captureSafeInset,
+                            verticalInset = 0.dp,
                         )
+                    } else Modifier
+                )
+                .overscroll(railOverscrollEffect)
+                .then(
+                    if (liquidGlassIndicatorEnabled) Modifier.padding(horizontal = captureSafeInset)
+                    else Modifier
+                )
+                .then(railHighlight?.gestureModifier ?: Modifier),
+        ) {
+            val railPageBackdrop = rememberLayerBackdrop()
+            val railContentBackdrop = rememberLayerBackdrop()
+            val glassPageSource = if (liquidGlassIndicatorEnabled) {
+                rememberChromeBackdropSource(drawContentToScreen = false)
+            } else null
+            val glassContentSource = if (liquidGlassIndicatorEnabled) {
+                rememberChromeBackdropSource(drawContentToScreen = false)
+            } else null
+            val globalWallpaperSource = LocalGlobalWallpaperBackdropSource.current
+            val globalWallpaperVisible = LocalGlobalWallpaperBackdropVisible.current
+            val wallpaperBackdrop = if (liquidGlassIndicatorEnabled) {
+                globalWallpaperSource?.takeIf {
+                    globalWallpaperVisible && it.isReady
+                }?.backdrop ?: LocalHomeWallpaperBackdrop.current
+            } else null
+            // Only wallpaper/background siblings are safe sources: the enclosing page records
+            // this indicator too. Keep the original native capture path when glass is disabled.
+            val sampledPageBackdrop = wallpaperBackdrop ?: glassPageSource?.backdrop ?: railPageBackdrop
+            val sampledContentBackdrop = glassContentSource?.backdrop ?: railContentBackdrop
+            val combinedBackdrop = rememberCombinedBackdrop(sampledPageBackdrop, sampledContentBackdrop)
+            // Reserve the same overflow as the home dock so the indicator lens can
+            // sample pixels just outside the rail bounds without clipping.
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .bottomBarMatchedCaptureOverflow(captureSafeInset)
+                    .then(
+                        glassPageSource?.modifier ?: Modifier.alpha(0f).layerBackdrop(railPageBackdrop)
+                    )
+                    .background(AppSurfaceTokens.background())
+                    .then(railHighlight?.modifier ?: Modifier)
+            )
+
+            if (liquidGlassIndicatorEnabled) {
+                // Export glyphs only. A capsule painted here would be refracted inside the
+                // visible capsule, producing a second inset pill. The lens owns all material.
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Match the visible LazyColumn's horizontal content bounds exactly.
+                        .padding(start = indicatorHorizontalPadding.start, end = indicatorHorizontalPadding.end)
+                        .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                        .clearAndSetSemantics {}
+                        .graphicsLayer {
+                            translationY = railOffset(0f)
+                            clip = false
+                        }
+                        .then(requireNotNull(glassContentSource).modifier),
+                    verticalArrangement = Arrangement.spacedBy(PartitionSideRailItemSpacing),
+                ) {
+                    partitions.forEach { partition ->
+                        Box(
+                            Modifier.fillMaxWidth().height(PartitionSideRailItemHeight),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PartitionSideRailItem(
+                                partition = partition,
+                                selected = true,
+                                selectionProgress = 1f,
+                                showIcon = showIcon,
+                                showText = showText,
+                                iconFamily = iconFamily,
+                                onClick = {},
+                                interactive = false,
+                                contentColorOverride = AppContentColors.selectionAccent(liquidGlassIndicatorEnabled),
+                                itemHeight = PartitionSideRailIndicatorHeight,
+                                modifier = Modifier.width(indicatorWidth),
+                            )
+                        }
                     }
                 }
             }
-        }
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .zIndex(if (liquidGlassIndicatorEnabled) 0f else 2f),
-            contentPadding = contentPadding,
-            verticalArrangement = Arrangement.spacedBy(PartitionSideRailItemSpacing)
-        ) {
-            itemsIndexed(
-                items = partitions,
-                key = { _, partition -> partition.id }
-            ) { index, partition ->
-                PartitionSideRailItem(
-                    partition = partition,
-                    selected = partition.id == selectedId,
-                    selectionProgress = resolvePartitionSideRailItemSelectionProgress(
-                        itemIndex = index,
-                        indicatorPosition = dampedDragAnimation.value
-                    ),
-                    showIcon = showIcon,
-                    showText = showText,
-                    iconFamily = iconFamily,
-                    onClick = { onPartitionSelected(partition) }
-                )
+            LazyColumn(
+                state = listState,
+                // The list still handles scroll/fling events; only the outer rail renders overscroll.
+                overscrollEffect = listOverscrollEffect,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(if (liquidGlassIndicatorEnabled) 0f else 2f)
+                    .then(railHighlight?.modifier ?: Modifier),
+                contentPadding = contentPadding,
+                verticalArrangement = Arrangement.spacedBy(PartitionSideRailItemSpacing)
+            ) {
+                itemsIndexed(
+                    items = partitions,
+                    key = { _, partition -> partition.id }
+                ) { index, partition ->
+                    PartitionSideRailItem(
+                        partition = partition,
+                        selected = partition.id == selectedId,
+                        selectionProgress = resolvePartitionSideRailItemSelectionProgress(
+                            itemIndex = index,
+                            indicatorPosition = dampedDragAnimation.value
+                        ),
+                        showIcon = showIcon,
+                        showText = showText,
+                        iconFamily = iconFamily,
+                        selectedAccent = AppContentColors.selectionAccent(liquidGlassIndicatorEnabled),
+                        onClick = { activatePartition(index) }
+                    )
+                }
             }
-        }
 
-        PartitionSideRailMovingIndicator(
-            dragAnimation = dampedDragAnimation,
-            dragOffsetPx = offsetAnimation.value,
-            itemSlotHeightPx = itemSlotHeightPx,
-            itemHeightPx = itemHeightPx,
-            indicatorHeight = PartitionSideRailIndicatorHeight,
-            dragScaleTarget = indicatorGeometry.pressedScale,
-            indicatorOffsetPxProvider = currentIndicatorOffsetPxProvider,
-            indicatorWidth = indicatorWidth,
-            liquidGlassIndicatorEnabled = liquidGlassIndicatorEnabled,
-            liquidGlassPreset = liquidGlassPreset,
-            liquidGlassTuning = liquidGlassTuning,
-            contentBackdrop = combinedBackdrop,
-            backdrop = railPageBackdrop,
-            maxVideoPushPx = maxVideoPushPx,
-            horizontalPadding = indicatorHorizontalPadding,
-            onVideoListPushChanged = onVideoListPushChanged,
-            interactionModifier = Modifier
-                .then(interactiveHighlight?.gestureModifier ?: Modifier)
-                .then(dampedDragAnimation.modifier)
-                .clickable(
-                    interactionSource = null,
-                    indication = null,
-                    role = Role.Tab,
-                    onClick = {
-                        partitions.getOrNull(selectedIndex)?.let(onPartitionSelected)
-                    },
-                )
-                .clearAndSetSemantics {},
-            highlightModifier = interactiveHighlight?.modifier ?: Modifier,
-            modifier = Modifier.matchParentSize()
-        )
+            PartitionSideRailMovingIndicator(
+                dragAnimation = dampedDragAnimation,
+                dragOffsetPx = offsetAnimation.value,
+                itemSlotHeightPx = itemSlotHeightPx,
+                itemHeightPx = itemHeightPx,
+                indicatorHeight = PartitionSideRailIndicatorHeight,
+                dragScaleTarget = indicatorGeometry.pressedScale,
+                indicatorOffsetPxProvider = currentIndicatorOffsetPxProvider,
+                indicatorWidth = indicatorWidth,
+                liquidGlassIndicatorEnabled = liquidGlassIndicatorEnabled,
+                liquidGlassPreset = liquidGlassPreset,
+                liquidGlassTuning = liquidGlassTuning,
+                contentBackdrop = combinedBackdrop,
+                backdrop = sampledPageBackdrop,
+                maxVideoPushPx = maxVideoPushPx,
+                horizontalPadding = indicatorHorizontalPadding,
+                onVideoListPushChanged = onVideoListPushChanged,
+                interactionModifier = Modifier
+                    .then(dampedDragAnimation.modifier)
+                    .clickable(
+                        interactionSource = null,
+                        indication = null,
+                        role = Role.Tab,
+                        onClick = {
+                            activatePartition(selectedIndex)
+                        },
+                    )
+                    .clearAndSetSemantics {},
+                modifier = Modifier.matchParentSize().drawWithContent {
+                    clipRect(left = -size.width, right = size.width * 2f) {
+                        this@drawWithContent.drawContent()
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -928,7 +964,6 @@ private fun PartitionSideRailMovingIndicator(
     horizontalPadding: PartitionSideRailIndicatorHorizontalPadding,
     onVideoListPushChanged: (Float) -> Unit,
     interactionModifier: Modifier = Modifier,
-    highlightModifier: Modifier = Modifier,
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -940,8 +975,7 @@ private fun PartitionSideRailMovingIndicator(
         SideEffect {
             onVideoListPushChanged(0f)
         }
-        Box(modifier = modifier.then(highlightModifier)) {
-            val indicatorTopPx = indicatorOffsetPxProvider()
+        Box(modifier = modifier) {
             Box(
                 modifier = Modifier
                     .graphicsLayer {
@@ -982,7 +1016,10 @@ private fun PartitionSideRailMovingIndicator(
         tapPressRefractionEnabled = true
     )
     val videoListPushPx = resolvePartitionVideoListPushPx(
-        pressProgress = pressProgress,
+        // Glass selection bloom belongs to the lens; only a real rail drag pushes the feed.
+        pressProgress = if (liquidGlassIndicatorEnabled && !dragAnimation.isDragging && dragOffsetPx == 0f) {
+            0f
+        } else pressProgress,
         dragOffsetPx = dragOffsetPx,
         itemSlotHeightPx = itemSlotHeightPx,
         maxPushPx = maxVideoPushPx
@@ -990,18 +1027,24 @@ private fun PartitionSideRailMovingIndicator(
     SideEffect {
         onVideoListPushChanged(videoListPushPx)
     }
-    // 照搬 HyperIsland LiquidGlassNavigationBar：scaleX 与 scaleY 是两条独立 Animatable
-    // （spring(0.6f, 250f, 0.001f) / spring(0.7f, 250f, 0.001f)）；pressProgress
-    // （spring(1f, 1000f)）只负责高光与 lens，不再用 maxOf 把两种弹簧混进缩放曲线。
-    val indicatorLayerScaleTransform = rememberBottomBarIndicatorLayerScaleTransform(
-        active = dragAnimation.isDragging || pressProgress > 0f,
-        target = dragScaleTarget
-    )
+    // Glass renders the controller's X/Y springs directly, so shrink starts near the
+    // position target. Native controls retain their existing independent scale timing.
+    val indicatorLayerScaleTransform = if (liquidGlassIndicatorEnabled) {
+        BottomBarIndicatorLayerTransform(
+            scaleX = dragAnimation.scaleX,
+            scaleY = dragAnimation.scaleY,
+        )
+    } else {
+        rememberBottomBarIndicatorLayerScaleTransform(
+            active = dragAnimation.isDragging || pressProgress > 0f,
+            target = dragScaleTarget,
+        )
+    }
     val indicatorLensSpec = resolveBottomBarBackdropPresetIndicatorLens(
         progress = pressProgress
     )
 
-    Box(modifier = modifier.then(highlightModifier)) {
+    Box(modifier = modifier) {
         val indicatorHeightPx = with(density) { indicatorHeight.toPx() }
         val centeringOffsetPx = ((itemHeightPx - indicatorHeightPx) / 2f).coerceAtLeast(0f)
         val centeredIndicatorOffsetPx = 0f
@@ -1038,6 +1081,10 @@ private fun PartitionSideRailMovingIndicator(
                 bottomBarMotionSpec = motionSpec,
                 isDarkTheme = isDarkTheme,
                 orientation = BottomBarLiquidOrientation.VERTICAL,
+                wobblePosition = { dragAnimation.value },
+                wobbleSelection = { dragAnimation.targetValue.roundToInt() },
+                wobbleReady = { dragAnimation.isReadyForRecoil },
+                wobbleLastIndex = dragAnimation.valueRange.endInclusive.roundToInt(),
                 indicatorAlignment = Alignment.TopStart,
                 interactionModifier = interactionModifier,
             )
@@ -1056,10 +1103,12 @@ private fun PartitionSideRailItem(
     onClick: () -> Unit,
     interactive: Boolean = true,
     contentColorOverride: Color? = null,
+    selectedAccent: Color? = null,
     itemHeight: androidx.compose.ui.unit.Dp = PartitionSideRailItemHeight,
     modifier: Modifier = Modifier,
 ) {
-    val selectedColor = AppContentColors.accent()
+    // Glass uses the exact custom accent; native MD3/Miuix retain their existing palette.
+    val selectedColor = selectedAccent ?: AppContentColors.accent()
     val unselectedColor = AppContentColors.secondaryText()
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
@@ -1163,6 +1212,16 @@ internal fun resolvePartitionSideRailIndicatorOffsetPx(
         firstVisibleItemScrollOffsetPx
 }
 
+/** Use an actual measured row rather than reconstructing the entire lazy list's scroll. */
+internal fun resolvePartitionSideRailMeasuredOffsetPx(
+    indicatorPosition: Float,
+    anchorIndex: Int,
+    anchorOffsetPx: Int,
+    viewportStartOffsetPx: Int,
+    measuredSlotHeightPx: Float,
+): Float = anchorOffsetPx - viewportStartOffsetPx +
+    (indicatorPosition - anchorIndex) * measuredSlotHeightPx
+
 internal fun resolvePartitionSideRailItemSelectionProgress(
     itemIndex: Int,
     indicatorPosition: Float
@@ -1192,8 +1251,6 @@ private class PartitionSideRailDragHolder {
     var itemHeightPx: Float = 0f
     var totalHeightPx: Float = 0f
     var contentTopPaddingPx: Float = 0f
-    var firstVisibleItemIndex: Int = 0
-    var firstVisibleItemScrollOffsetPx: Int = 0
     var offsetJob: Job? = null
 }
 

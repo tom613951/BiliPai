@@ -15,9 +15,11 @@ import com.android.purebilibili.core.network.DynamicVisibilityRequest
 import com.android.purebilibili.core.network.NetworkModule
 import com.android.purebilibili.core.network.buildDynamicRepostRequest
 import com.android.purebilibili.core.store.SettingsManager
+import com.android.purebilibili.core.store.AccountSessionStore
 import com.android.purebilibili.core.store.TokenManager
 import com.android.purebilibili.core.util.appendDistinctByKey
 import com.android.purebilibili.core.util.prependDistinctByKey
+import com.android.purebilibili.data.model.response.CommentMainListContinuation
 import com.android.purebilibili.data.model.response.DynamicItem
 import com.android.purebilibili.data.model.response.FollowingUser
 import com.android.purebilibili.data.model.response.LiveRoom
@@ -32,13 +34,19 @@ import com.android.purebilibili.data.repository.DynamicCreateRepository
 import com.android.purebilibili.data.repository.DynamicFeedScope
 import com.android.purebilibili.data.repository.DynamicRepository
 import com.android.purebilibili.data.repository.LiveRepository
+import com.android.purebilibili.data.repository.SessionRepository
 import com.android.purebilibili.feature.dynamic.components.DynamicManageAction
+import com.android.purebilibili.feature.dynamic.components.resolveDynamicFoldIds
 import com.android.purebilibili.feature.dynamic.components.unfoldRelatedDynamicItems
 import com.android.purebilibili.feature.dynamic.components.DynamicReserveAction
 import com.android.purebilibili.feature.dynamic.components.DynamicReserveResult
 import com.android.purebilibili.feature.dynamic.components.buildDynamicVisibilityObjectId
 import com.android.purebilibili.feature.dynamic.components.resolveDynamicVisibilityAction
 import com.android.purebilibili.feature.dynamic.notification.LiveReserveReminderScheduler
+import com.android.purebilibili.feature.video.viewmodel.CommentComposerDraft
+import com.android.purebilibili.feature.video.viewmodel.CommentComposerDraftState
+import com.android.purebilibili.feature.video.viewmodel.CommentMentionSearchUiState
+import com.android.purebilibili.feature.video.viewmodel.commentComposerDraftKey
 import com.android.purebilibili.feature.video.viewmodel.resolveRoutedCommentRootReply
 import com.android.purebilibili.feature.video.viewmodel.resolveSubReplyLoadedTotalCount
 import com.android.purebilibili.feature.video.viewmodel.isSortedSubReplyPageEnd
@@ -46,6 +54,8 @@ import com.android.purebilibili.feature.video.viewmodel.SubReplySortMode
 import com.android.purebilibili.feature.video.viewmodel.resetForSort
 import com.android.purebilibili.feature.video.viewmodel.resolveSubReplyRemoteTotalCount
 import com.android.purebilibili.feature.video.viewmodel.CommentSortMode
+import com.android.purebilibili.feature.video.viewmodel.SubReplyPageRequest
+import com.android.purebilibili.feature.video.viewmodel.resolveSubReplyNextRequest
 import com.android.purebilibili.feature.video.viewmodel.SubReplyUiState
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -58,6 +68,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -153,6 +164,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     private var incrementalTimelineRefreshEnabled: Boolean = false
     private var lastFollowingsLoadMs: Long = 0L
     private var isFollowingsLoading: Boolean = false
+    private val _authorSearchLoading = MutableStateFlow(false)
+    val authorSearchLoading: StateFlow<Boolean> = _authorSearchLoading.asStateFlow()
     private var followingsFullyLoaded: Boolean = false
     private var completeFollowingsLoadRequested: Boolean = false
     private var cacheSaveJob: Job? = null
@@ -178,6 +191,9 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     //  侧边栏相关状态
     private val _followedUsers = MutableStateFlow<List<SidebarUser>>(emptyList())
     val followedUsers: StateFlow<List<SidebarUser>> = _followedUsers.asStateFlow()
+    private val _selfUser = MutableStateFlow<SidebarUser?>(null)
+    val selfUser: StateFlow<SidebarUser?> = _selfUser.asStateFlow()
+    private var selfProfileRefreshJob: Job? = null
 
     private val _selectedUserId = MutableStateFlow<Long?>(null)
     val selectedUserId: StateFlow<Long?> = _selectedUserId.asStateFlow()
@@ -222,6 +238,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 closeCommentSheet()
                 _uiState.value = createDynamicStartupUiState()
                 _followedUsers.value = emptyList()
+                _selfUser.value = null
                 _selectedUserId.value = null
                 _likedDynamics.value = emptySet()
                 _likeOverrides.value = emptyMap()
@@ -241,6 +258,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 cachedFollowings = emptyList()
                 lastFollowingsLoadMs = 0L
                 isFollowingsLoading = false
+                _authorSearchLoading.value = false
+                selfProfileRefreshJob = null
                 followingsFullyLoaded = false
                 completeFollowingsLoadRequested = false
                 startupFollowingsHydrationScheduled = false
@@ -257,14 +276,62 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 loadUserPreferences()
                 _uiState.value = createDynamicStartupUiState(_selectedTab.value)
                 startupLoadsActivated = false
-                if (isPageActive) activateStartupLoads()
+                if (isPageActive) {
+                    requestSelfProfileRefresh()
+                    activateStartupLoads()
+                }
             }
         }
     }
 
     fun setPageActive(active: Boolean) {
+        val wasActive = pageActivity.value
         pageActivity.value = active
-        if (active) activateStartupLoads()
+        if (active) {
+            if (!wasActive) requestSelfProfileRefresh()
+            activateStartupLoads()
+        }
+    }
+
+    private fun requestSelfProfileRefresh() {
+        if (selfProfileRefreshJob?.isActive == true) return
+        val identity = activeAccountIdentity
+        val mid = identity.mid ?: return
+        selfProfileRefreshJob = launchAccount {
+            try {
+                val cachedFace = withContext(Dispatchers.IO) {
+                    AccountSessionStore.getAccounts(appContext)
+                        .firstOrNull { it.mid == mid }?.face.orEmpty()
+                }
+                if (identity != TokenManager.accountIdentity.value || identity != activeAccountIdentity) {
+                    return@launchAccount
+                }
+                if (cachedFace.isNotBlank()) {
+                    _selfUser.value = SidebarUser(uid = mid, name = "我", face = cachedFace)
+                }
+                val profile = SessionRepository.account().getOrNull() ?: return@launchAccount
+                if (identity != TokenManager.accountIdentity.value ||
+                    identity != activeAccountIdentity || profile.mid != mid
+                ) {
+                    return@launchAccount
+                }
+                withContext(Dispatchers.IO) {
+                    AccountSessionStore.updateAccountAvatar(appContext, mid, profile.face)
+                }
+                if (identity != TokenManager.accountIdentity.value || identity != activeAccountIdentity) {
+                    return@launchAccount
+                }
+                _selfUser.value = SidebarUser(
+                    uid = mid,
+                    name = "我",
+                    face = profile.face.ifBlank { _selfUser.value?.face.orEmpty() }
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     private fun activateStartupLoads() {
@@ -291,7 +358,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             loadUplistUpdates()
             refreshInBackground(resolveDynamicStartupLoadPlan())
         }
-        if (_selectedTab.value == 4) {
+        if (_selectedTab.value == 0) {
             requestCompleteFollowingsLoad()
         }
     }
@@ -446,6 +513,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     ) {
         if (showRefreshIndicator) {
             _isRefreshing.value = true
+            requestSelfProfileRefresh()
         }
         try {
             val requestType = resolveDynamicFeedRequestType(selectedTab)
@@ -453,13 +521,14 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 selectedTab = selectedTab,
                 selectedUserId = _selectedUserId.value
             )
+            val userRequestToken = activeUserDynamicsRequestToken
             coroutineScope {
                 val dynamicJob = async {
                     if (refreshUserId != null) {
                         loadUserDynamics(
                             uid = refreshUserId,
                             refresh = true,
-                            requestToken = activeUserDynamicsRequestToken
+                            requestToken = userRequestToken
                         )
                     } else {
                         loadDynamicFeedInternal(
@@ -507,10 +576,10 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         isFollowingsLoading = true
+        _authorSearchLoading.value = true
         try {
-            // 先获取当前用户 mid
-            val navResponse = NetworkModule.api.getNavInfo()
-            val myMid = navResponse.data?.mid ?: return
+            // UID 来自当前账号身份；/nav 由本人资料刷新统一请求并更新头像缓存。
+            val myMid = activeAccountIdentity.mid ?: return
             
             val maxPages = pageLimit?.coerceAtLeast(1) ?: Int.MAX_VALUE
             // 首轮可限制一页；进入 UP 模式后按接口 total 拉完整关注列表。
@@ -546,6 +615,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             e.printStackTrace()
         } finally {
             isFollowingsLoading = false
+            _authorSearchLoading.value = false
             if (completeFollowingsLoadRequested && !followingsFullyLoaded) {
                 completeFollowingsLoadRequested = false
                 launchAccount {
@@ -561,6 +631,10 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         launchAccount {
             loadAllFollowings(force = true)
         }
+    }
+
+    fun prepareAuthorSearch() {
+        requestCompleteFollowingsLoad()
     }
 
     private fun requestCompleteFollowingsLoad() {
@@ -703,6 +777,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             // 切换用户时废弃旧请求；同一用户失败重试时保留当前可见内容。
             userDynamicsJob?.cancel()
             activeUserDynamicsRequestToken += 1L
+            isUserLoadingLocked = false
             val requestToken = activeUserDynamicsRequestToken
             _uiState.value = _uiState.value.copy(userIsLoading = true)
             userDynamicsJob = launchAccount {
@@ -714,12 +789,19 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             // 清空用户动态
             userDynamicsJob?.cancel()
             activeUserDynamicsRequestToken += 1L
+            isUserLoadingLocked = false
             _uiState.value = _uiState.value.copy(
                 userItems = emptyList<DynamicItem>().toImmutableList(),
                 hasUserMore = true,
                 userIsLoading = false,
                 userError = null
             )
+            // 可能从作者筛选直接进入了尚未加载的投稿/专栏页；清除筛选时补齐该分类时间线。
+            val requestType = resolveDynamicFeedRequestType(_selectedTab.value)
+            val page = _uiState.value.timelinePage(requestType)
+            if (page.items.isEmpty() && page.hasMore && !page.isLoading && page.error == null) {
+                loadDynamicFeed(refresh = true, requestType = requestType)
+            }
         }
     }
     
@@ -731,6 +813,14 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         refresh: Boolean = false,
         requestToken: Long = activeUserDynamicsRequestToken
     ) {
+        // Queued pagination/retry work can start after an author switch (including A → B → A).
+        if (!shouldApplyUserDynamicsResult(
+                selectedUid = _selectedUserId.value,
+                requestUid = uid,
+                activeRequestToken = activeUserDynamicsRequestToken,
+                requestToken = requestToken
+            )
+        ) return
         if (isUserLoadingLocked && !refresh) return
         isUserLoadingLocked = true
         
@@ -777,7 +867,10 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 }
             )
         } finally {
-            isUserLoadingLocked = false
+            // A cancelled/late request must not unlock its successor.
+            if (activeUserDynamicsRequestToken == requestToken) {
+                isUserLoadingLocked = false
+            }
         }
     }
     
@@ -788,11 +881,12 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         val uid = _selectedUserId.value ?: return
         if (!_uiState.value.hasUserMore || _uiState.value.userIsLoading ||
             _uiState.value.userError != null || isUserLoadingLocked) return
+        val requestToken = activeUserDynamicsRequestToken
         launchAccount {
             loadUserDynamics(
                 uid = uid,
                 refresh = false,
-                requestToken = activeUserDynamicsRequestToken
+                requestToken = requestToken
             )
         }
     }
@@ -865,25 +959,18 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             savedTab = tab,
             tabCount = DYNAMIC_TOP_TAB_COUNT
         )
-        val previousSelectedUserId = _selectedUserId.value
-        val nextSelectedUserId = resolveDynamicSelectedUserForTab(
-            selectedTab = resolvedTab,
-            selectedUserId = previousSelectedUserId
-        )
-        if (resolvedTab == 4) {
+        if (shouldShowDynamicUpPanel(resolvedTab)) {
             requestCompleteFollowingsLoad()
         }
-        if (_selectedTab.value == resolvedTab && previousSelectedUserId == nextSelectedUserId) return
-        if (previousSelectedUserId != nextSelectedUserId) {
-            selectUser(nextSelectedUserId)
-        }
+        if (_selectedTab.value == resolvedTab) return
         _selectedTab.value = resolvedTab
         val requestType = resolveDynamicFeedRequestType(resolvedTab)
         _uiState.value = _uiState.value.selectTimelinePage(requestType)
         userPrefs.edit()
             .putInt(KEY_SELECTED_TAB, resolvedTab)
             .apply()
-        if (nextSelectedUserId == null) {
+        // 作者选择在全部、投稿和专栏之间保留，番剧只读取公共分类时间线。
+        if (!shouldUseSelectedUserDynamicFeed(resolvedTab, _selectedUserId.value)) {
             DynamicRepository.resetPagination(
                 scope = DynamicFeedScope.DYNAMIC_SCREEN,
                 type = requestType
@@ -1068,11 +1155,12 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         val uid = resolveDynamicRefreshUserId(selectedTab, _selectedUserId.value)
         if (uid != null) {
             if (isUserLoadingLocked || _isRefreshing.value) return
+            val requestToken = activeUserDynamicsRequestToken
             launchAccount {
                 loadUserDynamics(
                     uid = uid,
                     refresh = _uiState.value.userItems.isEmpty(),
-                    requestToken = activeUserDynamicsRequestToken
+                    requestToken = requestToken
                 )
             }
             return
@@ -1145,12 +1233,37 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     private val _commentReplyTarget = MutableStateFlow<DynamicCommentComposerTarget?>(null)
     internal val commentReplyTarget: StateFlow<DynamicCommentComposerTarget?> = _commentReplyTarget.asStateFlow()
 
+    private val _commentComposerVisible = MutableStateFlow(false)
+    internal val commentComposerVisible: StateFlow<Boolean> = _commentComposerVisible.asStateFlow()
+
+    private val _commentComposerDrafts = MutableStateFlow(CommentComposerDraftState())
+    internal val commentComposerDrafts: StateFlow<CommentComposerDraftState> =
+        _commentComposerDrafts.asStateFlow()
+
+    private val _isSendingComment = MutableStateFlow(false)
+    internal val isSendingComment: StateFlow<Boolean> = _isSendingComment.asStateFlow()
+
+    private val _commentMentionSearchState = MutableStateFlow(CommentMentionSearchUiState())
+    val commentMentionSearchState: StateFlow<CommentMentionSearchUiState> =
+        _commentMentionSearchState.asStateFlow()
+
+    private var commentMentionSearchJob: Job? = null
+
+    private fun resetCommentComposerState() {
+        _commentComposerVisible.value = false
+        _commentReplyTarget.value = null
+        // 保留自增后的 sessionId，避免在途发送的成功回调误关掉重置后新开的输入会话。
+        _commentComposerDrafts.value = CommentComposerDraftState(
+            sessionId = _commentComposerDrafts.value.sessionId
+        )
+        clearCommentMentionSearch()
+    }
+
     // 进程内首页评论缓存：重进同一条动态先秒出旧内容，再后台静默刷新。
     private val commentCache = DynamicCommentCache()
 
-    private var commentNextPage = 1
-    private var commentsEnd = true
     private var commentGrpcNextOffset: String? = null
+    private var commentContinuation: CommentMainListContinuation? = null
     private var commentLoadJob: Job? = null
     private var commentLoadRequestId = 0L
 
@@ -1177,9 +1290,10 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
             snapshot = DynamicCommentCacheSnapshot(
                 replies = replies,
                 totalCount = _commentUiState.value.totalCount,
-                nextPage = commentNextPage,
-                isEnd = commentsEnd,
+                nextPage = _commentUiState.value.nextPage,
+                isEnd = !_commentUiState.value.hasMore,
                 grpcNextOffset = commentGrpcNextOffset,
+                mainListContinuation = commentContinuation,
                 target = target,
                 cachedAtMs = System.currentTimeMillis(),
             ),
@@ -1224,6 +1338,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
      *  打开评论弹窗
      */
     fun openCommentSheet(dynamicId: String) {
+        resetCommentComposerState()
         val item = findDynamicById(dynamicId)
         _selectedDynamic.value = item
         if (item != null) {
@@ -1236,6 +1351,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         rootReplyId: Long = 0L,
         targetReplyId: Long = 0L
     ) {
+        resetCommentComposerState()
         _selectedDynamic.value = item
         loadCommentsForDynamic(
             item = item,
@@ -1265,10 +1381,9 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         subReplyLoadRequestId++
         subReplyLoadJob?.cancel()
         _subReplyState.value = SubReplyUiState()
-        _commentReplyTarget.value = null
-        commentNextPage = 1
-        commentsEnd = true
+        resetCommentComposerState()
         commentGrpcNextOffset = null
+        commentContinuation = null
         _dynamicCommentSortMode.value = CommentSortMode.HOT
         // 一次发射清空，避免评论 / 计数 / loading 分多次生效留下中间帧。
         // 刻意保留 commentCache：返回再进同一条动态仍能秒出旧评论。
@@ -1280,10 +1395,9 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         if (_dynamicCommentSortMode.value == mode) return
         _dynamicCommentSortMode.value = mode
         val item = _selectedDynamic.value ?: return
-        updateCommentUiState { it.copy(comments = emptyList(), isLoadingMore = false) }
-        commentNextPage = 1
-        commentsEnd = true
+        updateCommentUiState { it.copy(comments = emptyList(), isLoadingMore = false, hasMore = false, nextPage = 1) }
         commentGrpcNextOffset = null
+        commentContinuation = null
         loadCommentsForDynamic(item)
     }
     
@@ -1307,12 +1421,13 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
 
             if (cached != null) {
                 _selectedCommentTarget.value = cached.target
-                commentNextPage = cached.nextPage
-                commentsEnd = cached.isEnd
                 commentGrpcNextOffset = cached.grpcNextOffset
+                commentContinuation = cached.mainListContinuation
                 updateCommentUiState {
                     it.copy(
                         comments = cached.replies,
+                        hasMore = !cached.isEnd,
+                        nextPage = cached.nextPage,
                         totalCount = maxOf(cached.totalCount, fallbackCount),
                         isLoading = false,
                         isRefreshing = false,
@@ -1327,6 +1442,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 updateCommentUiState {
                     it.copy(
                         comments = emptyList(),
+                        hasMore = false,
+                        nextPage = 1,
                         totalCount = if (isRefresh) it.totalCount else fallbackCount,
                         isLoading = !isRefresh,
                         isRefreshing = isRefresh,
@@ -1336,9 +1453,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
                 _selectedCommentTarget.value = null
-                commentNextPage = 1
-                commentsEnd = true
                 commentGrpcNextOffset = null
+                commentContinuation = null
             }
 
             var firstFailureMessage: String? = null
@@ -1374,7 +1490,6 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     dynamicType = effectiveItem.type,
                     sortMode = sortMode,
                     fallbackCount = fallbackCount,
-                    isRefresh = isRefresh,
                 )
                 val attempts = candidateResults.mapNotNull { it.attempt }
                 firstFailureMessage = candidateResults.firstNotNullOfOrNull { it.failureMessage }
@@ -1407,13 +1522,15 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     updateCommentUiState {
                         it.copy(
                             comments = emptyList(),
+                            hasMore = false,
+                            nextPage = 1,
                             totalCount = fallbackCount,
                             dynamicId = dynamicId,
+                            refreshError = firstFailureMessage ?: "评论加载失败，请重试",
                         )
                     }
-                    commentNextPage = 1
-                    commentsEnd = true
                     commentGrpcNextOffset = null
+                    commentContinuation = null
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -1455,7 +1572,6 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         dynamicType: String,
         sortMode: CommentSortMode,
         fallbackCount: Int,
-        isRefresh: Boolean,
     ): List<DynamicCommentCandidateResult> = coroutineScope {
         val jobs = targets.mapIndexed { index, target ->
             async {
@@ -1466,7 +1582,6 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     dynamicType = dynamicType,
                     sortMode = sortMode,
                     fallbackCount = fallbackCount,
-                    isRefresh = isRefresh,
                 )
             }
         }
@@ -1493,7 +1608,6 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         dynamicType: String,
         sortMode: CommentSortMode,
         fallbackCount: Int,
-        isRefresh: Boolean,
     ): DynamicCommentCandidateResult = coroutineScope {
         com.android.purebilibili.core.util.Logger.d(
             "DynamicVM",
@@ -1506,7 +1620,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 type = target.type
             ).getOrNull()
         }
-        val result = CommentRepository.getCommentsForSubject(
+        val result = CommentRepository.getMobileCommentsForSubject(
             oid = target.oid,
             type = target.type,
             page = 1,
@@ -1530,13 +1644,9 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                         totalCount = payload.totalCount,
                         candidateIndex = index,
                         nextPage = 2,
-                        isEnd = resolveDynamicMainCommentPageEnd(
-                            cursorIsEnd = data.cursor.isEnd,
-                            fetchedReplyCount = data.replies.orEmpty().size,
-                            loadedReplyCount = payload.replies.size,
-                            totalCount = payload.totalCount
-                        ),
-                        grpcNextOffset = data.grpcNextOffset.takeIf { it.isNotBlank() }
+                        isEnd = data.cursor.isEnd,
+                        grpcNextOffset = data.grpcNextOffset.takeIf { it.isNotBlank() },
+                        mainListContinuation = data.mainListContinuation,
                     )
                 )
             },
@@ -1545,21 +1655,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     "DynamicVM",
                     "动态评论候选失败: oid=${target.oid}, type=${target.type}, count=$exactCount, error=${error.message}"
                 )
-                val fallbackTotal = exactCount ?: fallbackCount
                 DynamicCommentCandidateResult(
-                    attempt = if (!isRefresh && fallbackTotal > 0) {
-                        DynamicCommentLoadAttempt(
-                            target = target,
-                            replies = emptyList(),
-                            totalCount = fallbackTotal,
-                            candidateIndex = index,
-                            nextPage = 2,
-                            isEnd = true,
-                            grpcNextOffset = null
-                        )
-                    } else {
-                        null
-                    },
+                    attempt = null,
                     failureMessage = error.message
                 )
             }
@@ -1581,7 +1678,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         // 缓存命中后的静默刷新可能晚于用户翻页返回：这时只把首页结果并回列表，
         // 不要把已经加载的第 2、3 页覆盖掉。
         val alreadyPagedFurther = previousState.dynamicId == dynamicId &&
-            commentNextPage > attempt.nextPage
+            _selectedCommentTarget.value == attempt.target &&
+            previousState.nextPage > attempt.nextPage
         val appliedReplies = if (alreadyPagedFurther) {
             (attempt.replies + previousState.comments).distinctBy { it.rpid }
         } else {
@@ -1589,13 +1687,14 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         }
         _selectedCommentTarget.value = attempt.target
         if (!alreadyPagedFurther) {
-            commentNextPage = attempt.nextPage
-            commentsEnd = attempt.isEnd
             commentGrpcNextOffset = attempt.grpcNextOffset
+            commentContinuation = attempt.mainListContinuation
         }
         updateCommentUiState {
             it.copy(
                 comments = appliedReplies,
+                hasMore = if (alreadyPagedFurther) it.hasMore else !attempt.isEnd,
+                nextPage = if (alreadyPagedFurther) it.nextPage else attempt.nextPage,
                 totalCount = attempt.totalCount,
                 isLoading = false,
                 isRefreshing = false,
@@ -1609,22 +1708,22 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     fun loadMoreComments() {
         val target = _selectedCommentTarget.value ?: return
         val state = _commentUiState.value
-        if (state.isLoading || state.isRefreshing || state.isLoadingMore || commentsEnd) return
+        if (state.isLoading || state.isRefreshing || state.isLoadingMore || !state.hasMore) return
 
-        val pageToLoad = commentNextPage
+        val pageToLoad = state.nextPage
         val sortMode = _dynamicCommentSortMode.value
         val requestId = commentLoadRequestId
-        val paginationOffset = commentGrpcNextOffset
+        val continuation = commentContinuation
         updateCommentUiState { it.copy(isLoadingMore = true) }
         launchAccount {
             try {
-                CommentRepository.getCommentsForSubject(
+                CommentRepository.getMobileCommentsForSubject(
                     oid = target.oid,
                     type = target.type,
                     page = pageToLoad,
                     ps = DYNAMIC_COMMENT_PAGE_SIZE,
                     mode = sortMode.apiMode,
-                    paginationOffset = paginationOffset,
+                    continuation = continuation,
                     fallbackOnMissingLocation = target.type != 11
                 ).onSuccess { data ->
                     if (!shouldApplyDynamicCommentPageResult(
@@ -1640,22 +1739,18 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     val currentReplies = _commentUiState.value.comments
                     val newReplies = data.replies.orEmpty()
                     val mergedReplies = (currentReplies + newReplies).distinctBy { it.rpid }
-                    val addedReplyCount = mergedReplies.size - currentReplies.size
                     val totalCount = maxOf(
                         data.getAllCount(),
                         _commentUiState.value.totalCount,
                         mergedReplies.size
                     )
-                    commentNextPage = pageToLoad + 1
                     commentGrpcNextOffset = data.grpcNextOffset.takeIf { it.isNotBlank() }
-                    commentsEnd = resolveDynamicMainCommentPageEnd(
-                        cursorIsEnd = data.cursor.isEnd,
-                        fetchedReplyCount = addedReplyCount,
-                        loadedReplyCount = mergedReplies.size,
-                        totalCount = totalCount
-                    )
+                    commentContinuation = data.mainListContinuation
                     updateCommentUiState {
-                        it.copy(comments = mergedReplies, totalCount = totalCount)
+                        it.copy(
+                            comments = mergedReplies, totalCount = totalCount,
+                            hasMore = !data.cursor.isEnd, nextPage = pageToLoad + 1,
+                        )
                     }
                     cacheCurrentComments(mergedReplies)
                 }.onFailure { error ->
@@ -1663,6 +1758,13 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                         "DynamicVM",
                         "动态评论加载更多失败: oid=${target.oid}, type=${target.type}, page=$pageToLoad, error=${error.message}"
                     )
+                    if (shouldApplyDynamicCommentPageResult(
+                            activeRequestId = commentLoadRequestId, requestId = requestId,
+                            activeTarget = _selectedCommentTarget.value, requestTarget = target,
+                            activeSortMode = _dynamicCommentSortMode.value, requestSortMode = sortMode,
+                        )) {
+                        updateCommentUiState { it.copy(refreshError = error.message ?: "评论加载失败，请重试") }
+                    }
                 }
             } finally {
                 if (requestId == commentLoadRequestId) {
@@ -1688,6 +1790,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         _subReplyState.value = SubReplyUiState(
             visible = true,
             rootReply = rootReply,
+            upMid = _selectedDynamic.value?.modules?.module_author?.mid ?: 0L,
             targetReplyId = targetReplyId.takeIf { it != rootReply.rpid } ?: 0L,
             totalCount = resolveSubReplyLoadedTotalCount(
                 rootReply = rootReply,
@@ -1747,7 +1850,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         val requestId = ++subReplyLoadRequestId
         subReplyLoadJob?.cancel()
         subReplyLoadJob = launchAccount {
-            CommentRepository.getSortedSubCommentsForSubject(
+            CommentRepository.getMobileSortedSubCommentsForSubject(
                 oid = target.oid,
                 type = target.type,
                 rootId = rootReplyId,
@@ -1799,6 +1902,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         _subReplyState.value = SubReplyUiState(
             visible = true,
             rootReply = rootReply,
+            upMid = _selectedDynamic.value?.modules?.module_author?.mid ?: 0L,
             items = items.toImmutableList(),
             baseItems = items.toImmutableList(),
             totalCount = totalCount,
@@ -1855,14 +1959,14 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         val target = _selectedCommentTarget.value ?: return
         val rootReply = state.rootReply ?: return
         if (state.isLoading || state.isRefreshing || state.isEnd) return
-        val nextPage = if (state.error != null && state.items.isEmpty()) 1 else state.page + 1
+        val request = resolveSubReplyNextRequest(state)
         _subReplyState.value = state.copy(isLoading = true, error = null)
         loadSubReplies(
             oid = target.oid,
             type = target.type,
             rootId = rootReply.rpid,
-            page = nextPage,
-            paginationOffset = state.grpcNextOffset
+            page = request.page,
+            paginationOffset = request.offset
         )
     }
 
@@ -1886,7 +1990,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         }
         subReplyLoadJob = launchAccount {
             try {
-                val result = CommentRepository.getSortedSubCommentsForSubject(
+                val result = CommentRepository.getMobileSortedSubCommentsForSubject(
                     oid = oid,
                     type = type,
                     rootId = rootId,
@@ -1935,7 +2039,8 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     ) return@onFailure
                     _subReplyState.value = resolveDynamicSubReplyStateAfterFailure(
                         currentState = current,
-                        errorMessage = error.message ?: "回复加载失败"
+                        errorMessage = error.message ?: "回复加载失败",
+                        failedRequest = SubReplyPageRequest(page, paginationOffset),
                     )
                 }
             } catch (e: CancellationException) {
@@ -1945,7 +2050,10 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 if (requestId == subReplyLoadRequestId && current.visible &&
                     current.rootReply?.rpid == rootId
                 ) {
-                    _subReplyState.value = current.copy(error = e.message ?: "回复加载失败")
+                    _subReplyState.value = current.copy(
+                        error = e.message ?: "回复加载失败",
+                        retryRequest = SubReplyPageRequest(page, paginationOffset),
+                    )
                 }
             } finally {
                 if (requestId == subReplyLoadRequestId) {
@@ -1962,23 +2070,111 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
     }
     
     /**
+     *  打开根评论输入弹层
+     */
+    fun openCommentComposer() {
+        _commentReplyTarget.value = null
+        _commentComposerDrafts.update { it.open() }
+        clearCommentMentionSearch()
+        _commentComposerVisible.value = true
+    }
+
+    /**
+     *  回复指定评论：统一打开共享输入弹层，不再聚焦内联输入框。
+     */
+    fun startCommentReply(reply: ReplyItem) {
+        _commentReplyTarget.value = resolveDynamicCommentReplyTarget(reply)
+        _commentComposerDrafts.update { it.open() }
+        clearCommentMentionSearch()
+        _commentComposerVisible.value = true
+    }
+
+    fun dismissCommentComposer() {
+        _commentComposerVisible.value = false
+        _commentReplyTarget.value = null
+        clearCommentMentionSearch()
+    }
+
+    fun updateCommentDraft(
+        sessionId: Long,
+        replyRpid: Long?,
+        text: String,
+        imageUris: List<Uri>,
+        syncToDynamic: Boolean,
+    ) {
+        _commentComposerDrafts.update { state ->
+            if (state.sessionId != sessionId || sessionId <= state.completedSessionId) {
+                state
+            } else {
+                state.update(
+                    sessionId = sessionId,
+                    replyRpid = replyRpid,
+                    draft = CommentComposerDraft(text, imageUris, syncToDynamic),
+                )
+            }
+        }
+    }
+
+    fun searchCommentMentionUsers(query: String) {
+        if (_commentMentionSearchState.value.query == query && commentMentionSearchJob?.isActive == true) {
+            return
+        }
+        commentMentionSearchJob?.cancel()
+        _commentMentionSearchState.update {
+            it.copy(query = query, isLoading = true, errorMessage = null)
+        }
+        commentMentionSearchJob = viewModelScope.launch {
+            if (query.isNotBlank()) {
+                delay(250L)
+            }
+            CommentRepository.searchMentionUsers(query)
+                .onSuccess { users ->
+                    _commentMentionSearchState.update {
+                        if (it.query == query) {
+                            it.copy(users = users, isLoading = false, errorMessage = null)
+                        } else {
+                            it
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    _commentMentionSearchState.update {
+                        if (it.query == query) {
+                            it.copy(
+                                users = emptyList(),
+                                isLoading = false,
+                                errorMessage = error.message ?: "搜索@好友失败"
+                            )
+                        } else {
+                            it
+                        }
+                    }
+                }
+        }
+    }
+
+    fun clearCommentMentionSearch() {
+        commentMentionSearchJob?.cancel()
+        _commentMentionSearchState.value = CommentMentionSearchUiState()
+    }
+
+    /**
      *  发表评论
      */
-    fun startCommentReply(reply: com.android.purebilibili.data.model.response.ReplyItem) {
-        _commentReplyTarget.value = resolveDynamicCommentReplyTarget(reply)
-    }
-
-    fun clearCommentReplyTarget() {
-        _commentReplyTarget.value = null
-    }
-
     fun postComment(
         dynamicId: String,
         message: String,
         imageUris: List<Uri> = emptyList(),
         onResult: (Boolean, String) -> Unit,
     ) {
-        launchAccount {
+        if (_isSendingComment.value) return
+
+        val draftSessionId = _commentComposerDrafts.value.sessionId
+        val replyRpid = _commentReplyTarget.value?.parentRpid
+        val sentDraft = _commentComposerDrafts.value.drafts[commentComposerDraftKey(replyRpid)]
+        _isSendingComment.value = true
+
+        val job = launchAccount {
             try {
                 val csrf = com.android.purebilibili.core.store.TokenManager.csrfCache
                 if (csrf.isNullOrEmpty()) {
@@ -2015,9 +2211,23 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                     pictures = pictures,
                 )
                 if (response.isSuccess) {
-                    _commentReplyTarget.value = null
+                    if (
+                        _commentComposerVisible.value &&
+                        _commentComposerDrafts.value.sessionId == draftSessionId
+                    ) {
+                        _commentReplyTarget.value = null
+                        _commentComposerVisible.value = false
+                        clearCommentMentionSearch()
+                    }
+                    _commentComposerDrafts.update {
+                        it.complete(draftSessionId, replyRpid, sentDraft)
+                    }
                     onResult(true, "评论成功")
                     loadComments(dynamicId)
+                    if (_subReplyState.value.visible) {
+                        // 楼中楼保持展开时直接刷新线程，发送后无需退回主评论再进入。
+                        refreshSubReplies()
+                    }
                 } else {
                     onResult(false, response.exceptionOrNull()?.message ?: "评论失败")
                 }
@@ -2027,6 +2237,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
                 onResult(false, e.message ?: "网络错误")
             }
         }
+        job.invokeOnCompletion { _isSendingComment.value = false }
     }
 
     private suspend fun uploadCommentPictures(imageUris: List<Uri>): List<ReplyPicture> =
@@ -2570,18 +2781,79 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun unfoldRelatedDynamics(dynamicId: String) {
+    private val unfoldingDynamicIds = mutableSetOf<String>()
+
+    fun unfoldRelatedDynamics(
+        dynamicId: String,
+        onResult: (Boolean, String) -> Unit = { _, _ -> },
+    ) {
         val normalizedId = dynamicId.trim()
         if (normalizedId.isBlank()) return
-        val currentState = mapDynamicTimelineItems(_uiState.value) { items ->
-            unfoldRelatedDynamicItems(items, normalizedId)
+        launchAccount {
+            if (!unfoldingDynamicIds.add(normalizedId)) {
+                onResult(false, "正在加载相关动态，请稍候")
+                return@launchAccount
+            }
+            try {
+                val snapshot = _uiState.value
+                val cachedItems = snapshot.items + snapshot.userItems +
+                    snapshot.timelinePages.values.flatMap { it.items }
+                val anchor = cachedItems.firstOrNull {
+                    it.id_str == normalizedId && it.modules.module_fold != null
+                }
+                if (anchor == null) {
+                    onResult(false, "动态列表已更新，请刷新后重试")
+                    return@launchAccount
+                }
+                val originalFold = anchor.modules.module_fold
+                var resolvedFold = originalFold
+                var ids = resolveDynamicFoldIds(anchor)
+                if (ids.isEmpty()) {
+                    onResult(false, "正在加载相关动态…")
+                    val detail = DynamicRepository.getDynamicDetail(normalizedId)
+                    coroutineContext.ensureActive()
+                    resolvedFold = detail.getOrNull()?.modules?.module_fold
+                    ids = detail.getOrNull()?.let(::resolveDynamicFoldIds).orEmpty()
+                    if (ids.isEmpty()) {
+                        onResult(false, "暂时无法获取相关动态，请稍后重试")
+                        return@launchAccount
+                    }
+                }
+                val cachedById = cachedItems.associateBy { it.id_str }
+                val loadedItems = ids.mapNotNull(cachedById::get).toMutableList()
+                val missingIds = ids.filterNot(cachedById::containsKey)
+                if (missingIds.isNotEmpty()) {
+                    onResult(false, "正在加载相关动态…")
+                }
+                for (id in missingIds) {
+                    val result = DynamicRepository.getDynamicDetail(id)
+                    coroutineContext.ensureActive()
+                    result.getOrNull()?.takeIf { it.id_str == id }?.let(loadedItems::add)
+                }
+                // Apply against live state, never overwrite a newer refresh or interaction snapshot.
+                _uiState.update { current ->
+                    fun expand(items: List<DynamicItem>): List<DynamicItem> {
+                        val currentAnchor = items.firstOrNull { it.id_str == normalizedId }
+                        if (currentAnchor?.modules?.module_fold != originalFold) return items
+                        return unfoldRelatedDynamicItems(items, normalizedId, loadedItems, resolvedFold)
+                    }
+                    val updated = mapDynamicTimelineItems(current, ::expand)
+                    updated.copy(userItems = expand(updated.userItems).toImmutableList())
+                }
+                if (loadedItems.size < ids.size) {
+                    onResult(false, if (loadedItems.isEmpty()) "相关动态加载失败，请重试"
+                        else "部分相关动态加载失败，可点击重试")
+                } else {
+                    onResult(true, "")
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                onResult(false, "相关动态加载失败，请重试")
+            } finally {
+                unfoldingDynamicIds.remove(normalizedId)
+            }
         }
-        _uiState.value = currentState.copy(
-            userItems = unfoldRelatedDynamicItems(
-                currentState.userItems,
-                normalizedId,
-            ).toImmutableList(),
-        )
     }
 
     private fun removeDynamicFromUiState(dynamicId: String) {
@@ -2812,7 +3084,7 @@ class DynamicViewModel(application: Application) : AndroidViewModel(application)
         private const val KEY_HIDDEN_USERS = "dynamic_hidden_users"
         private const val KEY_DISPLAY_MODE = "dynamic_display_mode"
         private const val KEY_SELECTED_TAB = "dynamic_selected_tab"
-        private const val DYNAMIC_TOP_TAB_COUNT = 5
+        private const val DYNAMIC_TOP_TAB_COUNT = 4
         private const val MAX_CACHE_ITEMS = 100
         private const val MAX_NOT_INTERESTED_DYNAMIC_IDS = 500
     }

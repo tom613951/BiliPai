@@ -80,6 +80,12 @@ private fun <T> AppSegmentedControlHost(
         if (usesDefaultBottomBarSizing) spec.tapPressRefractionEnabled else tapPressRefractionEnabled
 
     BottomBarLiquidSegmentedControl(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+        // 设置页的短分段选项在手机、大屏和窄分屏内均居中；
+        // 玻璃与原生路径分别显式选择，不改变共享控件的布局默认值。
+        centerGlassContent = true,
+        centerNativeContent = true,
         items = options.map { it.label },
         selectedIndex = selectedIndex,
         onSelected = { index ->

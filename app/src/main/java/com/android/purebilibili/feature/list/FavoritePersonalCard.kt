@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.list
 
+import androidx.compose.foundation.layout.Arrangement
+import com.android.purebilibili.core.ui.components.VideoStatusBadges
 import com.android.purebilibili.core.ui.AppContentColors
 
 import coil3.request.crossfade
@@ -18,7 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.boundsInRoot
+import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -141,27 +143,26 @@ internal fun FavoritePersonalCard(
     PersonalMediaCardFrame(
         stacked = stacked,
         coverModifier = Modifier.onGloballyPositioned {
-            transition.bounds.coverBounds = it.boundsInRoot()
+            transition.bounds.coverBounds = it.videoCardSourceBoundsInRoot()
         },
         modifier = modifier
             .then(transition.shellModifier)
-            .onGloballyPositioned { transition.bounds.cardBounds = it.boundsInRoot() },
+            .onGloballyPositioned { transition.bounds.cardBounds = it.videoCardSourceBoundsInRoot() },
         nativeSnapshotModifier = transition.nativeCardSnapshot.modifier,
         coverOverlayModifier = transition.nativeCardSnapshot.coverOverlayModifier,
         headlineContent = {
             AppText(
                 text = item.title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
+                style = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography().title,
                 maxLines = videoCardTitleMaxLines(),
                 overflow = videoCardTitleOverflow(),
             )
         },
         supportingContent = {
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(AppSpacingTokens.ExtraSmall)) {
                 UpBadgeName(
                     name = item.owner.name.ifBlank { "未知UP主" },
-                    nameStyle = MaterialTheme.typography.bodySmall,
+                    nameStyle = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography().author,
                     nameColor = AppContentColors.secondaryText(),
                     overflow = TextOverflow.Visible,
                 )
@@ -169,7 +170,7 @@ internal fun FavoritePersonalCard(
                 if (dateLabel.isNotBlank()) {
                     AppText(
                         text = dateLabel,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = com.android.purebilibili.feature.home.components.cards.horizontalVideoCardTypography().statistic,
                         color = AppContentColors.secondaryText(),
                         overflow = TextOverflow.Visible,
                     )
@@ -189,6 +190,10 @@ internal fun FavoritePersonalCard(
             )
         },
         coverOverlayContent = {
+            VideoStatusBadges(
+                labels = item.statusLabels,
+                modifier = Modifier.align(Alignment.TopEnd).padding(AppSpacingTokens.ExtraSmall),
+            )
             VideoCardCoverDurationText(
                 text = if (progressState.progressSec > 0 || progressState.progressSec == -1) {
                     resolveHistoryProgressLabel(progressState.progressSec, item.duration)

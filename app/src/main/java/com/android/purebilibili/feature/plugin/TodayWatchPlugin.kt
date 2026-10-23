@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.plugin
 
+import com.android.purebilibili.core.util.LocalWindowSizeClass
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 
@@ -576,13 +577,18 @@ private fun TodayWatchPluginModeSegmentedControl(
         if (mode == TodayWatchPluginMode.RELAX) "今晚轻松看" else "深度学习看"
     }
     BottomBarLiquidSegmentedControl(
+        // Glass indicator fills the measured slot; native geometry keeps its defaults.
+        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+        // Wide-device placement is requested separately for native and glass; compact windows keep their layout.
+        centerGlassContent = LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
+        centerNativeContent = LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
         items = labels,
         selectedIndex = selectedIndex,
         onSelected = { index ->
             modes.getOrNull(index)?.takeIf { it != selectedMode }?.let(onModeChange)
         },
         modifier = modifier.wrapContentWidth(Alignment.CenterHorizontally),
-        itemWidth = 120.dp,
+        itemWidth = if (com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) null else 120.dp,
         height = AppChromeSizeTokens.BottomBarMatchedSegmentedControlHeightDp.dp,
         indicatorHeight = AppChromeSizeTokens.BottomBarMatchedSegmentedIndicatorHeightDp.dp,
         labelFontSize = com.android.purebilibili.core.ui.appTabLabelFontSize(),

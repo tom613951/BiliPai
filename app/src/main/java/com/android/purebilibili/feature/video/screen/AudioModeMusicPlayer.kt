@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +56,9 @@ import com.android.purebilibili.feature.video.viewmodel.VideoCommentViewModel
 import com.android.purebilibili.feature.video.viewmodel.VideoEngagementViewModel
 import com.android.purebilibili.feature.video.viewmodel.VideoPlaybackUiState
 import com.android.purebilibili.feature.video.viewmodel.VideoPlaybackViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.isActive
@@ -176,22 +180,26 @@ internal fun AudioModeMusicPlayer(
         )
     }
     // 播放中每 5 秒保存续播会话，供「启动自动播放」使用
-    LaunchedEffect(playback.isPlaying, info.bvid, info.cid) {
-        if (!playback.isPlaying) return@LaunchedEffect
-        while (true) {
-            kotlinx.coroutines.delay(5_000L)
-            PlayHistoryStore.saveLastSession(
-                context,
-                PlayLastSession(
-                    bvid = info.bvid,
-                    cid = info.cid,
-                    title = displayTitle,
-                    cover = info.pic,
-                    owner = info.owner.name,
-                    positionMs = playback.positionMs,
-                    savedAtMs = System.currentTimeMillis()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(player, playback.isPlaying, info.bvid, info.cid, lifecycleOwner) {
+        if (player == null || !playback.isPlaying) return@LaunchedEffect
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                delay(5_000L)
+                if (!player.isPlaying) continue
+                PlayHistoryStore.saveLastSession(
+                    context,
+                    PlayLastSession(
+                        bvid = info.bvid,
+                        cid = info.cid,
+                        title = displayTitle,
+                        cover = info.pic,
+                        owner = info.owner.name,
+                        positionMs = player.currentPosition.coerceAtLeast(0L),
+                        savedAtMs = System.currentTimeMillis()
+                    )
                 )
-            )
+            }
         }
     }
     LaunchedEffect(player) {
@@ -346,13 +354,14 @@ internal fun AudioModeMusicPlayer(
             languageLabel = selectedTrack?.lanDoc ?: successState.subtitlePrimaryLanguage
         )
     }
-    val subtitleLanguageOptions = remember(successState.subtitleTracks) {
+    val subtitleLanguageOptions = remember(successState.subtitleTracks, successState.subtitlePrimaryTrackKey) {
         buildSubtitleTrackOptions(
             tracks = successState.subtitleTracks,
             selectedTrackKey = successState.subtitlePrimaryTrackKey
         ).map { it.trackKey to it.label }
     }
     var subtitleLanguageManuallySelected by remember(info.bvid, info.cid) { mutableStateOf(false) }
+    var videoSubtitlesEnabled by rememberSaveable { mutableStateOf(true) }
     var subtitleOffsetMs by remember(info.bvid, info.cid) { mutableStateOf(0L) }
     val adjustedSubtitleLyrics = remember(subtitleLyrics, subtitleOffsetMs) {
         subtitleLyrics?.withOffset(subtitleOffsetMs)
@@ -361,10 +370,13 @@ internal fun AudioModeMusicPlayer(
     val effectiveLyrics = remember(
         lyricsState.lyricsDocument,
         adjustedSubtitleLyrics,
-        subtitleLanguageManuallySelected
+        subtitleLanguageManuallySelected,
+        videoSubtitlesEnabled,
     ) {
         // 视频字幕与搜索歌词都存在时，按时间轴对齐度取舍，避免错位的搜索歌词盖过本地字幕
-        if (subtitleLanguageManuallySelected) {
+        if (!videoSubtitlesEnabled) {
+            lyricsState.lyricsDocument
+        } else if (subtitleLanguageManuallySelected) {
             BiliSubtitleLyricsPolicy.resolveEffectiveLyrics(
                 musicLyrics = null,
                 subtitleLyrics = adjustedSubtitleLyrics
@@ -378,7 +390,7 @@ internal fun AudioModeMusicPlayer(
     }
 
     MusicPlayerContent(
-        state = MusicPlayerUiState(
+        sourceState = MusicPlayerUiState(
             title = displayTitle,
             artist = info.owner.name,
             coverUrl = coverUrl,
@@ -399,6 +411,8 @@ internal fun AudioModeMusicPlayer(
             shuffleEnabled = shuffleEnabled,
             playbackSpeed = playback.playbackSpeed
         ),
+        // Video audio mode owns this player; the position clock stays inside content.
+        playbackPositionSource = player,
         onBack = onBack,
         onPlayPause = { player?.handleAudioModePlayPause() },
         onSeek = { positionMs ->
@@ -461,8 +475,11 @@ internal fun AudioModeMusicPlayer(
             }
         },
         subtitleLanguageOptions = subtitleLanguageOptions,
+        videoSubtitlesEnabled = videoSubtitlesEnabled,
+        onVideoSubtitlesEnabledChange = { videoSubtitlesEnabled = it },
         selectedSubtitleTrackKey = successState.subtitlePrimaryTrackKey,
         onSubtitleTrackSelected = { trackKey ->
+            videoSubtitlesEnabled = true
             subtitleLanguageManuallySelected = true
             viewModel.selectSubtitleTrack(trackKey)
         },
@@ -483,6 +500,7 @@ internal fun AudioModeMusicPlayer(
         audioQualityLabel = audioQualityPresentation.label,
         audioQualityOptions = successState.availableAudioQualities,
         requestedAudioQuality = successState.requestedAudioQuality,
+        selectedAudioQuality = successState.selectedAudioQuality,
         isHiResAudioSelected = audioQualityPresentation.showHiResBadge,
         isDolbyAudioSelected = audioQualityPresentation.showDolbyBadge,
         onAudioQualitySelected = viewModel::setAudioQuality,
@@ -553,6 +571,7 @@ internal fun AudioModeMusicPlayer(
         if (showCollectionSheet) {
             CollectionSheet(
                 ugcSeason = season,
+                currentVideoInfo = info,
                 currentBvid = info.bvid,
                 currentCid = info.cid,
                 onDismiss = { showCollectionSheet = false },
@@ -649,12 +668,6 @@ private fun rememberAudioPlaybackSnapshot(player: Player?): AudioPlaybackSnapsho
         onDispose { player?.removeListener(listener) }
     }
 
-    LaunchedEffect(player) {
-        while (isActive && player != null) {
-            snapshot = player.readAudioPlaybackSnapshot()
-            delay(250L)
-        }
-    }
     return snapshot
 }
 

@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.bangumi
 
+import com.android.purebilibili.core.ui.components.wallpaperMediaCardSurface
 import com.android.purebilibili.core.ui.AppContentColors
 
 import androidx.compose.animation.AnimatedVisibility
@@ -38,6 +39,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -56,6 +60,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
@@ -125,10 +130,32 @@ private val BangumiGridStatesSaver = Saver<MutableMap<String, LazyGridState>, Li
 
 
 @Composable
+internal fun rememberBangumiChannelPagerState(
+    channel: BangumiChannel,
+    enabled: Boolean,
+    onChannelSelected: (BangumiChannel) -> Unit,
+): PagerState {
+    val channels = BangumiChannel.entries
+    val pager = rememberPagerState(initialPage = channel.ordinal) { channels.size }
+    val latestChannelSelected by rememberUpdatedState(onChannelSelected)
+    LaunchedEffect(channel, enabled) {
+        if (enabled && pager.currentPage != channel.ordinal) pager.animateScrollToPage(channel.ordinal)
+    }
+    LaunchedEffect(pager, enabled) {
+        if (!enabled) return@LaunchedEffect
+        snapshotFlow { if (pager.isScrollInProgress) null else pager.settledPage }
+            .collect { page -> if (page != null) latestChannelSelected(channels[page]) }
+    }
+    return pager
+}
+
+@Composable
 internal fun BangumiHubContent(
     state: BangumiHubUiState,
     onBangumiClick: (Long) -> Unit,
     onEpisodeClick: (Long, Long) -> Unit,
+    channelPagerState: PagerState,
+    onPrepareChannel: (BangumiChannel) -> Unit,
     onRefreshHome: () -> Unit,
     onLoadMoreHomeRecommendations: () -> Unit,
     onLoadMoreHomeFollows: () -> Unit,
@@ -189,26 +216,38 @@ internal fun BangumiHubContent(
         }
     }
     when (state.page) {
-        BangumiHubPage.HOME -> BangumiHomeContent(
-            channel = state.channel,
-            state = state.homeStates[state.channel] ?: BangumiHomeState(),
-            gridState = activeHomeGrid,
-            isLoggedIn = state.isLoggedIn,
-            showPgcTimeline = state.showPgcTimeline,
-            onBangumiClick = onBangumiClick,
-            onEpisodeClick = onEpisodeClick,
-            onRefresh = onRefreshHome,
-            onLoadMoreRecommendations = onLoadMoreHomeRecommendations,
-            onLoadMoreFollows = onLoadMoreHomeFollows,
-            onRetryTimeline = onRetryTimeline,
-            onTimelineRangeSelected = onTimelineRangeSelected,
-            onOpenIndex = onOpenIndex,
-            onOpenFollow = onOpenFollow,
-            onSaveCover = onSaveCover,
-            listBottomPadding = listBottomPadding,
-            listTopPadding = listTopPadding,
-            tabBackdrop = tabBackdrop,
-        )
+        BangumiHubPage.HOME -> {
+            val channels = BangumiChannel.entries
+            val pager = channelPagerState
+            HorizontalPager(
+                state = pager,
+                modifier = Modifier.fillMaxSize(),
+                key = { channels[it].name },
+            ) { page ->
+                val channel = channels[page]
+                LaunchedEffect(channel, state.accountGeneration) { onPrepareChannel(channel) }
+                BangumiHomeContent(
+                    channel = channel,
+                    state = state.homeStates[channel] ?: BangumiHomeState(),
+                    gridState = homeGridStates.getOrPut(channel.name) { LazyGridState() },
+                    isLoggedIn = state.isLoggedIn,
+                    showPgcTimeline = state.showPgcTimeline,
+                    onBangumiClick = onBangumiClick,
+                    onEpisodeClick = onEpisodeClick,
+                    onRefresh = { if (channel == state.channel) onRefreshHome() },
+                    onLoadMoreRecommendations = { if (channel == state.channel) onLoadMoreHomeRecommendations() },
+                    onLoadMoreFollows = { if (channel == state.channel) onLoadMoreHomeFollows() },
+                    onRetryTimeline = { if (channel == state.channel) onRetryTimeline() },
+                    onTimelineRangeSelected = { if (channel == state.channel) onTimelineRangeSelected(it) },
+                    onOpenIndex = { if (channel == state.channel) onOpenIndex() },
+                    onOpenFollow = { if (channel == state.channel) onOpenFollow() },
+                    onSaveCover = onSaveCover,
+                    listBottomPadding = listBottomPadding,
+                    listTopPadding = listTopPadding,
+                    tabBackdrop = tabBackdrop,
+                )
+            }
+        }
 
         BangumiHubPage.INDEX -> BangumiIndexContent(
             channel = state.channel,
@@ -230,6 +269,7 @@ internal fun BangumiHubContent(
 
         BangumiHubPage.FOLLOW -> BangumiFollowContent(
             channel = state.channel,
+            accountGeneration = state.accountGeneration,
             status = state.followStatus,
             state = state.followStates[state.channel to state.followStatus] ?: BangumiFollowManagerState(),
             gridState = followGridStates.getOrPut("${state.channel.name}:${state.followStatus.name}") { LazyGridState() },
@@ -411,7 +451,8 @@ private fun TimelineSection(
             style = MaterialTheme.typography.titleMedium,
         )
         val uiStyle = LocalAppUiStyle.current
-        val timelineRangeMinWidth = if (uiStyle == AppUiStyle.MATERIAL3) {
+        val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+        val timelineRangeMinWidth = if (liquidGlassEnabled || uiStyle == AppUiStyle.MATERIAL3) {
             AppChromeSizeTokens.MinimumTouchTarget
         } else {
             104.dp
@@ -421,6 +462,8 @@ private fun TimelineSection(
             contentAlignment = Alignment.Center,
         ) {
             AppThemeAdaptiveTabRow(
+                // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                 role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
                 options = BangumiTimelineRange.entries.map { range ->
                     AppSegmentOption(range, range.label)
@@ -437,18 +480,22 @@ private fun TimelineSection(
             state.error != null && state.days.isEmpty() -> InlineError(state.error, onRetry)
             state.days.isEmpty() -> InlineNotice("当前范围暂无更新时间表")
             else -> {
-                val timelineDayMinWidth = if (uiStyle == AppUiStyle.MATERIAL3) {
+                val timelineDayMinWidth = if (liquidGlassEnabled || uiStyle == AppUiStyle.MATERIAL3) {
                     AppChromeSizeTokens.MinimumTouchTarget
                 } else {
                     112.dp
                 }
                 AppThemeAdaptiveTabRow(
+                    // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                    liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                     role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
                     options = state.days.mapIndexed { index, item ->
                         AppSegmentOption(index, resolveBangumiTimelineDayLabel(item))
                     },
                     selectedValue = selectedDay,
                     onSelectionChange = { selectedDay = it },
+                    // Glass drags on the selected capsule choose a date; other slots remain scrollable.
+                    dragSelectionEnabled = liquidGlassEnabled,
                     scrollable = true,
                     minTabWidth = timelineDayMinWidth,
                     miuixBackdrop = tabBackdrop,
@@ -533,12 +580,18 @@ private fun BangumiIndexContent(
                 key = "index_categories",
             ) {
                 val uiStyle = LocalAppUiStyle.current
-                val categoryMinWidth = if (uiStyle == AppUiStyle.MATERIAL3) {
+                // Native Miuix widths do not participate in glass label measurement.
+                val categoryMinWidth = if (
+                    com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled ||
+                    uiStyle == AppUiStyle.MATERIAL3
+                ) {
                     AppChromeSizeTokens.MinimumTouchTarget
                 } else {
                     108.dp
                 }
                 AppThemeAdaptiveTabRow(
+                    // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                    liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                     role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
                     options = categories.map { AppSegmentOption(it, it.label) },
                     selectedValue = category,
@@ -687,12 +740,20 @@ private fun IndexFilterRow(
             maxLines = 1,
         )
         if (selectedChoice != null) {
-            val filterChoiceMinWidth = if (LocalAppUiStyle.current == AppUiStyle.MATERIAL3) {
+            val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+            val filterChoiceMinWidth = if (
+                liquidGlassEnabled ||
+                LocalAppUiStyle.current == AppUiStyle.MATERIAL3
+            ) {
                 AppChromeSizeTokens.MinimumTouchTarget
             } else 88.dp
             AppThemeAdaptiveTabRow(
+                // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                 role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
-                options = group.choices.map { AppSegmentOption(it, it.label) },
+                options = group.choices.map {
+                    AppSegmentOption(it, resolveBangumiIndexChoiceDisplayLabel(group, it, liquidGlassEnabled))
+                },
                 selectedValue = selectedChoice,
                 scrollable = true,
                 centerContent = false,
@@ -707,6 +768,7 @@ private fun IndexFilterRow(
 @Composable
 private fun BangumiFollowContent(
     channel: BangumiChannel,
+    accountGeneration: Long,
     status: BangumiFollowStatus,
     state: BangumiFollowManagerState,
     gridState: LazyGridState,
@@ -726,7 +788,7 @@ private fun BangumiFollowContent(
     showStatusTabs: Boolean,
 ) {
     val selectionMode = state.selectedIds.isNotEmpty()
-    var menuItem by remember { mutableStateOf<FollowBangumiItem?>(null) }
+    var menuItem by remember(accountGeneration) { mutableStateOf<FollowBangumiItem?>(null) }
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier.fillMaxSize().then(
@@ -735,6 +797,8 @@ private fun BangumiFollowContent(
         ) {
             if (showStatusTabs) {
                 AppLiquidAwareTabRow(
+                    // Glass indicator fills the measured slot; native geometry keeps its defaults.
+                    liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
                     role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
                     options = BangumiFollowStatus.entries.map { AppSegmentOption(it, it.label) },
                     selectedValue = status,
@@ -945,6 +1009,8 @@ private fun BangumiSearchContent(
         }
         val searchTabHorizontalPadding = if (uiStyle == AppUiStyle.MATERIAL3) 0.dp else 12.dp
         AppThemeAdaptiveTabRow(
+            // Glass indicator fills the measured slot; native geometry keeps its defaults.
+            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
             role = com.android.purebilibili.core.ui.components.AppTabRowRole.PRIMARY,
             options = categories.map { category -> AppSegmentOption(category, category.label) },
             selectedValue = state.category,
@@ -1222,13 +1288,19 @@ private fun FollowInfoCard(
     onMore: () -> Unit,
 ) {
     val transition = rememberBangumiCardTransition(onClick)
+    val cardSurface = wallpaperMediaCardSurface(
+        containerColor = if (selected) AppSurfaceTokens.secondaryContainer() else AppSurfaceTokens.cardContainer(),
+        shape = AppShapes.container(ContainerLevel.Card),
+        enabled = !selected,
+    )
     AppSurface(
-        color = if (selected) AppSurfaceTokens.secondaryContainer() else AppSurfaceTokens.cardContainer(),
+        color = cardSurface.containerColor,
         shape = AppShapes.container(ContainerLevel.Card),
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 150.dp)
             .then(transition.modifier)
+            .then(cardSurface.modifier)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = if (transition.enabled) null else LocalIndication.current,
