@@ -76,6 +76,14 @@ keyAlias=<别名>
 keyPassword=<密码>
 ```
 
+> ⚠️ **Windows 路径必须用正斜杠 `/` 或双反斜杠 `\\`**，不能写单反斜杠。
+> `java.util.Properties` 会把 `\` 当转义符，`C:\Users\...\release.jks` 会被解析成
+> `C:Users...release.jks`（路径不成立），`hasReleaseKeystore` 随之为 `false`，
+> release 变体**静默回退成未签名 APK**，`assembleRelease` 不报错但产物装不上。
+> 正确写法：`storeFile=C:/Users/you/release.jks`。
+> 排查手段：`./gradlew :app:signingReport | grep -A3 "Variant: release"`，
+> 看到 `Config: release` 才算生效（`Config: none` 即路径没读到）。
+
 生成密钥库：
 
 ```bash
