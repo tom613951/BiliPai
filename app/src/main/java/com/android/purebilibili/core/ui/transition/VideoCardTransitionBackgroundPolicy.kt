@@ -1098,6 +1098,13 @@ internal class VideoCardTransitionSnapshotHandle(
 
     fun releaseSession() {
         clearRenderEffect()
+        // 标记失效不会清除 GraphicsLayer 的绘制闭包和子层引用。
+        // 会话结束后录入空内容，归还旧列表的封面与离屏图层。
+        contentLayer.record(
+            density = androidx.compose.ui.unit.Density(1f),
+            layoutDirection = androidx.compose.ui.unit.LayoutDirection.Ltr,
+            size = androidx.compose.ui.unit.IntSize(1, 1),
+        ) {}
         state.reset()
     }
 }

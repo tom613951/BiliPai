@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.personal
 
+import com.android.purebilibili.core.ui.components.appActionWithFeedback
+
 import com.android.purebilibili.core.ui.components.wallpaperMediaCardSurface
 import com.android.purebilibili.core.ui.AppContentColors
 
@@ -48,7 +50,7 @@ import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.skeleton.ContentSkeletonBlock
 import com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonBlockColor
-import com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulse
+import com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState
 import com.android.purebilibili.feature.home.components.cards.HORIZONTAL_VIDEO_CARD_COVER_WIDTH_DP
 import com.android.purebilibili.feature.home.components.cards.HorizontalVideoCardFrame
 
@@ -92,7 +94,7 @@ internal fun PersonalMediaCardFrame(
             .then(cardSurface.modifier)
             .combinedClickable(
                 enabled = enabled,
-                onClick = onClick,
+                onClick = appActionWithFeedback(onClick),
                 onLongClick = onLongClick,
             ),
         shape = cardShape,
@@ -214,11 +216,10 @@ internal fun PersonalCardSelectMask(
 @Composable
 internal fun PersonalMediaCardSkeleton(
     modifier: Modifier = Modifier,
-    blockColor: Color? = null,
+    blockColor: (() -> Color)? = null,
     stacked: Boolean = false,
 ) {
-    val pulse = if (blockColor == null) rememberContentSkeletonPulse() else 0f
-    val color = blockColor ?: rememberContentSkeletonBlockColor(pulse)
+    val color = blockColor ?: rememberContentSkeletonBlockColor(rememberContentSkeletonPulseState())
     val cardShape = AppShapes.container(ContainerLevel.Card)
 
     AppSurface(

@@ -22,6 +22,18 @@ import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class LivePlaybackPolicyTest {
+    @Test
+    fun `stream preference selects protocol format codec and falls back when missing`() {
+        val candidates = listOf(
+            LivePlaybackCandidate("http_stream", "flv", "avc", listOf("https://one"), 80, emptyList()),
+            LivePlaybackCandidate("http_hls", "fmp4", "hevc", listOf("https://two"), 80, emptyList()),
+        )
+        assertEquals(1, resolveLivePreferredCandidateIndex(candidates, "http_hls|fmp4|hevc"))
+        assertEquals(0, resolveLivePreferredCandidateIndex(candidates, "http_hls|ts|avc"))
+        assertEquals(0, resolveLivePreferredCandidateIndex(candidates, null))
+        assertEquals(0, resolveLivePreferredCandidateIndex(candidates, "invalid"))
+    }
+
 
     @Test
     fun `default video quality preference maps to a live quality tier`() {
@@ -30,26 +42,6 @@ class LivePlaybackPolicyTest {
         assertEquals(250, resolveLiveDefaultQualityQn(64))
         assertEquals(150, resolveLiveDefaultQualityQn(32))
         assertEquals(80, resolveLiveDefaultQualityQn(16))
-    }
-
-    @Test
-    fun `portrait expand fills only portrait live player viewport`() {
-        assertEquals(
-            VideoAspectRatio.FILL,
-            resolveLiveViewportAspectRatio(
-                selected = VideoAspectRatio.FIT,
-                usePortraitControls = true,
-                portraitExpandEnabled = true,
-            ),
-        )
-        assertEquals(
-            VideoAspectRatio.RATIO_16_9,
-            resolveLiveViewportAspectRatio(
-                selected = VideoAspectRatio.RATIO_16_9,
-                usePortraitControls = false,
-                portraitExpandEnabled = true,
-            ),
-        )
     }
 
     @Test
@@ -455,4 +447,19 @@ class LivePlaybackPolicyTest {
             }
         )
     }
+
+    @Test
+    fun `auto mini retains ready and buffering live playback but respects exit preferences`() {
+        for (state in listOf(Player.STATE_READY, Player.STATE_BUFFERING)) {
+            assertTrue(shouldAutoEnterLiveMiniPlayer(true, true, true, true, state, false))
+            assertFalse(shouldAutoEnterLiveMiniPlayer(false, true, true, true, state, false))
+            assertFalse(shouldAutoEnterLiveMiniPlayer(true, true, true, true, state, true))
+            assertFalse(shouldAutoEnterLiveMiniPlayer(true, true, false, true, state, false))
+            assertFalse(shouldAutoEnterLiveMiniPlayer(true, false, true, true, state, false))
+            assertFalse(shouldAutoEnterLiveMiniPlayer(true, true, true, false, state, false))
+        }
+        assertFalse(shouldAutoEnterLiveMiniPlayer(true, true, true, true, Player.STATE_IDLE, false))
+        assertFalse(shouldAutoEnterLiveMiniPlayer(true, true, true, true, Player.STATE_ENDED, false))
+    }
+
 }

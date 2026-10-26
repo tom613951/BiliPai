@@ -95,16 +95,6 @@ internal fun resolveLiveDefaultQualityQn(videoQualityId: Int): Int = when {
     else -> 80
 }
 
-internal fun resolveLiveViewportAspectRatio(
-    selected: VideoAspectRatio,
-    usePortraitControls: Boolean,
-    portraitExpandEnabled: Boolean,
-): VideoAspectRatio = if (usePortraitControls && portraitExpandEnabled) {
-    VideoAspectRatio.FILL
-} else {
-    selected
-}
-
 internal fun resolveLivePlayback(
     data: LivePlayUrlData,
     requestedQn: Int
@@ -247,3 +237,23 @@ private fun streamCodecPriority(codecName: String): Int {
         else -> 2
     }
 }
+
+/** 只记忆协议、格式与编码；房间地址和签名不进入设置。 */
+internal fun resolveLivePreferredCandidateIndex(candidates: List<LivePlaybackCandidate>, preference: String?): Int {
+    val names = preference?.split('|') ?: return 0
+    if (names.size != 3) return 0
+    return candidates.indexOfFirst {
+        it.protocolName == names[0] && it.formatName == names[1] && it.codecName == names[2]
+    }.coerceAtLeast(0)
+}
+
+/** 自动小窗只接管仍有播放意图的有效直播，退出即停开关优先。 */
+internal fun shouldAutoEnterLiveMiniPlayer(
+    enabled: Boolean,
+    isActive: Boolean,
+    isMatchingLiveRoom: Boolean,
+    playWhenReady: Boolean,
+    playbackState: Int,
+    stopPlaybackOnExit: Boolean,
+): Boolean = enabled && isActive && isMatchingLiveRoom && playWhenReady && !stopPlaybackOnExit &&
+    (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING)

@@ -1,5 +1,8 @@
 package com.android.purebilibili.feature.video.ui.components.glass
 
+import com.android.purebilibili.core.util.rememberHapticFeedback
+import com.android.purebilibili.core.util.HapticType
+
 import com.android.purebilibili.feature.video.ui.components.*
 
 import androidx.compose.runtime.Composable
@@ -17,6 +20,7 @@ fun ChapterListPanel(
     onSeek: (Long) -> Unit, onDismiss: () -> Unit,
     @Suppress("UNUSED_PARAMETER") modifier: Modifier = Modifier,
 ) {
+    val selectionHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_SEEK)
     val currentIndex = remember(currentPositionMs, viewPoints) {
         viewPoints.indexOfLast { currentPositionMs >= it.fromMs }.coerceAtLeast(0)
     }
@@ -33,7 +37,11 @@ fun ChapterListPanel(
                     summary = if (selected) "$range · 正在播放" else range,
                 ),
                 optionSize = viewPoints.size, isSelected = selected, index = index,
-                onSelectedIndexChange = { onSeek(point.fromMs); onDismiss() },
+                onSelectedIndexChange = {
+                    if (index != currentIndex) selectionHaptic(HapticType.LIGHT)
+                    onSeek(point.fromMs)
+                    onDismiss()
+                },
             )
         }
     }

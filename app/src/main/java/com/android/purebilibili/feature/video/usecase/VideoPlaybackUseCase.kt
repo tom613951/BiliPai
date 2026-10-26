@@ -87,7 +87,9 @@ sealed class VideoLoadResult {
         // [New] AI Translation Info
         val aiAudio: AiAudioInfo? = null,
         val curAudioLang: String? = null,
-        val adaptiveDashSource: AdaptiveDashPlaybackSource? = null
+        val adaptiveDashSource: AdaptiveDashPlaybackSource? = null,
+        // 播放地址接口返回的上次播放分P cid：多 P 视频用于「上次看到第 N P」提示。
+        val lastPlayCid: Long = 0
     ) : VideoLoadResult()
     
     data class Error(
@@ -706,7 +708,8 @@ class VideoPlaybackUseCase(
                         ),
                         aiAudio = playData.aiAudio,
                         curAudioLang = playData.curLanguage,
-                        adaptiveDashSource = selection.adaptiveDashSource
+                        adaptiveDashSource = selection.adaptiveDashSource,
+                        lastPlayCid = playData.lastPlayCid ?: 0L
                     )
                 },
                 onFailure = { e ->

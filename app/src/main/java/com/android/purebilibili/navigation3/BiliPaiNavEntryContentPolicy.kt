@@ -44,6 +44,8 @@ internal enum class BiliPaiNavEntryContentRole {
     LIVE_AREA,
     LIVE_AREA_DETAIL,
     LIVE_FOLLOWING,
+    LIVE_MATCH,
+    MATCH_INFO,
     INBOX,
     REPLY_ME,
     AT_ME,
@@ -124,6 +126,8 @@ internal fun resolveBiliPaiNavEntryContentRole(key: BiliPaiNavKey): BiliPaiNavEn
         BiliPaiNavKey.LiveSearch -> BiliPaiNavEntryContentRole.LIVE_SEARCH
         BiliPaiNavKey.LiveArea -> BiliPaiNavEntryContentRole.LIVE_AREA
         is BiliPaiNavKey.LiveAreaDetail -> BiliPaiNavEntryContentRole.LIVE_AREA_DETAIL
+        BiliPaiNavKey.LiveMatch -> BiliPaiNavEntryContentRole.LIVE_MATCH
+        is BiliPaiNavKey.MatchInfo -> BiliPaiNavEntryContentRole.MATCH_INFO
         BiliPaiNavKey.LiveFollowing -> BiliPaiNavEntryContentRole.LIVE_FOLLOWING
         BiliPaiNavKey.Inbox -> BiliPaiNavEntryContentRole.INBOX
         BiliPaiNavKey.ReplyMe -> BiliPaiNavEntryContentRole.REPLY_ME

@@ -8,6 +8,16 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class FloatingBottomBarGeometryTest {
+    @Test
+    fun nativeForegroundStaysVisibleWhileGlassCaptureOwnsCoveredContent() {
+        for (coverage in listOf(-0.2f, 0f, 0.5f, 1f, 1.2f)) {
+            assertEquals(1f, resolveFloatingDockBaseContentAlpha(isLiquidGlass = false, coverage = coverage))
+        }
+        assertEquals(1f, resolveFloatingDockBaseContentAlpha(isLiquidGlass = true, coverage = 0f))
+        assertEquals(0.5f, resolveFloatingDockBaseContentAlpha(isLiquidGlass = true, coverage = 0.5f))
+        assertEquals(0f, resolveFloatingDockBaseContentAlpha(isLiquidGlass = true, coverage = 1f))
+    }
+
 
     @Test
     fun `top glass minimum slots keep horizontal capsules across content modes`() {
@@ -651,4 +661,19 @@ class FloatingBottomBarGeometryTest {
         assertEquals(24f, resolveFloatingDockDragEdgeInsetPx(systemInsetPx = 0f, fallbackPx = 24f))
         assertEquals(80f, resolveFloatingDockDragEdgeInsetPx(systemInsetPx = 80f, fallbackPx = 24f))
     }
+
+    @Test
+    fun `adaptive scroll shell keeps endpoint inset constant while approaching content edge`() {
+        // A 60px capsule is centered inside a 100px slot: the extra 20px is
+        // outside the visible shell until scrolling carries that content edge away.
+        for (distance in listOf(0f, 4f, 10f, 20f)) {
+            val trim = resolveFloatingDockScrollableShellInsetPx(100f, 60f, distance)
+            assertEquals(20f - distance, trim, 0.001f)
+            assertEquals(0f, 20f - distance - trim, 0.001f)
+        }
+        assertEquals(0f, resolveFloatingDockScrollableShellInsetPx(100f, 60f, 40f))
+        assertEquals(0f, resolveFloatingDockScrollableShellInsetPx(100f, 100f, 0f))
+        assertEquals(0f, resolveFloatingDockScrollableShellInsetPx(100f, 160f, 0f))
+    }
+
 }

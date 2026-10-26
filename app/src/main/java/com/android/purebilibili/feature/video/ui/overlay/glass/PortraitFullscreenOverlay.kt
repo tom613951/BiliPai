@@ -54,7 +54,6 @@ import com.android.purebilibili.feature.video.ui.components.glass.HiResBadge
 import com.android.purebilibili.feature.video.ui.feedback.followActionAnchor
 import com.android.purebilibili.feature.video.ui.components.VideoAspectRatio
 
-import com.android.purebilibili.core.ui.components.AppCircularProgressIndicator
 import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.AppIconButtonDefaults
 import com.android.purebilibili.core.ui.components.AppSurface
@@ -400,18 +399,14 @@ fun PortraitFullscreenOverlay(
                     exit = fadeOut(),
                     modifier = Modifier.align(Alignment.Center)
                 ) {
-                    AppSurface(
-                        color = Color.Black.copy(alpha = 0.72f),
-                        shape = AppShapes.container(ContainerLevel.Card)
-                    ) {
+                    Box {
                         Row(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            AppCircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
+                            com.android.purebilibili.feature.video.ui.overlay.BiliTvAnimatedBufferingIndicator(
+                                tint = AppContentColors.accent(),
+                                size = 32.dp,
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             AppText(
@@ -771,6 +766,7 @@ private fun PortraitVideoInfo(
                 color = Color.White,
                 fontSize = layoutPolicy.authorNameFontSp.sp,
                 fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f, fill = false),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -798,14 +794,14 @@ private fun PortraitVideoInfo(
                 enabled = true,
                 shape = RoundedCornerShape(layoutPolicy.followButtonCornerRadiusDp.dp),
                 modifier = Modifier
-                    .height(layoutPolicy.followButtonHeightDp.dp)
+                    .heightIn(min = layoutPolicy.followButtonHeightDp.dp)
                     .followActionAnchor(),
             ) {
                 AppSurface(
                     shape = RoundedCornerShape(layoutPolicy.followButtonCornerRadiusDp.dp),
                     color = if (LocalPlayerControlGlassEnabled.current) Color.Transparent else buttonColor,
                     modifier = Modifier
-                        .fillMaxHeight()
+                        .heightIn(min = layoutPolicy.followButtonHeightDp.dp)
                         .clickable(
                             onClickLabel = if (followStatusKnown) null else "重新确认状态并关注",
                             onClick = rememberFollowActionWithConfirmation(
@@ -831,6 +827,8 @@ private fun PortraitVideoInfo(
                         }
                         AppText(
                             text = buttonText,
+                            maxLines = 1,
+                            softWrap = false,
                             color = contentColor,
                             fontSize = layoutPolicy.followTextFontSp.sp,
                             fontWeight = FontWeight.Bold
@@ -1008,6 +1006,8 @@ private fun PortraitStaffSheet(
                     ) {
                         AppText(
                             text = if (isFollowing) "已关注" else "关注",
+                            maxLines = 1,
+                            softWrap = false,
                             style = MaterialTheme.typography.labelMedium,
                             color = if (isFollowing) {
                                 AppContentColors.primaryText().copy(alpha = 0.72f)

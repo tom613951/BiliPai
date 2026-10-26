@@ -2,6 +2,9 @@ package com.android.purebilibili.feature.message.feed
 
 import com.android.purebilibili.core.ui.AppContentColors
 
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.runtime.*
+import com.android.purebilibili.feature.message.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +45,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import com.android.purebilibili.core.coroutines.AccountScopedRequests
+import com.android.purebilibili.core.store.TokenManager
 
 data class AtMeUiState(
     val isLoading: Boolean = true,
@@ -51,20 +57,35 @@ data class AtMeUiState(
     val cursor: Long? = null,
     val cursorTime: Long? = null,
     val hasMore: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val operationError: String? = null,
+    val operationBusy: Boolean = false,
+    val loadMoreError: String? = null,
 )
 
 class AtMeViewModel : ViewModel() {
     private val _uiState = MutableStateFlow(AtMeUiState())
     val uiState: StateFlow<AtMeUiState> = _uiState.asStateFlow()
+    private val accountRequests = AccountScopedRequests(viewModelScope)
+    private var listJob: Job? = null
+    private var moreJob: Job? = null
+    private var requestVersion = 0L
 
     init {
+        accountRequests.observe {
+            requestVersion++
+            _uiState.value = AtMeUiState()
+            loadInitial()
+        }
         loadInitial()
     }
 
     fun loadInitial() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+        listJob?.cancel()
+        moreJob?.cancel()
+        requestVersion++
+        listJob = accountRequests.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, isLoadingMore = false, error = null, loadMoreError = null)
             MessageRepository.getAtFeed().fold(
                 onSuccess = { data ->
                     _uiState.value = _uiState.value.copy(
@@ -83,8 +104,11 @@ class AtMeViewModel : ViewModel() {
     }
 
     fun refresh() {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+        listJob?.cancel()
+        moreJob?.cancel()
+        requestVersion++
+        listJob = accountRequests.launch {
+            _uiState.value = _uiState.value.copy(isRefreshing = true, isLoadingMore = false, error = null, loadMoreError = null)
             MessageRepository.getAtFeed().fold(
                 onSuccess = { data ->
                     _uiState.value = _uiState.value.copy(
@@ -104,35 +128,45 @@ class AtMeViewModel : ViewModel() {
 
     fun loadMore() {
         val current = _uiState.value
-        if (current.isLoadingMore || !current.hasMore) return
-        viewModelScope.launch {
-            _uiState.value = current.copy(isLoadingMore = true)
+        if (current.isLoadingMore || current.isLoading || current.isRefreshing || !current.hasMore) return
+        val version = requestVersion
+        moreJob = accountRequests.launch {
+            _uiState.value = current.copy(isLoadingMore = true, loadMoreError = null)
             MessageRepository.getAtFeed(cursor = current.cursor, cursorTime = current.cursorTime).fold(
                 onSuccess = { data ->
+                    if (version != requestVersion) return@fold
                     _uiState.value = _uiState.value.copy(
                         isLoadingMore = false,
-                        items = current.items + data.items.orEmpty(),
+                        items = (_uiState.value.items + data.items.orEmpty()).distinctBy { it.id },
                         cursor = data.cursor?.id,
                         cursorTime = data.cursor?.time,
-                        hasMore = data.cursor?.isEnd != true && !data.items.isNullOrEmpty()
+                        hasMore = data.cursor?.isEnd != true && !data.items.isNullOrEmpty() && (data.cursor?.id != current.cursor || data.cursor?.time != current.cursorTime)
                     )
                 },
-                onFailure = {
-                    _uiState.value = _uiState.value.copy(isLoadingMore = false)
+                onFailure = { error ->
+                    if (version != requestVersion) return@fold
+                    _uiState.value = _uiState.value.copy(isLoadingMore = false, loadMoreError = error.message ?: "加载更多失败")
                 }
             )
         }
     }
 
     fun remove(id: Long) {
-        viewModelScope.launch {
+        if (_uiState.value.operationBusy) return
+        _uiState.value = _uiState.value.copy(operationBusy = true, operationError = null)
+        accountRequests.launch {
             MessageRepository.deleteFeedItem(type = 2, id = id).onSuccess {
                 _uiState.value = _uiState.value.copy(
                     items = _uiState.value.items.filterNot { it.id == id }
                 )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(operationError = error.message ?: "操作失败")
             }
+            _uiState.value = _uiState.value.copy(operationBusy = false)
         }
     }
+    fun clearOperationError() { _uiState.value = _uiState.value.copy(operationError = null) }
+
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -141,9 +175,10 @@ fun AtMeScreen(
     onBack: () -> Unit,
     onOpenLink: (String) -> Unit,
     onOpenSpace: (Long) -> Unit,
-    viewModel: AtMeViewModel = viewModel()
+    viewModel: AtMeViewModel = viewModel(key = "message_AtMe_" + TokenManager.accountIdentity.collectAsStateWithLifecycle().value)
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    uiState.operationError?.let { error -> MessageConfirmDialog("操作失败", error, onDismiss = viewModel::clearOperationError, onConfirm = viewModel::clearOperationError) }
 
     AppScaffold(
         blurContentReady = !uiState.isLoading,
@@ -246,6 +281,10 @@ fun AtMeScreen(
 
                     if (uiState.hasMore || uiState.isLoadingMore) {
                         item(key = "at_me_load_more") {
+                            LaunchedEffect(uiState.cursor, uiState.loadMoreError) {
+                                if (uiState.loadMoreError == null) viewModel.loadMore()
+                            }
+                            uiState.loadMoreError?.let { AppText(it) }
                             MessageFeedLoadMore(
                                 isLoadingMore = uiState.isLoadingMore,
                                 hasMore = uiState.hasMore,
@@ -267,10 +306,13 @@ private fun AtMeCard(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var confirmDelete by remember(item.id) { mutableStateOf(false) }
+    if (confirmDelete) MessageConfirmDialog("删除通知", "确定删除该通知？", onDismiss = { confirmDelete = false }) { confirmDelete = false; onRemove() }
     MessageFeedCard(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = { confirmDelete = true })
+            .messageSecondaryClick { confirmDelete = true }
     ) {
         Row(modifier = Modifier.padding(14.dp)) {
             MessageFeedAvatar(
@@ -300,13 +342,7 @@ private fun AtMeCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = AppContentColors.secondaryText()
                     )
-                    Spacer(modifier = Modifier.weight(1f))
-                    AppText(
-                        text = "删除",
-                        modifier = Modifier.clickable(onClick = onRemove),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppContentColors.accent()
-                    )
+
                 }
             }
         }

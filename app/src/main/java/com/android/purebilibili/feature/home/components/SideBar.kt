@@ -131,7 +131,7 @@ fun FrostedSideBar(
             !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled &&
             uiSkinDecoration == null && itemColorIndices.isEmpty()
         ) {
-            MaterialExpressiveSideBar(
+            MaterialSideBar(
                 currentItem = currentItem,
                 onItemClick = onItemClick,
                 visibleItems = visibleItems,
@@ -181,7 +181,7 @@ private fun MiuixSideBar(
     onToggleSidebar: (() -> Unit)?,
     onAccountSwitchClick: (() -> Unit)?,
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     val expandable = shouldUseExpandableMiuixSideBar(
         shouldUseExpandedNavigationRailForLayout(
             windowSizeClass = LocalWindowSizeClass.current,
@@ -299,34 +299,22 @@ private fun MiuixSideBar(
             }
         }
 
+        Spacer(modifier = Modifier.weight(1f))
         if (onAccountSwitchClick != null) {
-            Spacer(modifier = Modifier.weight(1f))
-            SideBarAccountSwitchButton(
-                onClick = onAccountSwitchClick,
-                tint = AppSurfaceTokens.onSurfaceVariantSummary(),
+            AppPlatformNavigationRailItem(
+                selected = false,
+                onClick = { haptic(HapticType.LIGHT); onAccountSwitchClick() },
+                icon = Icons.Outlined.SwapHoriz,
+                label = "切换账号",
             )
         }
-
         if (onToggleSidebar != null) {
-            Spacer(modifier = Modifier.height(AppSpacingTokens.Large))
-            val sidebarLabel = stringResource(R.string.sidebar_toggle)
-            Box(
-                modifier = Modifier
-                    .size(AppChromeSizeTokens.MinimumTouchTarget)
-                    .clip(AppShapes.container(ContainerLevel.Card))
-                    .clickable {
-                        haptic(HapticType.LIGHT)
-                        onToggleSidebar()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                AppIcon(
-                    Icons.Outlined.ViewSidebar,
-                    contentDescription = sidebarLabel,
-                    tint = AppSurfaceTokens.onSurfaceVariantSummary(),
-                    modifier = Modifier.size(AppSpacingTokens.ExtraLarge - AppSpacingTokens.Micro)
-                )
-            }
+            AppPlatformNavigationRailItem(
+                selected = false,
+                onClick = { haptic(HapticType.LIGHT); onToggleSidebar() },
+                icon = Icons.Outlined.ViewSidebar,
+                label = "切换到底栏",
+            )
         }
     }
 }
@@ -414,7 +402,7 @@ private fun FrostedSideBarContent(
     onToggleSidebar: (() -> Unit)?,
     onAccountSwitchClick: (() -> Unit)?,
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     var lastHomeClickMs by remember { mutableLongStateOf(0L) }
     var lastDynamicClickMs by remember { mutableLongStateOf(0L) }
     val blurIntensity = com.android.purebilibili.core.ui.blur.currentUnifiedBlurIntensity()
@@ -628,7 +616,7 @@ private fun SideBarAccountSwitchButton(
     tint: Color,
     modifier: Modifier = Modifier,
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     Box(
         modifier = modifier
             .size(AppChromeSizeTokens.MinimumTouchTarget)

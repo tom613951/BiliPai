@@ -52,6 +52,12 @@ sealed class ScreenRoutes(val route: String) {
             return "live_area_detail/$parentAreaId/$areaId?title=${encodeUrlComponentCompat(title)}"
         }
     }
+    object LiveMatch : ScreenRoutes("live_match")
+
+    //  比赛详情页（赛事）
+    object MatchInfo : ScreenRoutes("match_info/{cid}") {
+        fun createRoute(cid: Long): String = "match_info/$cid"
+    }
     object LiveFollowing : ScreenRoutes("live_following")
     
     //  关注列表页面
@@ -262,10 +268,10 @@ sealed class ScreenRoutes(val route: String) {
     
     // [新增] In-app Browser
     object Web : ScreenRoutes("web?url={url}&title={title}") {
-        fun createRoute(url: String, title: String? = null): String {
+        fun createRoute(url: String, title: String? = null, mobileUserAgent: Boolean = false): String {
             val encodedUrl = encodeUrlComponentCompat(url)
             val encodedTitle = title?.let(::encodeUrlComponentCompat) ?: ""
-            return "web?url=$encodedUrl&title=$encodedTitle"
+            return "web?url=$encodedUrl&title=$encodedTitle&mua=${if (mobileUserAgent) "1" else "0"}"
         }
     }
     

@@ -1,6 +1,8 @@
 // 文件路径: feature/video/ui/components/VideoSettingsPanel.kt
 package com.android.purebilibili.feature.video.ui.components
 
+import com.android.purebilibili.core.store.ChapterDisplayMode
+import com.android.purebilibili.feature.settings.playbackSettingTitle
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.feature.video.screen.AudioModeSleepTimerDialog
 import com.android.purebilibili.core.ui.components.AppTextButton
@@ -63,11 +65,11 @@ import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.components.AppSwitchPreference
 import com.android.purebilibili.core.ui.components.formatPlaybackSpeed
 import com.android.purebilibili.data.model.response.AiAudioInfo
-import com.android.purebilibili.feature.plugin.CdnLineDiagnostic
+import com.android.purebilibili.plugin.sdk.CdnLineDiagnostic
 import com.android.purebilibili.feature.anime4k.Anime4KBypassReason
-import com.android.purebilibili.feature.anime4k.Anime4KPreset
-import com.android.purebilibili.feature.anime4k.DEFAULT_FSR_SHARPNESS
-import com.android.purebilibili.feature.anime4k.VideoEnhancementAlgorithm
+import com.android.purebilibili.plugin.sdk.Anime4KPreset
+import com.android.purebilibili.plugin.sdk.DEFAULT_FSR_SHARPNESS
+import com.android.purebilibili.plugin.sdk.VideoEnhancementAlgorithm
 import com.android.purebilibili.feature.video.playback.audio.AudioQualityOption
 import com.android.purebilibili.feature.video.viewmodel.normalizeCodecFamilyKey
 import com.android.purebilibili.core.ui.AppSurfaceTokens
@@ -330,6 +332,8 @@ fun VideoSettingsPanel(
     cdnServiceLabels: List<String> = emptyList(),
     currentCdnServiceIndex: Int = 0,
     onCdnServiceSelected: ((Int) -> Unit)? = null,
+    chapterDisplayMode: ChapterDisplayMode = ChapterDisplayMode.WITH_CONTROLS,
+    onChapterDisplayModeChange: ((ChapterDisplayMode) -> Unit)? = null,
     // 关闭面板
     onDismiss: () -> Unit
 ) {
@@ -356,6 +360,7 @@ fun VideoSettingsPanel(
     val usesTonalContainerTreatment = rememberAppPlayerChromeProfile()
         .effects
         .usesTonalContainerTreatment
+    val nearbyHandoff = com.android.purebilibili.feature.nearby.LocalNearbyHandoff.current
     val context = androidx.compose.ui.platform.LocalContext.current
     val playableAudioQualities = remember(availableAudioQualities) {
         availableAudioQualities.filter { it.kind != null }
@@ -456,11 +461,24 @@ fun VideoSettingsPanel(
                     }
                     when (page) {
                         "main" -> {
+                            nearbyHandoff?.takeIf { com.android.purebilibili.feature.nearby.NEARBY_HANDOFF_ENABLED }?.let { controller ->
+                                PlayerSettingsRow(com.android.purebilibili.feature.nearby.NEARBY_TITLE) {
+                                    onDismiss()
+                                    controller.openDevices()
+                                }
+                            }
                             onWatchLater?.let { action -> PlayerSettingsRow("添加至「稍后再看」") { onDismiss(); action() } }
                             onShowNotes?.let { action -> PlayerSettingsRow("查看笔记") { onDismiss(); action() } }
                             onDownloadVideo?.let { action -> PlayerSettingsRow("离线缓存") { onDismiss(); action() } }
                             PlayerSettingsRow("保存封面") { onDismiss(); onSaveCover() }
                             PlayerSettingsRow("定时关闭", sleepTimerMinutes?.let { "剩余 $it 分钟" }) { page = "sleep" }
+                            onChapterDisplayModeChange?.let { onModeChange ->
+                                PlayerSettingsPopupRow(
+                                    title = playbackSettingTitle("playback.chapter_display_mode"),
+                                    current = chapterDisplayMode.label,
+                                    options = ChapterDisplayMode.entries.map { it.label },
+                                ) { index -> onModeChange(ChapterDisplayMode.entries[index]) }
+                            }
                             onEditPlayUrl?.let { action -> PlayerSettingsRow("播放地址") { onDismiss(); action() } }
                             PlayerSettingsRow("重载视频") { onDismiss(); onReload() }
                             PlayerSettingsPopupRow(

@@ -343,7 +343,8 @@ fun FullscreenPlayerOverlay(
     // 拖动 seek 时手指进入顶部角落逃生口时置真，松手即取消本次 seek
     var seekCancelPending by remember { mutableStateOf(false) }
     var swipeExitAccumulatedY by remember { mutableFloatStateOf(0f) }
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptic = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_GESTURES)
+    val seekSceneHaptic = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_SEEK)
     val playerInteractionSettings by SettingsManager
         .getPlayerInteractionSettings(context)
         .collectAsStateWithLifecycle(
@@ -871,7 +872,7 @@ fun FullscreenPlayerOverlay(
                             dragVerticalDelta += dragAmount.y
                             if (shouldEngageHorizontalPlayerSeek(dragDelta, dragVerticalDelta)) {
                                 gestureMode = FullscreenGestureMode.Seek
-                                haptic.performHapticFeedback(
+                                seekSceneHaptic.performHapticFeedback(
                                     androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                                 )
                             } else if (
@@ -937,7 +938,7 @@ fun FullscreenPlayerOverlay(
                                             currentTargetMs = seekPreviewPosition
                                         )
                                     ) {
-                                        haptic.performHapticFeedback(
+                                        seekSceneHaptic.performHapticFeedback(
                                             androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                                         )
                                         lastSeekHapticTargetMs = seekPreviewPosition
@@ -1230,8 +1231,10 @@ fun FullscreenPlayerOverlay(
                             modifier = Modifier.padding(end = 8.dp)
                         )
 
-                        //  [新增] 弹幕开关按钮
-                        val danmakuActiveColor = Color.White.copy(alpha = 0.96f)
+                        //  [新增] 弹幕开关按钮；开启态跟随选中主题色，与玻璃底栏共用 selectionAccent 入口。
+                        val danmakuActiveColor = AppContentColors.selectionAccent(
+                            com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+                        )
                         val danmakuInactiveColor = Color.White.copy(alpha = 0.74f)
                         NativeDanmakuToggleButton(
                             enabled = danmakuEnabled,

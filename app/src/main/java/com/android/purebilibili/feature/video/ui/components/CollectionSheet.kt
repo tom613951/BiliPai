@@ -1,6 +1,9 @@
 // 文件路径: feature/video/ui/components/CollectionSheet.kt
 package com.android.purebilibili.feature.video.ui.components
 
+import com.android.purebilibili.core.util.rememberHapticFeedback
+import com.android.purebilibili.core.util.HapticType
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import androidx.compose.foundation.background
@@ -26,6 +29,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
@@ -37,6 +43,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,12 +56,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.NavigationEventInfo
+import androidx.navigationevent.NavigationEventTransitionState
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+import androidx.navigationevent.compose.NavigationBackHandler
+import androidx.navigationevent.compose.rememberNavigationEventState
+import androidx.navigationevent.findViewTreeNavigationEventDispatcherOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -98,11 +115,30 @@ fun CollectionSheet(
     onDismiss: () -> Unit,
     onEpisodeClick: (UgcEpisode) -> Unit
 ) {
+    var sheetVisible by remember { mutableStateOf(true) }
+    val backState = rememberNavigationEventState(NavigationEventInfo.None)
+    var committedBackProgress by remember { mutableFloatStateOf(0f) }
+    val backTransition = backState.transitionState as? NavigationEventTransitionState.InProgress
+    val motionEnabled = com.android.purebilibili.core.ui.LocalPredictiveBackGestureEnabled.current &&
+        com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
+        !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+    val backProgress = animateFloatAsState(
+        targetValue = if (!motionEnabled) 0f else if (!sheetVisible) committedBackProgress else
+            backTransition?.takeIf {
+                it.direction == NavigationEventTransitionState.TRANSITIONING_BACK
+            }?.latestEvent?.progress?.coerceIn(0f, 1f) ?: 0f,
+        animationSpec = if (backTransition != null || !motionEnabled) snap() else tween(180),
+        label = "collectionPredictiveBack",
+    )
+    val requestDismiss: () -> Unit = {
+        committedBackProgress = backProgress.value
+        sheetVisible = false
+    }
+    val selectionHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.MENUS)
     val sheetMaxHeight = episodeSheetMaxHeight()
     val context = LocalContext.current
     val clearIcon = rememberAppClearIcon()
     val scope = rememberCoroutineScope()
-    val listState = rememberLazyListState()
     val collectionSubscriptionId = remember(ugcSeason) { resolveCollectionSubscriptionId(ugcSeason) }
 
     val sections = remember(ugcSeason.sections) { ugcSeason.sections }
@@ -145,12 +181,10 @@ fun CollectionSheet(
         currentCid = currentCid
     )
 
-    // 打开或切换分区时自动滚动到当前集
-    LaunchedEffect(selectedSectionIndex, currentIndex) {
-        if (currentIndex > 0) {
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(currentIndex)
-        }
+    // 首帧直接定位当前集，面板位移不叠加列表滚动；手动定位按钮仍使用滚动动画。
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex.coerceAtLeast(0))
+    LaunchedEffect(selectedSectionIndex, currentIndex, sortMode) {
+        listState.scrollToItem(currentIndex.coerceAtLeast(0))
     }
 
     fun scrollToEpisode(index: Int) {
@@ -174,9 +208,33 @@ fun CollectionSheet(
 
     AppModalBottomSheet(
         onDismissRequest = onDismiss,
+        visible = sheetVisible,
+        useTimedSlideMotion = true,
+        dismissOnBackPress = false,
+        // 返回由合集所在窗口接管；完成后交给各材质的原生收起动画。
+        modifier = Modifier.graphicsLayer {
+            val progress = backProgress.value
+            transformOrigin = TransformOrigin(0.5f, 1f)
+            scaleX = 1f - 0.06f * progress
+            scaleY = 1f - 0.06f * progress
+            translationY = size.height * 0.12f * progress
+        },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         windowInsets = WindowInsets(0.dp)  //  沉浸式
     ) {
+        // 必须在弹窗内容里读取窗口 owner，避免处理器挂到下层视频路由。
+        val windowOwner = checkNotNull(
+            LocalView.current.findViewTreeNavigationEventDispatcherOwner()
+                ?: LocalNavigationEventDispatcherOwner.current
+        ) { "Collection sheet must provide a window navigation dispatcher" }
+        CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides windowOwner) {
+            NavigationBackHandler(
+                state = backState,
+                // 收起动画结束前仍消费返回，避免连续侧滑穿透到视频页面。
+                isBackEnabled = true,
+                onBackCompleted = { if (sheetVisible) requestDismiss() },
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -245,7 +303,7 @@ fun CollectionSheet(
                         modifier = Modifier.size(20.dp)
                     )
                 }
-                AppIconButton(onClick = onDismiss) {
+                AppIconButton(onClick = requestDismiss) {
                     AppIcon(
                         clearIcon,
                         contentDescription = "关闭",
@@ -328,11 +386,13 @@ fun CollectionSheet(
             // 液态玻璃开启时由 AppThemeAdaptiveTabRow 委托底栏同款玻璃分段控件
             // （胶囊指示器/拖拽选档/按压折射），关闭时回落主题原生样式
             if (sections.size > 1) {
+                val glassTabsEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
                 AppThemeAdaptiveTabRow(
                     // Glass indicator fills the measured slot; native geometry keeps its defaults.
-                    liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+                    liquidGlassAdaptIndicatorToLabel = !glassTabsEnabled,
                     role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
-                    centerContent = false,
+                    // 玻璃分组栏内容放得下时居中，超宽时沿用可滚动轨道；原生保持左对齐。
+                    centerContent = glassTabsEnabled,
                     options = sections.mapIndexed { index, section ->
                         AppSegmentOption(index, section.title.ifBlank { "第${index + 1}季" })
                     },
@@ -371,11 +431,15 @@ fun CollectionSheet(
                         isCurrentEpisode = isCurrentEpisode,
                         onClick = {
                             if (!isCurrentEpisode) {
+                                selectionHaptic(HapticType.LIGHT)
                                 onEpisodeClick(episode)
                             }
                         },
                         onPartClick = { part ->
                             // 分 P 直达：沿用当前集元信息，仅替换目标 cid
+                            if (episode.bvid != currentBvid || part.cid != currentCid) {
+                                selectionHaptic(HapticType.LIGHT)
+                            }
                             onEpisodeClick(episode.copy(cid = part.cid))
                         }
                     )
@@ -420,7 +484,7 @@ internal fun CollectionEpisodeRow(
                 arc?.pic?.takeIf { it.isNotBlank() }?.let { pic ->
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
-                            .data(FormatUtils.resolveVideoCoverUrl(pic, useLowQuality = true))
+                            .data(FormatUtils.resolveVideoCoverUrl(pic, useLowQuality = false))
                             .crossfade(true)
                             .build(),
                         contentDescription = episode.title,

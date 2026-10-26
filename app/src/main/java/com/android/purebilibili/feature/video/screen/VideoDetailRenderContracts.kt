@@ -19,6 +19,8 @@ internal data class VideoDetailPlaybackActions(
     val setAudioMode: (Boolean) -> Unit,
     val setSleepTimer: (Int?) -> Unit,
     val switchPage: (Int) -> Unit,
+    val jumpToLastPlayedPart: () -> Unit = {},
+    val dismissPartResumeNotice: () -> Unit = {},
     val openDownloadDialog: () -> Unit,
     val showDanmakuSendDialog: () -> Unit,
     val skipSponsorSegment: () -> Unit,

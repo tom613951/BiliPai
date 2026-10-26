@@ -5,6 +5,13 @@ import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 
+import com.android.purebilibili.feature.live.encodeLiveDanmakuInfo
+import com.android.purebilibili.feature.live.resolveLiveMessageMedal
+import com.android.purebilibili.feature.live.liveSecondaryClick
+import androidx.compose.foundation.text.appendInlineContent
+import com.android.purebilibili.data.model.response.splitLiveMessageEmotes
+import com.android.purebilibili.data.model.response.LiveMessageEmote
+import androidx.compose.ui.platform.LocalDensity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -54,8 +61,6 @@ import com.android.purebilibili.feature.live.shouldRenderLiveDanmakuImageEmotico
 import com.android.purebilibili.feature.live.LIVE_INPUT_HEIGHT_DP
 import com.android.purebilibili.feature.live.LiveStatusPalette
 import com.android.purebilibili.feature.live.resolveLiveLevelColor
-import com.android.purebilibili.feature.live.resolveLiveMedalColor
-import com.android.purebilibili.feature.live.resolveLiveMedalBadgeVisualSpec
 import com.android.purebilibili.feature.live.resolveLiveSuperChatColor
 import com.android.purebilibili.feature.live.shouldRenderLiveDanmaku
 import androidx.compose.material.icons.filled.ChatBubble
@@ -84,53 +89,48 @@ import com.android.purebilibili.core.ui.components.AppSurface
 @Composable
 fun LiveChatSection(
     messages: List<LiveChatMessage>,
-    onOpenSend: () -> Unit,
-    headerTitle: String = "实时互动",
-    supportingText: String = "发送弹幕和主播互动",
+    canInteract: Boolean = true,
+    anchorUid: Long = 0L,
     isOverlay: Boolean = false,
-    showHeader: Boolean = true,
-    isDanmakuEnabled: Boolean = true,
-    onToggleDanmaku: () -> Unit = {},
-    onLike: (Int) -> Unit = {},
-    onOpenEmote: () -> Unit = {},
     onUserClick: (Long) -> Unit = {},
     onAtUser: (LiveDanmakuItem) -> Unit = {},
     onBlockUser: (LiveDanmakuItem) -> Unit = {},
     onReportDanmaku: (LiveDanmakuItem) -> Unit = {},
-    showInputBar: Boolean = true,
+    listState: androidx.compose.foundation.lazy.LazyListState = rememberLazyListState(),
+    followingLatest: Boolean = true,
+    onFollowingLatestChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = rememberLiveChromePalette()
-    val chatVisualSpec = remember { resolveLiveChatInputVisualSpec() }
     val darkOverlay = isOverlay && palette.isDark
-    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val latestMessages by rememberUpdatedState(messages)
     var openMenuSequence by remember { mutableStateOf<Long?>(null) }
     val isAnyMenuOpen = openMenuSequence != null
-    var followingLatest by remember { mutableStateOf(true) }
+    val latestFollowing by rememberUpdatedState(followingLatest)
+    val latestOnFollowingChange by rememberUpdatedState(onFollowingLatestChange)
     var autoScrolling by remember { mutableStateOf(false) }
     var pendingScroll by remember { mutableStateOf(false) }
     val isAwayFromBottom by remember {
-        derivedStateOf { !followingLatest && latestMessages.isNotEmpty() }
+        derivedStateOf { !latestFollowing && latestMessages.isNotEmpty() }
     }
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress to listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index }
             .collect { (scrolling, lastVisible) ->
                 if (scrolling && !autoScrolling) {
-                    followingLatest = (lastVisible ?: -1) >= latestMessages.lastIndex - 1
+                    latestOnFollowingChange((lastVisible ?: -1) >= latestMessages.lastIndex - 1)
                 }
             }
     }
     LaunchedEffect(messages.lastOrNull()?.sequence) {
-        if (followingLatest && !isAnyMenuOpen && messages.isNotEmpty()) pendingScroll = true
+        if (latestFollowing && !isAnyMenuOpen && messages.isNotEmpty()) pendingScroll = true
         if (openMenuSequence != null && messages.none { it.sequence == openMenuSequence }) openMenuSequence = null
     }
     // One batch per interval: reception does not wait for a scrolling animation.
     LaunchedEffect(pendingScroll, isAnyMenuOpen) {
         if (pendingScroll) {
             delay(300L)
-            if (followingLatest && !isAnyMenuOpen && !listState.isScrollInProgress && latestMessages.isNotEmpty()) {
+            if (latestFollowing && !isAnyMenuOpen && !listState.isScrollInProgress && latestMessages.isNotEmpty()) {
                 autoScrolling = true
                 try { listState.animateScrollToItem(latestMessages.lastIndex) }
                 finally { autoScrolling = false }
@@ -143,49 +143,6 @@ fun LiveChatSection(
         modifier = modifier
             .fillMaxSize()
     ) {
-        if (showHeader) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        horizontal = AppSpacingTokens.Large,
-                        vertical = AppSpacingTokens.Medium
-                    ),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    AppText(
-                        text = headerTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = palette.primaryText
-                    )
-                    Spacer(Modifier.height(AppSpacingTokens.Micro))
-                    AppText(
-                        text = supportingText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.secondaryText
-                    )
-                }
-                AppSurface(
-                    shape = AppShapes.container(ContainerLevel.Pill),
-                    color = palette.accentSoft
-                ) {
-                    AppText(
-                        text = "弹幕流",
-                        color = palette.accentStrong,
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(
-                            horizontal = AppSpacingTokens.Medium,
-                            vertical = AppSpacingTokens.ExtraSmall
-                        )
-                    )
-                }
-            }
-
-            AppHorizontalDivider(color = palette.border)
-        }
-
         // 1. 聊天列表
         Box(
             modifier = Modifier
@@ -196,21 +153,19 @@ fun LiveChatSection(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
-                    horizontal = if (isOverlay) AppSpacingTokens.Medium else AppSpacingTokens.Large,
-                    vertical = if (isOverlay) AppSpacingTokens.Small else AppSpacingTokens.Medium
+                    horizontal = 12.dp,
+                    vertical = 0.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(
-                    space = if (isOverlay) {
-                        chatVisualSpec.overlayMessageSpaceDp.dp
-                    } else {
-                        AppSpacingTokens.Small
-                    },
-                    alignment = Alignment.Bottom
+                    space = 8.dp,
+                    alignment = Alignment.Top
                 )
             ) {
                 items(messages, key = { it.sequence }, contentType = { "live_chat" }) { entry ->
                     ChatMessageItem(
                         item = entry.item,
+                        canInteract = canInteract,
+                        isAnchor = anchorUid > 0L && entry.item.uid == anchorUid,
                         isOverlay = isOverlay,
                         onUserClick = onUserClick,
                         onAtUser = onAtUser,
@@ -237,7 +192,7 @@ fun LiveChatSection(
                 AppSurface(
                     onClick = {
                         scope.launch {
-                            followingLatest = true
+                            latestOnFollowingChange(true)
                             autoScrolling = true
                             try { listState.animateScrollToItem(latestMessages.lastIndex.coerceAtLeast(0)) }
                             finally { autoScrolling = false }
@@ -270,25 +225,15 @@ fun LiveChatSection(
             }
         }
 
-        // 2. 底部输入栏
-        if (showInputBar) {
-            LiveChatInputBar(
-                isOverlay = isOverlay,
-                isDanmakuEnabled = isDanmakuEnabled,
-                onToggleDanmaku = onToggleDanmaku,
-                onLike = onLike,
-                onOpenEmote = onOpenEmote,
-                onOpenSend = onOpenSend
-            )
-        }
     }
 }
-
 
 
 @Composable
 private fun ChatMessageItem(
     item: LiveDanmakuItem,
+    canInteract: Boolean,
+    isAnchor: Boolean,
     isOverlay: Boolean,
     onUserClick: (Long) -> Unit,
     onAtUser: (LiveDanmakuItem) -> Unit,
@@ -296,14 +241,22 @@ private fun ChatMessageItem(
     onReportDanmaku: (LiveDanmakuItem) -> Unit,
     onMenuVisibilityChange: (Boolean) -> Unit = {}
 ) {
+    val context = LocalContext.current
     if (item.isSuperChat) {
-        SuperChatMessageItem(item = item, isOverlay = isOverlay)
+        LiveSuperChatCard(
+            item = item, persistent = true, onExpired = {},
+            onMenuVisibilityChange = onMenuVisibilityChange,
+            onUserClick = { onUserClick(item.uid) },
+            onReport = {
+                if (canInteract) onReportDanmaku(item)
+                else Toast.makeText(context, "账号未登录", Toast.LENGTH_SHORT).show()
+            },
+        )
         return
     }
     if (!shouldRenderLiveDanmaku(item.text, item.emoticonUrl)) {
         return
     }
-    val context = LocalContext.current
     val palette = rememberLiveChromePalette()
     var showMenu by remember { mutableStateOf(false) }
     LaunchedEffect(showMenu) {
@@ -314,13 +267,13 @@ private fun ChatMessageItem(
     val colorScheme = MaterialTheme.colorScheme
     val bubbleBackground = when {
         isOverlay -> LiveStatusPalette.MediaScrim.copy(alpha = tokens.backgroundAlpha)
-        else -> colorScheme.surfaceContainerHigh
+        else -> Color.White.copy(alpha = 0.08f)
     }
 
     // Match video/dynamic comments: semantic theme colors keep contrast consistent in both
     // light and dark themes instead of relying on a separate hardcoded live palette.
-    val readableText = colorScheme.onSurface
-    val readableSecondaryText = colorScheme.onSurfaceVariant
+    val readableText = Color.White
+    val readableSecondaryText = Color.White.copy(alpha = 0.6f)
     val usernameColor = if (item.isAdmin) {
         if (isOverlay) LiveStatusPalette.AdminName else colorScheme.tertiary
     } else if (item.isSelf) {
@@ -328,7 +281,7 @@ private fun ChatMessageItem(
     } else if (isOverlay) {
         LiveStatusPalette.MediaContent.copy(alpha = tokens.nameAlpha)
     } else {
-        readableText.copy(alpha = tokens.nameAlpha.coerceAtLeast(0.9f))
+        readableText.copy(alpha = tokens.nameAlpha)
     }
     val bodyColor = if (isOverlay) LiveStatusPalette.MediaContent else readableText
     val latestOnUserClick by rememberUpdatedState(onUserClick)
@@ -336,105 +289,99 @@ private fun ChatMessageItem(
     val replyColor = if (isOverlay) LiveStatusPalette.Reply else readableSecondaryText
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val bubbleWidthFraction = if (isOverlay) 0.90f else 0.86f
+        val bubbleWidthFraction = 1f
         val bubbleModifier = Modifier
             .widthIn(max = maxWidth * bubbleWidthFraction)
             .clip(bubbleShape)
+            .liveSecondaryClick(if (item.uid > 0L) ({ showMenu = true }) else null)
             .background(bubbleBackground)
             .padding(horizontal = tokens.horizontalPaddingDp.dp, vertical = tokens.verticalPaddingDp.dp)
 
         Box(modifier = bubbleModifier) {
-            if (shouldRenderLiveDanmakuImageEmoticon(item.emoticonUrl)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppText(
-                        text = "${item.uname.ifBlank { "直播观众" }}: ",
-                        color = usernameColor,
-                        fontSize = tokens.fontSizeSp.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable { showMenu = true },
-                    )
-                    AsyncImage(
-                        model = item.emoticonUrl,
-                        contentDescription = item.text,
-                        modifier = Modifier.size(AppSpacingTokens.DoubleExtraLarge)
-                    )
+            val density = LocalDensity.current
+            val resources = remember(emoticonMap, item.inlineEmotes) {
+                buildMap {
+                    emoticonMap.forEach { (key, url) ->
+                        put(if (key.startsWith("[")) key else "[$key]", LiveMessageEmote(url))
+                    }
+                    putAll(item.inlineEmotes)
                 }
-            } else {
-                val annotatedText = remember(item.text, item.uname, item.replyToName, item.replyToUid, emoticonMap, replyColor, usernameColor) {
-                    val builder = androidx.compose.ui.text.AnnotatedString.Builder()
-                    builder.pushStyle(
-                        androidx.compose.ui.text.SpanStyle(
-                            color = usernameColor,
-                            fontSize = tokens.fontSizeSp.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    )
-                    builder.append("${item.uname.ifBlank { "直播观众" }}: ")
-                    builder.pop()
-                    if (item.uid > 0L || item.uname.isNotBlank()) {
-                        builder.addLink(
-                            androidx.compose.ui.text.LinkAnnotation.Clickable(
-                                tag = "sender", linkInteractionListener = { showMenu = true },
-                            ), 0, builder.length,
-                        )
+            }
+            val direct = item.emoticon ?: item.emoticonUrl?.takeIf { it.isNotBlank() && item.inlineEmotes[item.text] == null }?.let { LiveMessageEmote(it) }
+            val segments = remember(item.text, resources) { splitLiveMessageEmotes(item.text, resources.keys) }
+            val medal = remember(item.medal, item.medalName, item.medalLevel, item.medalColor) { resolveLiveMessageMedal(item) }
+            val medalSize = medal?.let { rememberLiveMedalSize(it) }
+            val anchorColor = MaterialTheme.colorScheme.primary
+            val annotatedText = remember(item, segments, usernameColor, replyColor, direct, isAnchor, anchorColor, medal) {
+                androidx.compose.ui.text.buildAnnotatedString {
+                    if (isAnchor) {
+                        pushStyle(androidx.compose.ui.text.SpanStyle(color = anchorColor, fontWeight = FontWeight.Medium))
+                        append("主播 ")
+                        pop()
+                    }
+                    if (medal != null) appendInlineContent("sender-medal", "${medal.name} ${medal.level} ")
+                    with(androidx.compose.ui.text.SpanStyle(color = usernameColor, fontWeight = FontWeight.Medium)) {
+                        pushStyle(this)
+                        val start = length
+                        append("${item.uname.ifBlank { "直播观众" }}: ")
+                        pop()
+                        addLink(androidx.compose.ui.text.LinkAnnotation.Clickable(
+                            tag = "sender", linkInteractionListener = { showMenu = true },
+                        ), start, length)
                     }
                     if (item.replyToName.isNotBlank()) {
-                        val replyStart = builder.length
-                        builder.pushStyle(
-                            androidx.compose.ui.text.SpanStyle(
-                                color = replyColor,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = tokens.fontSizeSp.sp
-                            )
-                        )
-                        builder.append("@${item.replyToName} ")
-                        builder.pop()
-                        if (item.replyToUid > 0L) {
-                            builder.addLink(
-                                androidx.compose.ui.text.LinkAnnotation.Clickable(
-                                    tag = "reply", linkInteractionListener = { latestOnUserClick(item.replyToUid) },
-                                ), replyStart, builder.length,
-                            )
-                        }
+                        val start = length
+                        pushStyle(androidx.compose.ui.text.SpanStyle(color = replyColor))
+                        append("@${item.replyToName} ")
+                        pop()
+                        if (item.replyToUid > 0L) addLink(androidx.compose.ui.text.LinkAnnotation.Clickable(
+                            tag = "reply", linkInteractionListener = { latestOnUserClick(item.replyToUid) },
+                        ), start, length)
                     }
-                    builder.append(DanmakuEmoticonMapper.parse(item.text, emoticonMap))
-                    builder.toAnnotatedString()
-                }
-
-                val inlineContentMap = remember(item.text, emoticonMap) {
-                    val usedKeys = Regex("\\[(.*?)\\]").findAll(item.text).map { it.value }.toSet()
-                    emoticonMap.filterKeys { it in usedKeys }.mapValues { (_, url) ->
-                        androidx.compose.foundation.text.InlineTextContent(
-                            androidx.compose.ui.text.Placeholder(
-                                width = 1.35.em,
-                                height = 1.35.em,
-                                placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center
-                            )
-                        ) {
-                            AsyncImage(
-                                model = url,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
+                    if (direct != null) appendInlineContent("direct-emote", item.text)
+                    else segments.forEach { (text, emote) ->
+                        if (emote) appendInlineContent("emote:$text", text) else append(text)
                     }
                 }
-
-                androidx.compose.foundation.text.BasicText(
-                    text = annotatedText,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = tokens.fontSizeSp.sp,
-                        color = bodyColor,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    inlineContent = inlineContentMap
-                )
             }
+            val inlineContentMap = remember(resources, direct, density.density, density.fontScale, medal, medalSize) {
+                buildMap<String, androidx.compose.foundation.text.InlineTextContent> {
+                    fun addEmote(key: String, emote: LiveMessageEmote, standalone: Boolean) {
+                        // 独立房间表情使用像素尺寸，混排表情使用消息提供的逻辑尺寸。
+                        val width = if (standalone) (if (emote.official) emote.width else 162) / density.density else emote.width.toFloat()
+                        val height = if (standalone) (if (emote.official) emote.height else 162) / density.density else emote.height.toFloat()
+                        put(key, androidx.compose.foundation.text.InlineTextContent(
+                            androidx.compose.ui.text.Placeholder(
+                                width = (width / density.fontScale).sp,
+                                height = (height / density.fontScale).sp,
+                                placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
+                            )
+                        ) { AsyncImage(model = emote.url, contentDescription = null, modifier = Modifier.fillMaxSize()) })
+                    }
+                    resources.forEach { (key, emote) -> addEmote("emote:$key", emote, false) }
+                    if (direct != null) addEmote("direct-emote", direct, true)
+                    if (medal != null && medalSize != null) put("sender-medal", androidx.compose.foundation.text.InlineTextContent(
+                        androidx.compose.ui.text.Placeholder(
+                            width = ((medalSize.width.value + 4f) / density.fontScale).sp,
+                            height = (medalSize.height.value / density.fontScale).sp,
+                            placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.Center,
+                        )
+                    ) { Box(Modifier.fillMaxSize().padding(end = 4.dp), contentAlignment = Alignment.CenterStart) { LiveMedalBadge(medal) } })
+                }
+            }
+            androidx.compose.foundation.text.BasicText(
+                text = annotatedText,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontSize = tokens.fontSizeSp.sp, color = bodyColor, fontWeight = FontWeight.Normal,
+                ),
+                inlineContent = inlineContentMap,
+            )
         }
 
         LiveDanmakuUserMenu(
             expanded = showMenu,
             item = item,
+            canInteract = canInteract,
             onDismiss = { showMenu = false },
             onCopyInfo = {
                 copyLiveDanmakuInfo(context, item)
@@ -450,6 +397,7 @@ private fun ChatMessageItem(
 @Composable
 private fun LiveDanmakuUserMenu(
     expanded: Boolean,
+    canInteract: Boolean,
     item: LiveDanmakuItem,
     onDismiss: () -> Unit,
     onCopyInfo: () -> Unit,
@@ -489,6 +437,7 @@ private fun LiveDanmakuUserMenu(
                 onUserClick(item.uid)
             }
         )
+        if (!canInteract) return@AppDropdownMenu
         AppDropdownMenuItem(
             text = { AppText("@TA") },
             enabled = item.uname.isNotBlank(),
@@ -524,114 +473,10 @@ private fun copyLiveDanmakuInfo(
     clipboard.setPrimaryClip(
         ClipData.newPlainText(
             "直播弹幕信息",
-            "uid=${item.uid}, uname=${item.uname}, text=${item.text}"
+            encodeLiveDanmakuInfo(item)
         )
     )
     Toast.makeText(context, "已复制弹幕信息", Toast.LENGTH_SHORT).show()
-}
-
-@Composable
-private fun SuperChatMessageItem(
-    item: LiveDanmakuItem,
-    isOverlay: Boolean
-) {
-    val bg = resolveLiveSuperChatColor(item.superChatBackgroundColor)
-    val badgeColors = com.android.purebilibili.feature.live.readableLiveBadgeColors(bg)
-    AppSurface(
-        color = badgeColors.containerColor,
-        shape = AppShapes.container(ContainerLevel.Card),
-        modifier = Modifier.fillMaxWidth(if (isOverlay) 0.72f else 0.82f)
-    ) {
-        Column(
-            modifier = Modifier.padding(
-                horizontal = AppSpacingTokens.Medium,
-                vertical = AppSpacingTokens.Small
-            )
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppText(
-                    text = item.uname.ifBlank { "醒目留言" },
-                    color = badgeColors.contentColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                if (item.superChatPrice.isNotBlank()) {
-                    AppSurface(
-                        shape = AppShapes.container(ContainerLevel.Pill),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh
-                    ) {
-                        AppText(
-                            text = item.superChatPrice,
-                            color = AppContentColors.primaryText(),
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(
-                                horizontal = AppSpacingTokens.Small,
-                                vertical = AppSpacingTokens.Micro
-                            )
-                        )
-                    }
-                }
-            }
-            if (item.text.isNotBlank()) {
-                Spacer(Modifier.height(AppSpacingTokens.ExtraSmall))
-                AppText(
-                    text = item.text,
-                    color = badgeColors.contentColor,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = if (isOverlay) 2 else 4,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-// [新增] 粉丝牌组件
-@Composable
-private fun MedalBadge(name: String, level: Int, colorInt: Int) {
-    val color = resolveLiveMedalColor(colorInt)
-    val badgeColors = com.android.purebilibili.feature.live.readableLiveBadgeColors(color)
-    val visualSpec = remember { resolveLiveMedalBadgeVisualSpec() }
-
-    AppSurface(
-        color = badgeColors.containerColor,
-        shape = AppShapes.container(ContainerLevel.Tag),
-        modifier = Modifier.padding(top = AppSpacingTokens.Micro)
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(
-                horizontal = AppSpacingTokens.ExtraSmall,
-                vertical = visualSpec.verticalPaddingDp.dp,
-            )
-        ) {
-            AppText(
-                text = name,
-                style = MaterialTheme.typography.labelSmall,
-                color = badgeColors.contentColor,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(Modifier.width(AppSpacingTokens.Micro))
-            // 简单的竖线分隔
-            Box(
-                Modifier
-                    .width(visualSpec.dividerWidthDp.dp)
-                    .height(AppSpacingTokens.Small)
-                    .background(badgeColors.contentColor)
-            )
-            Spacer(Modifier.width(AppSpacingTokens.Micro))
-            AppText(
-                text = "$level",
-                style = MaterialTheme.typography.labelSmall,
-                color = badgeColors.contentColor,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
 }
 
 // [新增] 用户等级组件
@@ -667,36 +512,55 @@ internal fun LiveChatInputBar(
     onOpenSend: () -> Unit,
     selectedPage: Int = 0,
     showPageIndicator: Boolean = false,
+    canLike: Boolean = true,
+    onLikeUnavailable: () -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
     val palette = rememberLiveChromePalette()
     val foreground = if (isOverlay) LiveStatusPalette.MediaContent else palette.primaryText
     AppSurface(
+        modifier = modifier,
         color = if (isOverlay) foreground.copy(alpha = 0.10f) else palette.surfaceElevated,
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
-        border = androidx.compose.foundation.BorderStroke(0.5.dp, foreground.copy(alpha = 0.10f)),
+        border = null,
     ) {
         Box {
-        if (showPageIndicator) {
-            Row(Modifier.fillMaxWidth().height(2.dp)) {
-                repeat(2) { page ->
-                    Box(Modifier.weight(1f).fillMaxHeight().background(
-                        if (page == selectedPage) AppContentColors.accent() else Color.Transparent
-                    ))
+        androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(20.dp)) {
+            val radius = 20.dp.toPx()
+            val outline = androidx.compose.ui.graphics.Path().apply {
+                moveTo(0f, radius)
+                quadraticBezierTo(0f, 0f, radius, 0f)
+                lineTo(size.width - radius, 0f)
+                quadraticBezierTo(size.width, 0f, size.width, radius)
+            }
+            drawPath(outline, foreground.copy(alpha = 0.1f), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+            if (showPageIndicator) {
+                val indicator = androidx.compose.ui.graphics.Path().apply {
+                    if (selectedPage == 0) {
+                        moveTo(0f, radius)
+                        quadraticBezierTo(0f, 0f, radius, 0f)
+                        lineTo(size.width / 2, 0f)
+                    } else {
+                        moveTo(size.width / 2, 0f)
+                        lineTo(size.width - radius, 0f)
+                        quadraticBezierTo(size.width, 0f, size.width, radius)
+                    }
                 }
+                drawPath(indicator, foreground.copy(alpha = 0.38f), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
             }
         }
         Row(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().height(LIVE_INPUT_HEIGHT_DP.dp)
                 .clickable(onClick = onOpenSend)
-                .padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 25.dp),
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             AppIconButton(onClick = onToggleDanmaku, modifier = Modifier.size(34.dp)) {
-                AppIcon(Icons.Filled.ChatBubble, if (isDanmakuEnabled) "关闭弹幕" else "开启弹幕", tint = foreground.copy(alpha = if (isDanmakuEnabled) 1f else 0.45f))
+                LiveDanmakuControlIcon(enabled = isDanmakuEnabled, tint = foreground, modifier = Modifier.size(22.dp))
             }
-            AppText("发送弹幕", modifier = Modifier.weight(1f), color = foreground.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
-            LiveLikeButton(tint = foreground, onLike = onLike, modifier = Modifier.size(34.dp))
+            AppText("发送弹幕", modifier = Modifier.weight(1f).padding(top = 6.dp), color = foreground.copy(alpha = 0.8f), style = MaterialTheme.typography.bodyMedium)
+            LiveLikeButton(tint = foreground, onLike = onLike, modifier = Modifier.size(34.dp), canLike = canLike, onUnavailable = onLikeUnavailable)
             AppIconButton(onClick = onOpenEmote, modifier = Modifier.size(34.dp)) {
                 AppIcon(Icons.Outlined.EmojiEmotions, "表情", tint = foreground)
             }
@@ -711,12 +575,15 @@ internal fun LiveChatInputBar(
 internal fun LiveLikeButton(
     tint: Color,
     onLike: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    canLike: Boolean = true,
+    onUnavailable: () -> Unit = {},
 ) {
     var likeCount by remember { mutableIntStateOf(0) }
     var flushJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
     val latestOnLike by rememberUpdatedState(onLike)
+    val latestCanLike by rememberUpdatedState(canLike)
     val pressSource = remember { MutableInteractionSource() }
     var handledPress by remember { mutableStateOf(false) }
     val palette = rememberLiveChromePalette()
@@ -730,12 +597,14 @@ internal fun LiveLikeButton(
         pressSource.interactions.collect { interaction ->
             when (interaction) {
                 is androidx.compose.foundation.interaction.PressInteraction.Press -> {
+                    if (!latestCanLike) return@collect
                     handledPress = true
                     flushJob?.cancel()
                     likeCount += 1
                 }
                 is androidx.compose.foundation.interaction.PressInteraction.Release,
                 is androidx.compose.foundation.interaction.PressInteraction.Cancel -> {
+                    if (!latestCanLike) return@collect
                     flushJob = scope.launch {
                         delay(800)
                         val count = likeCount
@@ -751,7 +620,8 @@ internal fun LiveLikeButton(
 
     Box(modifier = modifier) {
         AppIconButton(
-            onClick = {
+            onClick = likeClick@{
+                if (!canLike) { onUnavailable(); return@likeClick }
                 if (!handledPress) {
                     likeCount += 1
                     flushJob?.cancel()

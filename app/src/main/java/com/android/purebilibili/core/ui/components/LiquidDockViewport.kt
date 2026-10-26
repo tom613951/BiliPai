@@ -6,11 +6,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isSpecified
 import com.android.purebilibili.core.theme.AppUiStyle
@@ -20,6 +23,37 @@ import com.android.purebilibili.core.ui.ContainerLevel
 import com.android.purebilibili.core.ui.LocalAppThemeConfig
 import com.android.purebilibili.feature.home.components.resolveFloatingDockCaptureInsets
 import com.android.purebilibili.feature.home.components.FloatingBottomBarGeometryMode
+
+/** 长玻璃 dock 左右收住滚动内容，上下保留指示器放大、拉伸的采样余量。 */
+internal fun Modifier.clipLiquidDockScrollContent(
+    leadingInsetPx: () -> Float,
+    trailingInsetPx: () -> Float,
+    translationYPx: () -> Float,
+    verticalOverflowPx: Float,
+): Modifier = drawWithCache {
+    val path = Path()
+    onDrawWithContent {
+        val leading = leadingInsetPx().coerceIn(0f, size.width)
+        val trailing = trailingInsetPx().coerceIn(0f, size.width - leading)
+        val top = translationYPx()
+        val overflow = verticalOverflowPx.coerceAtLeast(0f)
+        val width = size.width - leading - trailing
+        if (width > 0f && size.height > 0f) {
+            val left = if (layoutDirection == LayoutDirection.Ltr) leading else trailing
+            val rightInset = if (layoutDirection == LayoutDirection.Ltr) trailing else leading
+            val radius = minOf(width, size.height) / 2f
+            path.rewind()
+            path.addRoundRect(RoundRect(
+                left = left,
+                top = top - overflow,
+                right = size.width - rightInset,
+                bottom = top + size.height + overflow,
+                cornerRadius = CornerRadius(radius),
+            ))
+            clipPath(path) { this@onDrawWithContent.drawContent() }
+        }
+    }
+}
 
 /**
  * Keep the visible dock viewport rounded for every chrome mode.
@@ -32,6 +66,8 @@ import com.android.purebilibili.feature.home.components.FloatingBottomBarGeometr
 internal fun Modifier.liquidDockViewport(
     verticalOverflow: Dp = Dp.Unspecified,
     horizontalOverflow: Dp = Dp.Unspecified,
+    // 仅由需要弹性拖拽的入口显式启用；其他原生视口保留既有圆角边界。
+    allowNativeOverflow: Boolean = false,
 ): Modifier {
     val uiStyle = LocalAppUiStyle.current
     val liquidGlassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
@@ -42,7 +78,7 @@ internal fun Modifier.liquidDockViewport(
     } else {
         CircleShape
     }
-    if (!liquidGlassEnabled || (verticalOverflow.isSpecified && verticalOverflow <= 0.dp)) {
+    if ((!liquidGlassEnabled && !allowNativeOverflow) || (verticalOverflow.isSpecified && verticalOverflow <= 0.dp)) {
         return this.clip(shape)
     }
     // Expand only the drawing clip, not the scroll layout or its pointer viewport.

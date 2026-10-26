@@ -1,22 +1,22 @@
 package com.android.purebilibili.core.ui.animation
 
-import androidx.compose.animation.core.FloatSpringSpec
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.animateTo
+import androidx.compose.animation.core.spring
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.MotionDurationScale
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -25,53 +25,53 @@ import kotlin.math.max
 
 val LocalLiquidIndicatorWobbleEnabled = compositionLocalOf { true }
 
-/** Landing recoil overlaps the final travel and shrink; manual movement keeps its own deformation. */
-internal class LiquidIndicatorWobble(initialPosition: Float) {
-    private val spring = FloatSpringSpec(dampingRatio = 0.65f, stiffness = 300f, visibilityThreshold = 0.001f)
+/** Interaction policy owns the impulse; Compose owns spring timing, cancellation and settling. */
+internal class LiquidIndicatorWobble(
+    initialPosition: Float,
+    private val scope: CoroutineScope,
+) {
     private var position = initialPosition
     private var peakSpeed = 0f
     private var distance = 0f
     private var armed = false
-    private var rate = 0f
     private var released = false
     private var landingConsumed = false
-    // The original velocity deformation remains in charge until it settles naturally.
+    private var worker: Job? = null
+    private var animation by mutableStateOf(AnimationState(0f))
     val velocityWeight: Float get() = 1f
-    var stretch = 0f
-        private set
-    var isSelectionMotion = false
+    val stretch: Float get() = animation.value
+    var isSelectionMotion by mutableStateOf(false)
         private set
 
-    /** A new target cancels the previous tail and arms exactly one landing response. */
+    private fun stop() {
+        worker?.cancel()
+        worker = null
+        animation = AnimationState(0f)
+        isSelectionMotion = false
+    }
+
     fun onSelectionChanged(preserveRelease: Boolean = false) {
-        // A delayed drag-selection acknowledgement must not replay the release recoil.
         if (preserveRelease && released) return
+        stop()
         released = false
         landingConsumed = false
         armed = true
         peakSpeed = max(peakSpeed, 1.5f)
-        stretch = 0f
-        rate = 0f
-        isSelectionMotion = false
     }
 
-    fun onInteractionStarted() {
-        reset(position)
-    }
+    fun onInteractionStarted() = reset(position)
 
-    /** Remember the release; settling the position and bloom remains the caller's responsibility. */
     fun onInteractionReleased(nextPosition: Float = position) {
         val pendingDistance = if (nextPosition.isFinite()) abs(nextPosition - position) else 0f
         if (!armed && distance + pendingDistance < 0.02f) return
+        stop()
         released = true
         landingConsumed = false
         armed = true
         peakSpeed = max(peakSpeed, pendingDistance * 60f)
-        stretch = 0f
-        rate = 0f
-        isSelectionMotion = false
     }
 
+    /** Samples describe real input time, independent of the system animation duration scale. */
     fun advance(
         nextPosition: Float,
         elapsedNanos: Long,
@@ -80,16 +80,11 @@ internal class LiquidIndicatorWobble(initialPosition: Float) {
         holdSelectionMotion: Boolean = false,
         landingMotion: Boolean = false,
     ): Boolean {
-        if (!nextPosition.isFinite()) {
-            reset(position)
+        if (!nextPosition.isFinite() || elapsedNanos > 500_000_000L) {
+            reset(if (nextPosition.isFinite()) nextPosition else position)
             return false
         }
         if (elapsedNanos <= 0L) return false
-        if (elapsedNanos > 500_000_000L) {
-            reset(nextPosition)
-            return false
-        }
-        val springNanos = elapsedNanos.coerceAtMost(50_000_000L)
         val delta = abs(nextPosition - position)
         position = nextPosition
         val moving = delta > 0.0001f
@@ -100,66 +95,54 @@ internal class LiquidIndicatorWobble(initialPosition: Float) {
             armed = armed || distance >= 0.02f
         }
         if (manualInteraction || !canSettle || (!landingMotion && (moving || holdSelectionMotion))) {
-            // New input cancels a playing tail. Pending travel still gets one response
-            // after its final landing; a stationary press alone must not replay it.
             if (!moving && isSelectionMotion) {
                 armed = false
                 distance = 0f
                 peakSpeed = 0f
             }
-            stretch = 0f
-            rate = 0f
-            isSelectionMotion = false
-            // No idle frame loop while waiting: input changes wake the worker again.
+            stop()
             return moving
         }
         if (armed) {
             armed = false
             distance = 0f
-            rate = recoilVelocity(peakSpeed)
             landingConsumed = true
+            val speed = peakSpeed
             peakSpeed = 0f
+            stop()
             isSelectionMotion = true
+            val current = AnimationState(
+                initialValue = 0f,
+                initialVelocity = -(1.8f + 0.5f * (1f - 2f / (exp(2f * speed / 3f) + 1f))),
+            )
+            animation = current
+            worker = scope.launch {
+                current.animateTo(0f, spring(dampingRatio = 0.65f, stiffness = 300f, visibilityThreshold = 0.001f))
+                animation = AnimationState(0f)
+                isSelectionMotion = false
+                released = false
+            }
         }
-        val initial = stretch
-        stretch = spring.getValueFromNanos(springNanos, initial, 0f, rate)
-        rate = spring.getVelocityFromNanos(springNanos, initial, 0f, rate)
-        val active = abs(stretch) > 0.001f || abs(rate) > 0.01f
-        if (!active) {
-            stretch = 0f
-            rate = 0f
-            isSelectionMotion = false
-            released = false
-        }
-        return active
+        return worker?.isActive == true
     }
 
-    private fun recoilVelocity(speed: Float): Float =
-        -(1.8f + 0.5f * (1f - 2f / (exp(2f * speed / 3f) + 1f)))
-
     fun reset(nextPosition: Float) {
+        stop()
         position = nextPosition
         peakSpeed = 0f
         distance = 0f
         armed = false
-        rate = 0f
         released = false
         landingConsumed = false
-        isSelectionMotion = false
-        stretch = 0f
     }
 }
 
 class LiquidIndicatorWobbleState internal constructor(val enabled: Boolean) : State<Float> {
-    private val stretch = mutableFloatStateOf(0f)
-    override val value: Float get() = stretch.floatValue
-    var isSelectionMotion by mutableStateOf(false)
-        internal set
-    var velocityWeight by mutableFloatStateOf(1f)
-        internal set
-    internal var floatValue: Float
-        get() = stretch.floatValue
-        set(value) { stretch.floatValue = value }
+    internal var source: () -> Float = { 0f }
+    internal var selectionMotion: () -> Boolean = { false }
+    override val value: Float get() = if (enabled) source() else 0f
+    val isSelectionMotion: Boolean get() = enabled && selectionMotion()
+    val velocityWeight: Float get() = 1f
 }
 
 private data class LiquidWobbleInput(
@@ -170,7 +153,7 @@ private data class LiquidWobbleInput(
     val selectionMotion: Boolean?,
 )
 
-/** One frame worker per indicator; new targets cancel the previous landing response. */
+/** Observe input changes only; the spring owns frame work and stops when it settles. */
 @Composable
 fun rememberLiquidIndicatorWobble(
     enabled: Boolean,
@@ -189,63 +172,42 @@ fun rememberLiquidIndicatorWobble(
     val motionEnabled = enabled && LocalLiquidIndicatorWobbleEnabled.current &&
         com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
         !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+    val scope = rememberCoroutineScope()
+    val wobble = remember(motionEnabled, geometryKey) { LiquidIndicatorWobble(position(), scope) }
     val result = remember(motionEnabled, geometryKey) { LiquidIndicatorWobbleState(motionEnabled) }
-    LaunchedEffect(result) {
+    // Frame reads are confined to the indicator consumer, including the official spring state.
+    result.source = { wobble.stretch.coerceIn(-0.18f, 0.18f) }
+    result.selectionMotion = { wobble.isSelectionMotion }
+    DisposableEffect(wobble) {
+        onDispose { wobble.reset(latestPosition.value()) }
+    }
+    LaunchedEffect(wobble) {
         if (!motionEnabled) return@LaunchedEffect
-        val wobble = LiquidIndicatorWobble(latestPosition.value())
         fun input() = LiquidWobbleInput(
             latestPosition.value(), latestCanSettle.value(), latestSelectionKey.value(),
             latestInteractionActive.value(), latestSelectionMotion.value(),
         )
-        coroutineScope {
-            var worker: Job? = null
-            // A layout may mount this state during an already active selection.
-            // Preserve the explicit start without animating an ordinary idle mount.
-            var observed = input().copy(selectionMotion = false, manual = false)
-            snapshotFlow { input() }.collect { next ->
-                if (next.position.isFinite() && next != observed) {
-                    val selectionChanged = next.selectionKey != observed.selectionKey
-                    val pressed = !observed.manual && next.manual
-                    val released = observed.manual && !next.manual
-                    val explicitTapStarted = next.selectionMotion == true && observed.selectionMotion != true
-                    if (pressed) {
-                        wobble.onInteractionStarted()
-                    } else if (released) {
-                        wobble.onInteractionReleased(next.position)
-                    } else if (!next.manual && (selectionChanged || explicitTapStarted)) {
-                        wobble.onSelectionChanged(preserveRelease = !explicitTapStarted)
-                    }
-                    result.isSelectionMotion = wobble.isSelectionMotion
-                    result.velocityWeight = wobble.velocityWeight
-                    // Clear old tails immediately on a new target, press or blocked phase.
-                    result.floatValue = if (next.manual || !next.canSettle) 0f
-                        else wobble.stretch.coerceIn(-0.18f, 0.18f)
-                    observed = next
-                    if (worker?.isActive != true) worker = launch {
-                        // Process the first delivered frame too; waiting for a second
-                        // frame added 16–33ms and could miss a short tap's travel entirely.
-                        var previous: Long? = null
-                        do {
-                            val now = withFrameNanos { it }
-                            val durationScale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor ?: 1f
-                            val current = input()
-                            val active = if (durationScale > 0f) {
-                                wobble.advance(
-                                    current.position, ((previous?.let { now - it } ?: 16_666_667L) / durationScale).toLong(),
-                                    current.canSettle, current.manual, current.selectionMotion == true,
-                                    landingMotion = current.canSettle,
-                                )
-                            } else {
-                                wobble.reset(current.position)
-                                false
-                            }
-                            result.isSelectionMotion = wobble.isSelectionMotion
-                            result.velocityWeight = wobble.velocityWeight
-                            result.floatValue = if (current.manual) 0f else wobble.stretch.coerceIn(-0.18f, 0.18f)
-                            previous = now
-                        } while (active)
-                    }
+        var observed = input().copy(selectionMotion = false, manual = false)
+        var previousNanos = System.nanoTime()
+        snapshotFlow { input() }.collect { next ->
+            if (next != observed) {
+                val now = System.nanoTime()
+                val selectionChanged = next.selectionKey != observed.selectionKey
+                val pressed = !observed.manual && next.manual
+                val released = observed.manual && !next.manual
+                val tapStarted = next.selectionMotion == true && observed.selectionMotion != true
+                if (pressed) wobble.onInteractionStarted()
+                else if (released) wobble.onInteractionReleased(next.position)
+                else if (!next.manual && (selectionChanged || tapStarted)) {
+                    wobble.onSelectionChanged(preserveRelease = !tapStarted)
                 }
+                // An idle interval is not a suspended animation: explicit new input still arms recoil.
+                val elapsed = if (selectionChanged || pressed || released || tapStarted) 16_666_667L
+                    else (now - previousNanos).coerceIn(1L, 50_000_000L)
+                wobble.advance(next.position, elapsed, next.canSettle, next.manual,
+                    next.selectionMotion == true, landingMotion = next.canSettle)
+                previousNanos = now
+                observed = next
             }
         }
     }

@@ -9,6 +9,51 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class LiveRealtimeMessagePolicyTest {
+    @Test
+    fun `super chat exposes modern lit medal without legacy duplication`() {
+        val action = resolveLiveRealtimeAction(json("""{
+            "cmd":"SUPER_CHAT_MESSAGE","data":{"id":10,"uid":42,"message":"内容","time":60,
+            "uinfo":{"medal":{"is_light":1,"name":"新勋章","level":9,"v2_medal_color_start":"#AABBCCFF"}},
+            "medal_info":{"medal_name":"旧勋章","medal_level":1},"user_info":{"uname":"用户"}}
+        }"""), nowEpochSeconds = 100L)
+        val item = assertIs<LiveRealtimeAction.EmitSuperChat>(action).item
+        assertEquals("新勋章", item.medal?.name)
+        assertEquals("新勋章", item.medalName)
+        assertEquals(9, item.medalLevel)
+        assertEquals(0xFFAABBCC.toInt(), item.medal?.backgroundColor)
+    }
+
+    @Test
+    fun `modern sender metadata overrides legacy identity and preserves message emotes`() {
+        val action = resolveLiveRealtimeAction(json("""
+            {"cmd":"DANMU_MSG","info":[
+              [0,1,25,16777215,0,0,0,0,0,0,0,0,0,
+                {"url":"https://official","width":180,"height":90,"emoticon_unique":"official_1"},0,
+                {"user":{"uid":42,"base":{"name":"当前用户"},"medal":{"is_light":1,"name":"粉丝牌","level":8,"v2_medal_color_start":"#123456"}},
+                 "extra":"{\"color\":123,\"mode\":5,\"emots\":{\"[加油]\":{\"url\":\"https://inline\",\"width\":30,\"height\":20}}}"}],
+              "文字[加油]",[7,"旧用户",0],[],[],0,0,0,0,{"ts":1,"ct":"sign"}]}
+        """), myMid = 42L)
+        val item = assertIs<LiveRealtimeAction.EmitChat>(action).item
+        assertEquals(42L, item.uid)
+        assertEquals("当前用户", item.uname)
+        assertTrue(item.isSelf)
+        assertEquals("粉丝牌", item.medalName)
+        assertEquals(8, item.medalLevel)
+        assertEquals(123, item.color)
+        assertEquals(5, item.mode)
+        assertEquals(180, item.emoticon?.width)
+        assertEquals(true, item.emoticon?.official)
+        assertEquals(30, item.inlineEmotes["[加油]"]?.width)
+    }
+
+    @Test
+    fun `online rank accepts real zero and ignores missing count`() {
+        assertEquals(0L, assertIs<LiveRealtimeAction.UpdateOnlineRankCount>(
+            resolveLiveRealtimeAction(json("""{"cmd":"ONLINE_RANK_COUNT","data":{"count":0}}"""))
+        ).count)
+        assertIs<LiveRealtimeAction.Ignore>(resolveLiveRealtimeAction(json("""{"cmd":"ONLINE_RANK_COUNT","data":{}}""")))
+    }
+
 
     @Test
     fun `playurl reload requests silent stream refresh`() {
@@ -116,7 +161,7 @@ class LiveRealtimeMessagePolicyTest {
     fun `super chat retains server deadline over conflicting duration`() {
         val action = resolveLiveRealtimeAction(
             json(
-                """{"cmd":"SUPER_CHAT_MESSAGE","data":{"id":7,"uid":42,"message":"测试","price":30,"start_time":1945,"end_time":"2005","time":300,"duration":60,"background_bottom_color":"#2A60B2","user_info":{"uname":"测试用户"}}}"""
+                """{"cmd":"SUPER_CHAT_MESSAGE","data":{"id":7,"uid":42,"message":"测试","price":30,"start_time":1945,"end_time":"2005","time":300,"duration":60,"background_bottom_color":"#2A60B2","background_color":"#EDF5FF","message_font_color":"#FFFFFF","user_info":{"uname":"测试用户","name_color":"#222222","face":"https://example.com/face.jpg"}}}"""
             ),
             nowEpochSeconds = 2_000L,
         )
@@ -126,6 +171,10 @@ class LiveRealtimeMessagePolicyTest {
         assertEquals(5, remainingLiveSuperChatSeconds(item.superChatEndTime, 2_000L))
         assertEquals(2, remainingLiveSuperChatSeconds(item.superChatEndTime, 2_003L))
         assertEquals(0xFF2A60B2.toInt(), item.superChatBackgroundColor)
+        assertEquals(0xFFEDF5FF.toInt(), item.superChatHeaderColor)
+        assertEquals(0xFFFFFFFF.toInt(), item.superChatMessageColor)
+        assertEquals(0xFF222222.toInt(), item.superChatNameColor)
+        assertEquals("https://example.com/face.jpg", item.superChatFace)
     }
 
     @Test

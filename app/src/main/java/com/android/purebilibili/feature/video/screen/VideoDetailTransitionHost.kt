@@ -343,13 +343,13 @@ internal fun VideoDetailRouteSheetHost(
             }
             .graphicsLayer {
                 val frame = frameProvider()
-                scaleX = frame.scale
-                scaleY = frame.scale
-                translationY = with(density) {
+                scaleX = if (isFullscreenMode) 1f else frame.scale
+                scaleY = if (isFullscreenMode) 1f else frame.scale
+                translationY = if (isFullscreenMode) 0f else with(density) {
                     frame.translationYDp.dp.toPx()
                 }
                 transformOrigin = TransformOrigin(0.5f, 0f)
-                clip = motion.enabled && frame.cornerDp > 0.01f
+                clip = !isFullscreenMode && motion.enabled && frame.cornerDp > 0.01f
                 shape = RoundedCornerShape(frame.cornerDp.dp)
             }
             .drawBehind {

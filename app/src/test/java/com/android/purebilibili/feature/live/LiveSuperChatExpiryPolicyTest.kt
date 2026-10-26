@@ -69,14 +69,14 @@ class LiveSuperChatExpiryPolicyTest {
     }
 
     @Test
-    fun flashExpiresAtServerDeadlineOrOriginalThirtySecondCap() {
+    fun flashExpiresAtServerDeadlineOrOriginalTenSecondCap() {
         val shortDeadline = resolveLiveSuperChatFlashEndTime(endTime = 2_005L, receivedAt = 2_000L)
         assertEquals(2_005L, shortDeadline)
         assertEquals(2, remainingLiveSuperChatSeconds(shortDeadline, 2_003L))
         val cappedDeadline = resolveLiveSuperChatFlashEndTime(endTime = 2_300L, receivedAt = 2_000L)
-        assertEquals(2_030L, cappedDeadline)
-        assertEquals(27, remainingLiveSuperChatSeconds(cappedDeadline, 2_003L))
-        assertTrue(shouldExpireLiveSuperChat(cappedDeadline, 2_030L))
+        assertEquals(2_010L, cappedDeadline)
+        assertEquals(7, remainingLiveSuperChatSeconds(cappedDeadline, 2_003L))
+        assertTrue(shouldExpireLiveSuperChat(cappedDeadline, 2_010L))
         assertTrue(shouldExpireLiveSuperChat(resolveLiveSuperChatFlashEndTime(1_999L, 2_000L), 2_000L))
     }
 

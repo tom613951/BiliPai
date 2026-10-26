@@ -46,6 +46,7 @@ internal sealed interface DynamicOpusLinkCardAction {
     data class OpenLive(val roomId: Long) : DynamicOpusLinkCardAction
     data class OpenUser(val mid: Long) : DynamicOpusLinkCardAction
     data class OpenBangumi(val seasonId: Long, val epId: Long) : DynamicOpusLinkCardAction
+    data class OpenMatch(val contestId: Long) : DynamicOpusLinkCardAction
     data class OpenExternalUrl(val url: String) : DynamicOpusLinkCardAction
     data object None : DynamicOpusLinkCardAction
 }
@@ -337,6 +338,7 @@ internal fun resolveDynamicOpusLinkCardAction(card: OpusLinkCard): DynamicOpusLi
             seasonId = 0L,
             epId = target.epId
         )
+        is BilibiliNavigationTarget.Match -> DynamicOpusLinkCardAction.OpenMatch(target.contestId)
         is BilibiliNavigationTarget.Music,
         is BilibiliNavigationTarget.Search,
         is BilibiliNavigationTarget.PopularFeed,

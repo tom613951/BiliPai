@@ -1,4 +1,5 @@
 <resources>
+    <string name="mini_player_notification_channel">小窗播放</string>
     <string name="app_name">BiliPai</string>
 
     <string name="common_back">返回</string>
@@ -319,7 +320,7 @@
     <string name="animation_section_maid">蓝雪女仆</string>
     <string name="animation_maid_summary">关闭后隐藏女仆动画和静态图</string>
     <string name="animation_card_entrance_summary">打开首页时卡片依次淡入</string>
-    <string name="animation_card_transition_summary">封面和标题平滑过渡到详情页</string>
+    <string name="animation_card_transition_summary">封面和标题平滑过渡到详情页；关闭后使用全局页面动画</string>
     <string name="animation_related_transition_on">点开相关推荐时，卡片展开为视频页</string>
     <string name="animation_related_transition_off">点开相关推荐时，使用普通页面动画</string>
     <string name="animation_live_transition_summary">过渡时保留正在播放的画面</string>
@@ -332,6 +333,10 @@
     <string name="animation_transition_blur_summary">转场更有层次感；关闭可省电</string>
     <string name="animation_back_title">页面切换动画</string>
     <string name="animation_back_summary">页面进入与返回共用的动画样式</string>
+    <string name="animation_settings_container_title">设置容器动画</string>
+    <string name="animation_settings_container_summary">设置页入口的进入与返回动画</string>
+    <string name="animation_settings_container_morph">容器形变</string>
+    <string name="animation_settings_container_default">默认导航</string>
     <string name="animation_back_preview_title">返回预览幅度</string>
     <string name="animation_back_preview_summary">调整滑动返回时的预览幅度</string>
     <string name="animation_back_blur_on">滑动返回时，模糊后方页面</string>
@@ -352,7 +357,7 @@
     <string name="animation_glass_share_title">分享液态玻璃设置</string>
     <string name="animation_glass_share_failed">无法打开系统分享</string>
     <string name="animation_glass_export_failed">液态玻璃设置导出失败</string>
-    <string name="animation_skeleton_summary">加载时，占位卡片轻轻明暗变化</string>
+    <string name="animation_skeleton_summary">加载时，柔和光带扫过占位卡片；关闭后显示静态占位</string>
     <string name="animation_header_blur_summary">模糊顶栏背后的内容，不含折射和光效</string>
     <string name="animation_progressive_blur_summary">顶栏模糊随滚动渐变（需 Android 13+）</string>
     <string name="animation_progressive_fade_summary">状态栏到顶栏用纯色渐变过渡，比模糊更省电</string>
@@ -384,10 +389,10 @@
     <string name="animation_title_video_speed">视频转场速度</string>
     <string name="animation_title_skeleton">加载占位动画</string>
     <string name="animation_title_header_blur">顶部栏磨砂</string>
-    <string name="animation_title_progressive_blur">顶栏渐变模糊</string>
+    <string name="animation_title_progressive_blur">顶栏渐进模糊</string>
     <string name="animation_title_progressive_fade">顶栏纯色渐变</string>
     <string name="animation_title_bottom_blur">底栏磨砂</string>
-    <string name="preview_title_top_blur">顶栏渐变模糊</string>
+    <string name="preview_title_top_blur">顶栏渐进模糊</string>
     <string name="preview_title_image_page">图片立体翻页</string>
     <string name="preview_title_long_press">长按临时加速</string>
     <string name="preview_title_card_entrance">首页卡片淡入</string>
@@ -506,7 +511,6 @@
     <string name="settings_search_history_clear_all">清空全部</string>
     <string name="settings_search_history_empty">暂无搜索历史，搜索设置功能后会显示在这里</string>
     <string name="settings_search_history_delete">删除搜索历史：%1$s</string>
-    <string name="settings_search_load_more">加载更多</string>
     <string name="settings_search_legacy_001_title">界面与主题</string>
     <string name="settings_search_legacy_001_summary">界面风格、颜色、字体和启动画面</string>
     <string name="settings_search_legacy_002_title">首页与推荐</string>
@@ -921,4 +925,5 @@
     <string name="appearance_home_card_ratio_bilipai_label">16:10（BiliPai 默认）</string>
     <string name="animation_indicator_wobble_title">液态玻璃指示器甩尾</string>
     <string name="animation_indicator_wobble_summary">点按切换与拖动松手时追加形变回弹，仅作用于液态玻璃指示器；关闭后保留原有位移和按压反馈</string>
+    <string name="animation_settings_container_blur_summary">容器形变进入与返回时，实时模糊背后的设置页；需 Android 12 及以上</string>
 </resources>

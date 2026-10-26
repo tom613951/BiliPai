@@ -70,6 +70,7 @@ private fun resolveIosSettingsEntryTint(
     SettingsSearchTarget.IMAGE_SAVE_PATH -> iOSTeal
     SettingsSearchTarget.CLEAR_CACHE -> iOSBlue
     SettingsSearchTarget.PLUGINS -> iOSPurple
+    SettingsSearchTarget.NEARBY_HANDOFF -> iOSTeal
     SettingsSearchTarget.EXPORT_LOGS -> iOSTeal
     SettingsSearchTarget.OPEN_SOURCE_LICENSES -> iOSOrange
     SettingsSearchTarget.OPEN_SOURCE_HOME -> iOSPurple

@@ -21,6 +21,8 @@ class InteractiveHighlight(
     val position: (size: Size, offset: Offset) -> Offset = { _, offset -> offset },
     /** A dock can use its existing press spring for drag, tap and pager feedback. */
     val pressProgressProvider: (() -> Float)? = null,
+    /** Optional motion light, combined with the pointer light without replacing its lifetime. */
+    val motionProgressProvider: (() -> Float)? = null,
 ) {
 
     private val pressProgressAnimationSpec = interactiveHighlightPressSpec()
@@ -63,7 +65,10 @@ class InteractiveHighlight(
         clipPath(pill) {
             highlight.draw(
                 this,
-                pressProgressProvider?.invoke() ?: pressProgressAnimation.value,
+                maxOf(
+                    pressProgressProvider?.invoke() ?: pressProgressAnimation.value,
+                    motionProgressProvider?.invoke() ?: 0f,
+                ),
                 drawPositionProvider?.invoke(size) ?: position(size, positionAnimation.value),
             )
         }

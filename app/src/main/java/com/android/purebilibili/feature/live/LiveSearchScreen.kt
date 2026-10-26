@@ -3,6 +3,9 @@ package com.android.purebilibili.feature.live
 import com.android.purebilibili.core.ui.components.appCountedTabOption
 import com.android.purebilibili.core.ui.AppContentColors
 
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
@@ -31,6 +34,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.android.purebilibili.core.ui.*
 import com.android.purebilibili.core.ui.components.*
@@ -58,11 +62,11 @@ fun LiveSearchScreen(
     val focusRequester = remember { FocusRequester() }
     val pager = rememberPagerState(pageCount = { 2 })
     val liveGrid = rememberLazyGridState()
-    val userList = androidx.compose.foundation.lazy.rememberLazyListState()
+    val userList = rememberLazyGridState()
     val chrome = rememberAppTopChromePolicy()
     val spec = resolveLiveVisualSpec(chrome.tabPresentation)
     val window = LocalWindowSizeClass.current
-    val columns = resolveLiveBiliPaiGridColumns(minOf(window.widthDp.value.toInt(), spec.maxContentWidthDp), window.isTablet)
+    val columns = resolveLiveBiliPaiGridColumns(window.widthDp.value.toInt(), window.isTablet)
     var coverToSave by remember { mutableStateOf<LiveRoomCardUiModel?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var keyword by rememberSaveable { mutableStateOf("") }
@@ -196,27 +200,31 @@ fun LiveSearchScreen(
             Column(Modifier.statusBarsPadding()) {
                 Row(
                     modifier = Modifier
-                        .responsiveContentWidth(maxWidth = spec.maxContentWidthDp.dp)
+
                         .fillMaxWidth()
                         .padding(horizontal = spec.homeMetrics.safeSpaceDp.dp, vertical = AppSpacingTokens.ExtraSmall),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AppIconButton(onClick = onBack) { AppIcon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
-                    AppOutlinedTextField(
+                    BasicTextField(
                         value = query,
                         onValueChange = { if (it.isEmpty()) clear() else query = it },
-                        modifier = Modifier.weight(1f),
-                        placeholderText = "搜索房间或主播",
+                        modifier = Modifier.weight(1f).focusRequester(focusRequester),
                         singleLine = true,
-                        focusRequester = focusRequester,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = AppContentColors.primaryText()),
+                        cursorBrush = SolidColor(AppContentColors.accent()),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(onSearch = { submit() }),
-                        trailingIcon = {
-                            AppIconButton(onClick = { if (query.isEmpty()) onBack() else clear() }) {
-                                AppIcon(Icons.Outlined.Close, "清空")
+                        decorationBox = { input ->
+                            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.CenterStart) {
+                                if (query.isEmpty()) AppText("搜索房间或主播", color = AppContentColors.secondaryText())
+                                input()
                             }
                         },
                     )
+                    AppIconButton(onClick = { if (query.isEmpty()) onBack() else { clear(); focusRequester.requestFocus(); keyboard?.show() } }) {
+                        AppIcon(Icons.Outlined.Close, "清空")
+                    }
                     AppIconButton(onClick = { submit() }, enabled = query.isNotBlank()) {
                         AppIcon(Icons.Outlined.Search, "搜索")
                     }
@@ -257,38 +265,39 @@ fun LiveSearchScreen(
                         page == 0 && rooms.isEmpty() -> LiveSearchState(liveError ?: "暂无相关直播间", onRetry = { loadRooms(true) })
                         page == 1 && users.isEmpty() -> LiveSearchState(userError ?: "暂无相关主播", onRetry = { loadUsers(true) })
                         page == 0 -> LazyVerticalGrid(
-                            columns = GridCells.Fixed(columns),
+                            columns = LiveRoomGridCells(),
                             state = liveGrid,
-                            modifier = Modifier.responsiveContentWidth(maxWidth = spec.maxContentWidthDp.dp).fillMaxSize(),
+                            modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(horizontal = spec.homeMetrics.safeSpaceDp.dp, vertical = AppSpacingTokens.Small),
                             horizontalArrangement = Arrangement.spacedBy(spec.homeMetrics.cardSpaceDp.dp),
                             verticalArrangement = Arrangement.spacedBy(spec.homeMetrics.cardSpaceDp.dp),
                         ) {
                             gridItems(rooms, key = { it.roomid }) { room ->
                                 LiveRoomCard(
-                                    model = LiveRoomCardUiModel(room.roomid, room.title, room.cover.ifBlank { room.uface }, room.uname, room.online, room.area_v2_name),
+                                    model = LiveRoomCardUiModel(room.roomid, room.title, room.cover.ifBlank { room.uface }, room.uname, room.online, room.area_v2_name, room.watchedShow?.textLarge.orEmpty()),
                                     onClick = { onLiveClick(room.roomid, room.title, room.uname) },
                                     onLongPress = { coverToSave = LiveRoomCardUiModel(room.roomid, room.title, room.cover, room.uname, room.online, room.area_v2_name) },
+                                    searchResult = true,
                                 )
                             }
                             item(span = { GridItemSpan(maxLineSpan) }) {
                                 LiveHomeLoadMoreFooter(liveMoreLoading, rooms.size, liveHasMore, liveError) { loadRooms(false) }
                             }
                         }
-                        else -> LazyColumn(
+                        else -> LazyVerticalGrid(
+                            columns = LiveRoomGridCells(480.dp),
                             state = userList,
-                            modifier = Modifier.responsiveContentWidth(maxWidth = spec.maxContentWidthDp.dp).fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = spec.homeMetrics.safeSpaceDp.dp, vertical = AppSpacingTokens.Small),
-                            verticalArrangement = Arrangement.spacedBy(AppSpacingTokens.Medium),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(bottom = 100.dp),
+                            verticalArrangement = Arrangement.spacedBy(0.dp),
                         ) {
-                            items(users, key = { it.uid }) { user ->
+                            gridItems(users, key = { it.uid }) { user ->
                                 LiveSearchUserCard(
                                     user,
-                                    onClick = { if (user.roomid > 0) onLiveClick(user.roomid, "", user.uname) else onUserClick(user.uid) },
-                                    onAvatarClick = { onUserClick(user.uid) },
+                                    onClick = { if (user.roomid > 0) onLiveClick(user.roomid, "", user.uname) },
                                 )
                             }
-                            item { LiveHomeLoadMoreFooter(userMoreLoading, users.size, userHasMore, userError) { loadUsers(false) } }
+                            item(span = { GridItemSpan(maxLineSpan) }) { LiveHomeLoadMoreFooter(userMoreLoading, users.size, userHasMore, userError) { loadUsers(false) } }
                         }
                     }
                 }
@@ -307,24 +316,27 @@ private fun LiveSearchState(message: String, modifier: Modifier = Modifier.fillM
 }
 
 @Composable
-private fun LiveSearchUserCard(item: SearchLiveUserItem, onClick: () -> Unit, onAvatarClick: () -> Unit) {
+private fun LiveSearchUserCard(item: SearchLiveUserItem, onClick: () -> Unit) {
     AppSurface(onClick = onClick, color = MaterialTheme.colorScheme.background) {
-        Row(Modifier.fillMaxWidth().padding(AppSpacingTokens.Medium), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
                 model = item.uface,
-                contentDescription = "查看${item.uname}的空间",
+                contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.size(42.dp).clip(CircleShape).clickable(onClick = onAvatarClick),
+                modifier = Modifier.size(42.dp).clip(CircleShape),
             )
-            Spacer(Modifier.width(AppSpacingTokens.Medium))
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AppText(item.uname, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (item.liveStatus == 1 || item.isLive) AppText("直播中", color = AppContentColors.accent(), style = MaterialTheme.typography.labelSmall)
+                    AppText(item.uname, modifier = Modifier.weight(1f, fill = false), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (item.liveStatus == 1 || item.isLive) AsyncImage(
+                        model = "file:///android_asset/live/live.gif", contentDescription = "直播中",
+                        modifier = Modifier.padding(start = 10.dp).height(14.dp),
+                    )
                 }
                 AppText(
                     "分区：${item.areaName.ifBlank { item.tags.ifBlank { "未分类" } }} · 关注数：${item.attentions}",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
                     color = AppContentColors.secondaryText(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

@@ -5,13 +5,6 @@ import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -19,14 +12,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlin.math.PI
-import kotlin.math.sin
 
 import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.data.model.response.UgcSeason
@@ -148,71 +136,17 @@ fun CollectionRow(
     }
 }
 
-/** Three native-drawn equalizer bars: animated only while playback is active. */
+/** 合集与直播头像共用同一组音柱形态和节奏。 */
 @Composable
 private fun CollectionPlaybackIndicator(
     isPlaying: Boolean,
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    val progress = if (isPlaying) {
-        val transition = rememberInfiniteTransition(label = "collectionPlayback")
-        val animatedProgress by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 900, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart,
-            ),
-            label = "collectionPlaybackProgress",
-        )
-        animatedProgress
-    } else {
-        0f
-    }
-
-    Canvas(
-        modifier = modifier
-            .size(width = 14.dp, height = 16.dp)
-            .semantics {
-                contentDescription = if (isPlaying) "合集视频正在播放" else "合集视频已暂停"
-            },
-    ) {
-        drawCollectionPlaybackBars(
-            progress = progress,
-            isPlaying = isPlaying,
-            color = color,
-        )
-    }
-}
-
-private fun DrawScope.drawCollectionPlaybackBars(
-    progress: Float,
-    isPlaying: Boolean,
-    color: Color,
-) {
-    val barWidth = size.width * 0.18f
-    val gap = size.width * 0.14f
-    val minHeight = size.height * 0.28f
-    val availableHeight = size.height - minHeight
-    val pausedFractions = floatArrayOf(0.42f, 0.72f, 0.52f)
-
-    repeat(3) { index ->
-        val heightFraction = if (isPlaying) {
-            val phase = progress * 2f * PI.toFloat() + index * 2.1f
-            0.5f + 0.5f * sin(phase)
-        } else {
-            pausedFractions[index]
-        }
-        val barHeight = minHeight + availableHeight * heightFraction
-        drawRoundRect(
-            color = color,
-            topLeft = androidx.compose.ui.geometry.Offset(
-                x = size.width * 0.09f + index * (barWidth + gap),
-                y = size.height - barHeight,
-            ),
-            size = androidx.compose.ui.geometry.Size(barWidth, barHeight),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(barWidth / 2f),
-        )
-    }
+    com.android.purebilibili.core.ui.components.PlaybackBarsIndicator(
+        isPlaying = isPlaying,
+        color = color,
+        contentDescription = if (isPlaying) "合集视频正在播放" else "合集视频已暂停",
+        modifier = modifier,
+    )
 }

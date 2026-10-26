@@ -1,6 +1,8 @@
 // 文件路径: feature/dynamic/components/DynamicCard.kt
 package com.android.purebilibili.feature.dynamic.components
 
+import com.android.purebilibili.core.ui.components.appActionWithFeedback
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import coil3.network.NetworkHeaders
@@ -28,7 +30,7 @@ import com.android.purebilibili.core.ui.transition.LocalDynamicCommentPreviewVis
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import com.android.purebilibili.core.ui.components.appActionClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -131,6 +133,7 @@ data class DynamicCardNavigationActions(
     val onCourseClick: ((String, String) -> Unit)? = null,
     val onOpenLink: ((String) -> Unit)? = null,
     val onArticleClick: ((articleId: Long, title: String) -> Unit)? = null,
+    val onMatchClick: ((contestId: Long) -> Unit)? = null,
     val onDynamicDetailClick: ((dynamicId: String) -> Unit)? = null,
     val onUnfoldRelatedClick: ((dynamicId: String) -> Unit)? = null,
     val onPrimaryClickOverride: ((DynamicItem) -> Unit)? = null,
@@ -193,6 +196,7 @@ fun DynamicCardV2(
     val onOpenLink = actions.navigation.onOpenLink
     val onCourseClick = actions.navigation.onCourseClick
     val onArticleClick = actions.navigation.onArticleClick
+    val onMatchClick = actions.navigation.onMatchClick
     val onDynamicDetailClick = actions.navigation.onDynamicDetailClick
     val onUnfoldRelatedClick = actions.navigation.onUnfoldRelatedClick
     val onPrimaryClickOverride = actions.navigation.onPrimaryClickOverride
@@ -216,6 +220,17 @@ fun DynamicCardV2(
     val detailImageLayout = presentation.detailImageLayout
 
     if (!item.visible) return
+    var shareImagePreview by remember(item.id_str) { mutableStateOf(false) }
+    if (shareImagePreview) {
+        com.android.purebilibili.feature.share.ShareImagePreviewSheet(
+            document = com.android.purebilibili.feature.share.dynamicShareDocument(item),
+            loadDocument = {
+                val complete = DynamicRepository.getDynamicDetail(item.id_str).getOrThrow()
+                com.android.purebilibili.feature.share.dynamicShareDocument(complete)
+            },
+            onDismiss = { shareImagePreview = false },
+        )
+    }
     val openDynamicDetail = remember(item, onDynamicDetailClick) {
         onDynamicDetailClick?.let { callback ->
             { id: String ->
@@ -315,6 +330,15 @@ fun DynamicCardV2(
             )
             is DynamicOpusLinkCardAction.OpenUser -> onUserClick(action.mid)
             is DynamicOpusLinkCardAction.OpenBangumi -> onBangumiClick(action.seasonId, action.epId)
+            is DynamicOpusLinkCardAction.OpenMatch -> {
+                // 赛事卡优先走宿主注入的原生详情回调；动态宿主的 onOpenLink 也会把
+                // match 链接解析到原生页面，两者都未接线时退回原外链行为。
+                when {
+                    onMatchClick != null && action.contestId > 0L -> onMatchClick(action.contestId)
+                    onOpenLink != null -> onOpenLink(linkCard.jumpUrl)
+                    else -> openContentUrl(linkCard.jumpUrl)
+                }
+            }
             is DynamicOpusLinkCardAction.OpenExternalUrl -> openContentUrl(action.url)
             DynamicOpusLinkCardAction.None -> Unit
         }
@@ -398,7 +422,7 @@ fun DynamicCardV2(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(AppShapes.container(ContainerLevel.Chip))
-                            .clickable(enabled = selection?.can_modify == true) {
+                            .appActionClickable(enabled = selection?.can_modify == true) {
                                 showReplyInteractionDialog = null
                                 onManageAction(
                                     DynamicManageAction.SetReplySubject(
@@ -431,7 +455,7 @@ fun DynamicCardV2(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(AppShapes.container(ContainerLevel.Chip))
-                            .clickable(enabled = reply?.can_modify == true) {
+                            .appActionClickable(enabled = reply?.can_modify == true) {
                                 showReplyInteractionDialog = null
                                 onManageAction(
                                     DynamicManageAction.SetReplySubject(
@@ -484,7 +508,7 @@ fun DynamicCardV2(
                     top = if (isDetail) AppSpacingTokens.Medium else AppSpacingTokens.ExtraSmall,
                     bottom = if (isDetail) AppSpacingTokens.None else AppSpacingTokens.ExtraSmall,
                 )
-                .clickable(enabled = isPrimaryClickEnabled) {
+                .appActionClickable(enabled = isPrimaryClickEnabled) {
                     dispatchDynamicCardPrimaryClick(
                         item = item,
                         action = cardClickAction,
@@ -533,7 +557,7 @@ fun DynamicCardV2(
                     modifier = Modifier
                         .size(AppChromeSizeTokens.MinimumTouchTarget)
                         .semantics { contentDescription = "查看${author.name}的个人主页" }
-                        .clickable(enabled = authorClickMid != null || (ugcSeason != null && ugcSeason.id > 0L && onCollectionClick != null)) {
+                        .appActionClickable(enabled = authorClickMid != null || (ugcSeason != null && ugcSeason.id > 0L && onCollectionClick != null)) {
                             onAuthorHeaderClick()
                         },
                 )
@@ -551,7 +575,7 @@ fun DynamicCardV2(
                             onSurface = AppContentColors.primaryText(),
                             secondary = com.android.purebilibili.core.ui.components.userVipPink(),
                         ),
-                        modifier = Modifier.clickable(enabled = authorClickMid != null || (ugcSeason != null && ugcSeason.id > 0L && onCollectionClick != null)) {
+                        modifier = Modifier.appActionClickable(enabled = authorClickMid != null || (ugcSeason != null && ugcSeason.id > 0L && onCollectionClick != null)) {
                             onAuthorHeaderClick()
                         }
                     )
@@ -671,12 +695,12 @@ fun DynamicCardV2(
                                     )
                                 )
                             }
-                            if (onSaveDynamicClick != null) {
+                            run {
                                 add(
                                     AppWindowAction(
-                                        label = "保存动态",
+                                        label = "存图 / 分享图片",
                                         icon = historyIcon,
-                                        onClick = onSaveDynamicClick,
+                                        onClick = { shareImagePreview = true },
                                     )
                                 )
                             }
@@ -865,7 +889,7 @@ fun DynamicCardV2(
                     ),
                 )
                 val disputeClickModifier = if (dispute.jump_url.isNotBlank()) {
-                    Modifier.clickable {
+                    Modifier.appActionClickable {
                         val target = if (dispute.jump_url.startsWith("//")) {
                             "https:${dispute.jump_url}"
                         } else {
@@ -1040,7 +1064,7 @@ fun DynamicCardV2(
                                 modifier = Modifier
                                     .padding(top = AppSpacingTokens.ExtraSmall)
                                     .clip(AppShapes.container(ContainerLevel.Chip))
-                                    .clickable(onClick = { openDynamicDetail?.invoke(item.id_str) })
+                                    .appActionClickable(onClick = { openDynamicDetail?.invoke(item.id_str) })
                                     .padding(vertical = AppSpacingTokens.Micro),
                             )
                         }
@@ -1477,7 +1501,7 @@ fun DynamicCardV2(
                                             pageIndex = currentImageIndex,
                                         )
                                         .alpha(if (isImagePreviewSourceHidden(expandedImageSourceRect.value)) 0f else 1f)
-                                        .clickable(
+                                        .appActionClickable(
                                             interactionSource = null,
                                             indication = null,
                                             enabled = currentImageIndex in previewImages.indices,
@@ -1589,7 +1613,7 @@ fun DynamicCardV2(
                                     pageIndex = index,
                                 )
                                 .alpha(if (isImagePreviewSourceHidden(expandedImageSourceRect.value)) 0f else 1f)
-                                .clickable(interactionSource = null, indication = null) {
+                                .appActionClickable(interactionSource = null, indication = null) {
                                     selectedImageIndex = index
                                     val anchor = expandedImageSourceRect.value?.let {
                                         ImagePreviewSourceAnchor(
@@ -1978,7 +2002,7 @@ fun DynamicCardV2(
                         .fillMaxWidth()
                         .padding(horizontal = resolveDynamicCardContentPadding())
                         .clip(AppShapes.container(ContainerLevel.Chip))
-                        .clickable(enabled = onUnfoldRelatedClick != null) {
+                        .appActionClickable(enabled = onUnfoldRelatedClick != null) {
                             onUnfoldRelatedClick?.invoke(item.id_str)
                         }
                         .padding(vertical = AppSpacingTokens.Small),
@@ -2149,7 +2173,7 @@ internal fun DynamicNativeLinkCard(
     AppContentCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick),
+            .appActionClickable(enabled = enabled, onClick = onClick),
         contentPadding = PaddingValues(horizontal = AppSpacingTokens.ExtraSmall)
     ) {
         AppListItem(
@@ -2202,7 +2226,7 @@ internal fun DynamicNativeLinkCard(
                             .heightIn(min = AppChromeSizeTokens.MinimumTouchTarget)
                             .semantics { contentDescription = "操作：$label" }
                             .then(
-                                if (onActionClick != null) Modifier.clickable(
+                                if (onActionClick != null) Modifier.appActionClickable(
                                     enabled = actionEnabled,
                                     onClick = onActionClick,
                                 ) else Modifier
@@ -2234,7 +2258,7 @@ internal fun DynamicTopicLabel(
         Row(
             modifier = modifier
                 .clip(AppShapes.container(ContainerLevel.Chip))
-                .clickable(onClick = onClick),
+                .appActionClickable(onClick = onClick),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
@@ -2382,9 +2406,11 @@ fun RichTextContent(
         desc.text.ifBlank { richNodeText }.trim()
     }
     var showTextSelectionSheet by remember(copyText) { mutableStateOf(false) }
-    val haptic = LocalHapticFeedback.current
+    val haptic = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.LONG_PRESS)
 
     // 保留 BasicText 原生链接点击；长按打开全文选择面板，轻触空白才走转发回调。
+    val blankTapWithFeedback = appActionWithFeedback { onBlankTap?.invoke() }
+    val latestBlankTapWithFeedback by rememberUpdatedState(blankTapWithFeedback)
     val textGestureModifier = Modifier.pointerInput(annotatedText, onBlankTap, copyText) {
         detectTapWithSelectionFriendly(
             onLongPress = {
@@ -2393,7 +2419,7 @@ fun RichTextContent(
                     showTextSelectionSheet = true
                 }
             },
-            onTap = onBlankTap?.let { callback -> { _: Offset -> callback() } },
+            onTap = onBlankTap?.let { { _: Offset -> latestBlankTapWithFeedback() } },
         )
     }
     AppText(
@@ -2556,6 +2582,8 @@ private fun dispatchDynamicRichTextLinkPayload(
                                 true
                             } else false
                         }
+                        // 富文本里的赛事链接没有原生详情回调，统一落到末尾的 onLinkClick 兜底。
+                        is BilibiliNavigationTarget.Match -> false
                         is BilibiliNavigationTarget.Search -> {
                             if (onTopicKeywordClick != null) {
                                 onTopicKeywordClick(target.keyword)
@@ -2700,7 +2728,7 @@ fun DynamicCardCompact(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
+            .appActionClickable {
                 // 如果有视频则跳转视频
                 content?.major?.archive
                     ?.let(::resolveArchivePlayableBvid)
@@ -2720,7 +2748,7 @@ fun DynamicCardCompact(
                 modifier = Modifier
                     .size(AppChromeSizeTokens.MinimumTouchTarget)
                     .semantics { contentDescription = "查看${author.name}的个人主页" }
-                    .clickable(enabled = authorClickMid != null) {
+                    .appActionClickable(enabled = authorClickMid != null) {
                         authorClickMid?.let(onUserClick)
                     },
             )

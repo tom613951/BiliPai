@@ -24,6 +24,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
+import android.os.SystemClock
+import androidx.compose.ui.platform.LocalViewConfiguration
+import com.android.purebilibili.core.ui.AppActionHaptics
+import com.android.purebilibili.core.util.HapticType
+import com.android.purebilibili.core.util.rememberHapticFeedback
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +67,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.drawWithContent
@@ -121,6 +127,7 @@ internal val LocalFloatingBottomBarSelectedContentColor =
 
 val LocalFloatingBottomBarTabScale = staticCompositionLocalOf { { 1f } }
 
+private val LocalFloatingBottomBarActionFeedback = staticCompositionLocalOf<(() -> Unit) -> Unit> { { action -> action() } }
 private val LocalFloatingBottomBarTapFeedback = staticCompositionLocalOf<(Int) -> Unit> { { _ -> } }
 
 internal val LocalFloatingBottomBarIndicatorPosition = staticCompositionLocalOf { { 0f } }
@@ -415,6 +422,7 @@ fun RowScope.FloatingBottomBarItem(
     selected: Boolean = false,
     itemIndex: Int? = null,
     iconCrossScaleEnabled: Boolean = false,
+    enabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val scale = LocalFloatingBottomBarTabScale.current
@@ -424,6 +432,7 @@ fun RowScope.FloatingBottomBarItem(
     val indicatorStretchX = LocalFloatingBottomBarIndicatorStretchX.current
     val activeContent = LocalFloatingBottomBarActiveContent.current
     val tapFeedback = LocalFloatingBottomBarTapFeedback.current
+    val actionFeedback = LocalFloatingBottomBarActionFeedback.current
     val contentColor = LocalFloatingBottomBarContentColor.current
     val selectionScale = remember(itemIndex, indicatorPosition, iconCrossScaleEnabled) {
         {
@@ -446,12 +455,15 @@ fun RowScope.FloatingBottomBarItem(
     // paint to the screen. Keep them out of hit testing so a tap reaches the visible
     // item's destination lock and press feedback before it submits navigation.
     val clickModifier = if (activeContent) Modifier else Modifier.clickable(
+        enabled = enabled,
         interactionSource = null,
         indication = null,
         role = Role.Tab,
         onClick = {
-            if (!selected) itemIndex?.let(tapFeedback)
-            onClick()
+            actionFeedback {
+                if (!selected) itemIndex?.let(tapFeedback)
+                onClick()
+            }
         },
     )
     Column(
@@ -532,6 +544,7 @@ fun FloatingBottomBar(
     isPagerDraggingProvider: (() -> Boolean)? = null,
     pagerTargetPositionProvider: (() -> Float)? = null,
     isPagerNavigatingProvider: (() -> Boolean)? = null,
+    enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit
 ) {
     // Do not use the system night flag here: BiliPai supports an app-only dark theme.
@@ -674,6 +687,24 @@ fun FloatingBottomBar(
     val maxTabIndex = (safeTabsCount - 1).coerceAtLeast(0)
     val selectedIndexLatest = rememberUpdatedState(selectedIndex)
     val onSelectedLatest = rememberUpdatedState(onSelected)
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
+    val latestHaptic by rememberUpdatedState(haptic)
+    val interactionEnabled by rememberUpdatedState(enabled)
+    val hapticsEnabled by rememberUpdatedState(
+        isLiquidGlassMode && enabled && com.android.purebilibili.core.ui.LocalAppThemeConfig.current.hapticFeedbackEnabled
+    )
+    val touchSlopPx by rememberUpdatedState(LocalViewConfiguration.current.touchSlop)
+    val gestureHaptics = remember(safeTabsCount, isLiquidGlassMode) { LiquidDockHapticPolicy() }
+    val glassActionFeedback: (() -> Unit) -> Unit = { action ->
+        if (enabled) {
+            if (isLiquidGlassMode) {
+                AppActionHaptics.runAction {
+                    if (hapticsEnabled) latestHaptic(HapticType.LIGHT)
+                    action()
+                }
+            } else action()
+        }
+    }
     val onIndicatorPositionChangedLatest = rememberUpdatedState(onIndicatorPositionChanged)
     val onIndicatorDragStateChangedLatest = rememberUpdatedState(onIndicatorDragStateChanged)
     val dragScrollViewportWidthLatest = rememberUpdatedState(dragScrollViewportWidthPx)
@@ -707,6 +738,16 @@ fun FloatingBottomBar(
                     pressProgressProvider = if (isLiquidGlassMode) null else {
                         { holder.instance?.pressProgress ?: 0f }
                     },
+                    // 页面横滑没有 dock 指针事件，也需要为放大的指示器提供可折射亮光。
+                    // 在绘制阶段读取分页进度；点按仍由原来的触摸亮光负责。
+                    motionProgressProvider = if (isLiquidGlassMode) {
+                        {
+                            val animation = holder.instance
+                            if (externalPagerMotionEffectsLatest && glassTapTarget == null &&
+                                isScrollInProgressLatest() && animation?.isDragging == false
+                            ) animation.pressProgress else 0f
+                        }
+                    } else null,
                 )
             }
         } else {
@@ -720,6 +761,7 @@ fun FloatingBottomBar(
         isLtr,
         dragTrackingMode,
         isLiquidGlassMode,
+        gestureHaptics,
         interactiveHighlight,
     ) {
         DampedDragAnimation(
@@ -732,6 +774,7 @@ fun FloatingBottomBar(
             trackingMode = dragTrackingMode,
             useMiuixIndicatorMotion = isLiquidGlassMode,
             canDrag = { offset ->
+                if (!interactionEnabled) return@DampedDragAnimation false
                 val animation = holder.instance ?: return@DampedDragAnimation true
                 if (tabWidthPx == 0f) return@DampedDragAnimation false
 
@@ -752,7 +795,10 @@ fun FloatingBottomBar(
                 )
             },
             onDragStarted = { point ->
-                if (isLiquidGlassMode) indicatorHighlightFromDrag = true
+                if (isLiquidGlassMode) {
+                    gestureHaptics.start(targetValue, safeTabsCount, touchSlopPx / tabWidthPx.coerceAtLeast(1f))
+                    indicatorHighlightFromDrag = true
+                }
                 selectionTapFeedbackJob.generation++
                 selectionTapFeedbackJob.job?.cancel()
                 selectionTapFeedbackActive = false
@@ -783,8 +829,11 @@ fun FloatingBottomBar(
                     indicatorPosition = if (isLiquidGlassMode) value else targetIndex.toFloat(),
                 )
                 pagerFollowGate.previousExternalPosition = null
-                if (targetIndex != selected) {
-                    onSelectedLatest.value(targetIndex)
+                val hadGestureFeedback = gestureHaptics.finish()
+                if (targetIndex != selected && interactionEnabled) {
+                    if (isLiquidGlassMode && hadGestureFeedback) {
+                        AppActionHaptics.runWithoutAdditionalFeedback { onSelectedLatest.value(targetIndex) }
+                    } else onSelectedLatest.value(targetIndex)
                 }
                 onIndicatorDragStateChangedLatest.value?.invoke(false)
                 offsetJobHolder.job?.cancel()
@@ -801,6 +850,9 @@ fun FloatingBottomBar(
                         (targetValue + dragAmount.x / tabWidthPx * if (isLtr) 1f else -1f)
                             .fastCoerceIn(0f, maxTabIndex.toFloat())
                     updateValue(nextPosition)
+                    if (isLiquidGlassMode && gestureHaptics.update(nextPosition, SystemClock.uptimeMillis()) && hapticsEnabled) {
+                        latestHaptic(HapticType.GESTURE_STEP)
+                    }
                     offsetJobHolder.job?.cancel()
                     offsetJobHolder.job = animationScope.launch(start = CoroutineStart.UNDISPATCHED) {
                         offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
@@ -920,6 +972,9 @@ fun FloatingBottomBar(
                             (dampedDragAnimation.targetValue + consumed / tabWidthPx)
                                 .coerceIn(0f, maxTabIndex.toFloat())
                         )
+                        if (isLiquidGlassMode && gestureHaptics.update(dampedDragAnimation.targetValue, SystemClock.uptimeMillis()) && hapticsEnabled) {
+                            latestHaptic(HapticType.GESTURE_STEP)
+                        }
                     }
                 }
             }
@@ -1140,11 +1195,10 @@ fun FloatingBottomBar(
         }
     }
     val baseContentAlphaProvider: (Int) -> Float = { itemIndex ->
-        // Fade the dock copy of the selected label in every mode. Leaving it opaque
-        // under a clamped right-edge indicator stacks two glyphs (重影).
+        // 原生模式只绘制一份前景；玻璃模式由捕获副本承接指示器覆盖区的文字。
         val coverage = (1f - abs(itemIndex.toFloat() - visualIndicatorPositionProvider()))
             .coerceIn(0f, 1f)
-        1f - coverage
+        resolveFloatingDockBaseContentAlpha(isLiquidGlassMode, coverage)
     }
 
     LaunchedEffect(dampedDragAnimation, maxTabIndex) {
@@ -1278,8 +1332,9 @@ fun FloatingBottomBar(
             // not leave a route-selected accent behind while the capsule is dragged.
             LocalFloatingBottomBarSelectedContentColor provides if (isLiquidGlassMode) {
                 Color.Unspecified
-            } else LocalFloatingBottomBarSelectedContentColor.current,
+            } else colors.activeContentColor,
             LocalFloatingBottomBarTapFeedback provides selectionTapFeedback,
+            LocalFloatingBottomBarActionFeedback provides glassActionFeedback,
             LocalFloatingBottomBarIndicatorPosition provides visualIndicatorPositionProvider,
             LocalFloatingBottomBarItemAlignmentOffset provides itemAlignmentOffsetProvider,
             LocalFloatingBottomBarBaseContentAlpha provides baseContentAlphaProvider,
@@ -1382,7 +1437,8 @@ fun FloatingBottomBar(
             } else {
                 Modifier
             }
-            if (drawShell && contentIndicatorWidthsPx.isNotEmpty()) {
+            // 原生背景与文字分层，让指示器处于背景之上、前景文字之下。
+            if (drawShell && (!isLiquidGlassMode || contentIndicatorWidthsPx.isNotEmpty())) {
                 Box(
                     Modifier
                         .matchParentSize()
@@ -1406,6 +1462,8 @@ fun FloatingBottomBar(
             }
             Row(
                 Modifier
+                    // 原生文字位于指示器之上，避免选中文字被填色遮住。
+                    .zIndex(if (isLiquidGlassMode) 0f else 1f)
                     // Observe visible-row touches without giving the optical copy a hit target.
                     .then(if (isLiquidGlassMode) interactiveHighlight?.gestureModifier ?: Modifier else Modifier)
                     .onGloballyPositioned { coords ->
@@ -1424,7 +1482,7 @@ fun FloatingBottomBar(
                             clip = false
                         }
                     }
-                    .then(if (contentIndicatorWidthsPx.isEmpty()) shellModifier else Modifier)
+                    .then(if (isLiquidGlassMode && contentIndicatorWidthsPx.isEmpty()) shellModifier else Modifier)
                     .drawWithContent {
                         val scroll = dragScrollState
                         val viewportWidth = dragScrollViewportWidthLatest.value()
@@ -1507,8 +1565,7 @@ fun FloatingBottomBar(
                                 }
                             },
                         )
-                        // Upstream records the shell's press light into the tinted material.
-                        // The indicator refracts this light even over a uniform page backdrop.
+                        // 捕获按压与滑动高光，供指示器折射和上下缝隙色散采样。
                         .then(interactiveHighlight?.modifier ?: Modifier)
                         .height(capturedContentHeight)
                         .align(Alignment.CenterStart)
@@ -1638,53 +1695,52 @@ fun FloatingBottomBar(
                             } else Modifier
                         )
                         .clip(indicatorShape)
-                        .then(
-                            if (indicatorIdleSurfaceColorOverride != null || isLiquidGlassMode) {
-                                Modifier.background(
-                                    indicatorIdleSurfaceColorOverride ?: colors.contentColor.copy(alpha = 0.1f),
-                                    indicatorShape,
-                                )
-                            } else {
-                                Modifier
-                            }
+                        .background(
+                            indicatorIdleSurfaceColorOverride ?: if (isLiquidGlassMode) {
+                                colors.contentColor.copy(alpha = 0.1f)
+                            } else colors.indicatorColor.copy(alpha = 0.14f),
+                            indicatorShape,
                         )
                         .height(fittedIndicatorHeight)
                         .then(indicatorWidthModifier),
                     contentAlignment = Alignment.CenterStart
                 ) {
-                    CompositionLocalProvider(
-                        LocalFloatingBottomBarContentColor provides colors.activeContentColor,
-                        LocalFloatingBottomBarActiveContent provides true,
-                        LocalFloatingBottomBarIndicatorPosition provides visualIndicatorPositionProvider,
-                        LocalFloatingBottomBarItemAlignmentOffset provides itemAlignmentOffsetProvider,
-                    ) {
-                        Row(
-                            Modifier
-                                .clearAndSetSemantics {}
-                                .wrapContentWidth(align = Alignment.Start, unbounded = true)
-                                .requiredWidth(
-                                    with(density) {
-                                        (totalWidthPx - (horizontalPadding * 2).toPx()).coerceAtLeast(0f).toDp()
-                                    }
-                                )
-                                .requiredHeight(capturedContentHeight)
-                                .graphicsLayer {
-                                    val contentTranslationPx =
-                                        resolveFloatingDockClippedContentTranslationPx(
-                                            position = visualIndicatorPositionProvider(),
-                                            tabWidthPx = tabWidthPx,
-                                            tabsCount = safeTabsCount,
-                                            indicatorWidthPx = indicatorWidthPxProvider(),
-                                        )
-                                    translationX = if (isLtr) {
-                                        contentTranslationPx
-                                    } else {
-                                        -contentTranslationPx
-                                    }
-                                },
-                            verticalAlignment = Alignment.CenterVertically,
-                            content = { content(this) }
-                        )
+                    // 原生前景不再依赖经过裁切与平移的副本；仅保留玻璃回退副本。
+                    if (isLiquidGlassMode) {
+                        CompositionLocalProvider(
+                            LocalFloatingBottomBarContentColor provides colors.activeContentColor,
+                            LocalFloatingBottomBarActiveContent provides true,
+                            LocalFloatingBottomBarIndicatorPosition provides visualIndicatorPositionProvider,
+                            LocalFloatingBottomBarItemAlignmentOffset provides itemAlignmentOffsetProvider,
+                        ) {
+                            Row(
+                                Modifier
+                                    .clearAndSetSemantics {}
+                                    .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                                    .requiredWidth(
+                                        with(density) {
+                                            (totalWidthPx - (horizontalPadding * 2).toPx()).coerceAtLeast(0f).toDp()
+                                        }
+                                    )
+                                    .requiredHeight(capturedContentHeight)
+                                    .graphicsLayer {
+                                        val contentTranslationPx =
+                                            resolveFloatingDockClippedContentTranslationPx(
+                                                position = visualIndicatorPositionProvider(),
+                                                tabWidthPx = tabWidthPx,
+                                                tabsCount = safeTabsCount,
+                                                indicatorWidthPx = indicatorWidthPxProvider(),
+                                            )
+                                        translationX = if (isLtr) {
+                                            contentTranslationPx
+                                        } else {
+                                            -contentTranslationPx
+                                        }
+                                    },
+                                verticalAlignment = Alignment.CenterVertically,
+                                content = { content(this) }
+                            )
+                        }
                     }
                 }
             }
@@ -1694,6 +1750,7 @@ fun FloatingBottomBar(
             // overflow cannot steal taps from neighbouring destinations.
             Box(
                 modifier = Modifier
+                    .zIndex(if (isLiquidGlassMode) 0f else 2f)
                     .graphicsLayer {
                         val slotOffsetPx = visualIndicatorPositionProvider() * tabWidthPx
                         translationX = if (isLtr) {
@@ -1720,7 +1777,8 @@ fun FloatingBottomBar(
                         interactionSource = null,
                         indication = null,
                         role = Role.Tab,
-                        onClick = onReselected,
+                        enabled = enabled,
+                        onClick = { glassActionFeedback(onReselected) },
                     )
                     .clearAndSetSemantics {}
                     .height(if (segmentedGeometry) shellHeight else fittedIndicatorHeight)

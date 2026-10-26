@@ -1,7 +1,7 @@
 package com.android.purebilibili.feature.live
 
 /**
- * SC 期限在消息进入状态层时归一化一次；展示层始终按绝对时间计算，不因重入续期。
+ * SC 期限在消息进入状态层时归一化一次；仅在菜单暂停结束时补偿暂停时长，不因页面重入续期。
  */
 internal const val DEFAULT_LIVE_SUPER_CHAT_DURATION_SEC = 60
 
@@ -30,9 +30,9 @@ internal fun shouldExpireLiveSuperChat(
     nowEpochSeconds: Long,
 ): Boolean = remainingLiveSuperChatSeconds(endTime, nowEpochSeconds) == 0
 
-/** 普通实时浮层最多显示 30 秒，截止时间在接收消息时固定。常驻模式不使用此期限。 */
+/** 普通实时浮层最多显示 10 秒，截止时间在接收消息时固定。常驻模式不使用此期限。 */
 internal fun resolveLiveSuperChatFlashEndTime(endTime: Long, receivedAt: Long): Long =
-    minOf(endTime, receivedAt + 30L)
+    minOf(endTime, receivedAt + 10L)
 
 internal fun formatLiveSuperChatCountdown(remainingSec: Int): String {
     if (remainingSec <= 0) return "0s"

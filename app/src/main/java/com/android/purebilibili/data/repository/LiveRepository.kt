@@ -37,6 +37,13 @@ data class LivePrefetchDanmaku(
     val uid: Long = 0,
     val uname: String = "",
     val text: String = "",
+    val emoticon: LiveMessageEmote? = null,
+    val inlineEmotes: Map<String, LiveMessageEmote> = emptyMap(),
+    val medal: LiveMessageMedal? = null,
+    val medalName: String = "",
+    val medalLevel: Int = 0,
+    val medalColor: Int = 0,
+    val rawMessage: JsonObject? = null,
     val emoticonUrl: String? = null,
     val replyToName: String = "",
     val replyToUid: Long = 0L,
@@ -53,6 +60,17 @@ data class LiveSuperChatSeed(
     val message: String = "",
     val price: String = "",
     val backgroundColor: Int = 0,
+    val headerColor: Int = 0,
+    val messageColor: Int = 0,
+    val nameColor: Int = 0,
+    val face: String = "",
+    val faceFrame: String = "",
+    val headerImage: String = "",
+    val rawInfo: String = "",
+    val medal: LiveMessageMedal? = null,
+    val medalName: String = "",
+    val medalLevel: Int = 0,
+    val medalColor: Int = 0,
     val token: String = "",
     val reportTs: Long = 0,
     val startTime: Long = 0,
@@ -137,6 +155,16 @@ internal fun buildLivePlayUrlQuery(roomId: Long, qn: Int, onlyAudio: Boolean): M
         if (onlyAudio) put("only_audio", "1")
     }
 
+private fun parseLiveColorInt(raw: String): Int {
+    val normalized = raw.trim().removePrefix("#")
+    val value = normalized.toLongOrNull(16)?.toInt() ?: return 0
+    return when (normalized.length) {
+        6 -> value or 0xFF000000.toInt()
+        8 -> value
+        else -> 0
+    }
+}
+
 internal fun parseLiveDanmakuHistoryItems(rawJson: String): Result<List<LivePrefetchDanmaku>> {
     val root = liveRepositoryJson.parseToJsonElement(rawJson).jsonObject
     if (root.int("code", -1) != 0) {
@@ -148,6 +176,7 @@ internal fun parseLiveDanmakuHistoryItems(rawJson: String): Result<List<LivePref
             val obj = element as? JsonObject ?: return@forEach
             val user = obj.obj("user")
             val base = user?.obj("base")
+            val messageMedal = parseLiveMessageMedal(user?.obj("medal"))
             val checkInfo = obj.obj("check_info")
             val reply = obj.obj("reply")
             add(
@@ -155,6 +184,13 @@ internal fun parseLiveDanmakuHistoryItems(rawJson: String): Result<List<LivePref
                     uid = user?.long("uid") ?: 0L,
                     uname = base?.string("name").orEmpty(),
                     text = obj.string("text"),
+                    rawMessage = obj,
+                    medal = messageMedal,
+                    emoticon = parseLiveMessageEmote(obj.obj("emoticon")),
+                    inlineEmotes = parseLiveMessageEmotes(obj.obj("emots")),
+                    medalName = messageMedal?.name.orEmpty(),
+                    medalLevel = messageMedal?.level ?: 0,
+                    medalColor = messageMedal?.backgroundColor ?: 0,
                     emoticonUrl = obj.obj("emoticon")
                         ?.string("url")
                         ?.takeIf { it.isNotBlank() },
@@ -540,7 +576,15 @@ object LiveRepository {
                     Result.failure(Exception(resp.message.ifBlank { "直播 feed 加载失败" }))
                 }
             }
-            Result.success(parseLiveFeedHomeSnapshot(data))
+            val snapshot = parseLiveFeedHomeSnapshot(data)
+            val loggedIn = TokenManager.midCache?.let { it > 0 } == true || !TokenManager.sessDataCache.isNullOrBlank()
+            val resolved = if (page == 1 && loggedIn && needsLiveFollowSupplement(snapshot)) {
+                getFollowedLivePage(page = 1).fold(
+                    onSuccess = { supplementLiveFollowSnapshot(snapshot, it.items, it.totalCount) },
+                    onFailure = { snapshot.copy(followError = it.message ?: "关注直播加载失败") },
+                )
+            } else snapshot
+            Result.success(resolved)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             if (page == 1) fallbackLiveFeedHome() else Result.failure(e)
@@ -641,6 +685,32 @@ object LiveRepository {
         return AppSignUtils.signForAndroidApi(params)
     }
 
+    suspend fun submitLiveFeedFeedback(
+        roomId: Long,
+        reason: com.android.purebilibili.data.model.response.LiveFeedbackReason,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (roomId <= 0 || reason.idType.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("无效的直播反馈选项"))
+        }
+        try {
+            val params = buildLiveAppFeedParams(1, false).toMutableMap().apply {
+                remove("sign")
+                remove("relation_page")
+                put("room_id", roomId.toString())
+                put("id", reason.id.toString())
+                put("id_type", reason.idType)
+                put("type", "dislike")
+            }
+            val response = api.submitLiveFeedFeedback(AppSignUtils.signForAndroidApi(params))
+            if (response.code == 0) Result.success(Unit)
+            else Result.failure(IllegalStateException(response.message.ifBlank { "提交反馈失败" }))
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+
     private fun buildLiveFavoriteTagParams(tags: List<LiveFavoriteTagEntry>? = null): Map<String, String> {
         val params = buildLiveAppFeedParams(1, false).toMutableMap()
         params.remove("sign")
@@ -739,8 +809,10 @@ object LiveRepository {
         return Result.success(
             LiveFeedHomeSnapshot(
                 rooms = recommend,
+                hasFollowModule = followedPage != null,
+                followError = if (followedPage == null) "关注直播加载失败" else null,
                 followRooms = follow,
-                totalCount = followedPage?.totalCount ?: follow.size,
+                totalCount = followedPage?.totalCount,
                 areaEntries = areas,
                 hasMore = recommend.size >= 20,
             )
@@ -900,7 +972,8 @@ object LiveRepository {
             if (resp.code != 0) {
                 return@withContext Result.failure(Exception(resp.message.ifBlank { "获取关注直播失败" }))
             }
-            val rooms = resp.data?.list.orEmpty()
+            val data = checkNotNull(resp.data) { "关注直播数据为空" }
+            val rooms = data.list.orEmpty()
             val followedRooms = rooms.filter { it.liveStatus == 1 }
 
             val liveRooms = followedRooms.map { it.toLiveRoom() }
@@ -916,7 +989,7 @@ object LiveRepository {
                     items = liveRooms.distinctBy { it.roomid },
                     hasMore = hasMore,
                     nextPage = page + 1,
-                    totalCount = resp.data?.livingNum ?: liveRooms.size
+                    totalCount = data.livingNum?.takeIf { it >= 0 }?.coerceAtLeast(liveRooms.size)
                 )
             )
         } catch (e: Exception) {
@@ -1025,6 +1098,7 @@ object LiveRepository {
                     for (index in 0 until list.length()) {
                         val obj = list.optJSONObject(index) ?: continue
                         val user = obj.optJSONObject("user_info")
+                        val medal = parseLiveSuperChatMedal(liveRepositoryJson.parseToJsonElement(obj.toString()).jsonObject)
                         add(
                             LiveSuperChatSeed(
                                 id = obj.optLong("id", obj.optLong("message_id", 0L)),
@@ -1037,6 +1111,17 @@ object LiveRepository {
                                         obj.optString("background_color")
                                     }
                                 ),
+                                headerColor = parseLiveColorInt(obj.optString("background_color")),
+                                messageColor = parseLiveColorInt(obj.optString("message_font_color")),
+                                nameColor = parseLiveColorInt(user?.optString("name_color").orEmpty()),
+                                face = user?.optString("face").orEmpty(),
+                                faceFrame = user?.optString("face_frame").orEmpty(),
+                                headerImage = obj.optString("background_image"),
+                                rawInfo = obj.toString(),
+                                medal = medal,
+                                medalName = medal?.name.orEmpty(),
+                                medalLevel = medal?.level ?: 0,
+                                medalColor = medal?.backgroundColor ?: 0,
                                 token = obj.optString("token"),
                                 reportTs = obj.optLong("ts", obj.optLong("start_time", 0L)),
                                 startTime = obj.optLong("start_time", 0L),
@@ -1476,7 +1561,7 @@ object LiveRepository {
     }
 
     /**
-     * 进房上报（登录态，写入直播观看历史；对齐 PiliPlus roomEntryAction）
+     * 进房上报（登录态，写入直播观看历史）
      */
     suspend fun reportRoomEntry(roomId: Long): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
@@ -1524,13 +1609,5 @@ object LiveRepository {
     }
 
 
-    private fun parseLiveColorInt(raw: String): Int {
-        val normalized = raw.trim().removePrefix("#")
-        val value = normalized.toLongOrNull(16)?.toInt() ?: return 0
-        return when (normalized.length) {
-            6 -> value or 0xFF000000.toInt()
-            8 -> value
-            else -> 0
-        }
-    }
+
 }

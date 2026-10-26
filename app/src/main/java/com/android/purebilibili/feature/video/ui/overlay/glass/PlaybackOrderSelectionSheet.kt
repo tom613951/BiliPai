@@ -1,5 +1,8 @@
 package com.android.purebilibili.feature.video.ui.overlay.glass
 
+import com.android.purebilibili.core.util.rememberHapticFeedback
+import com.android.purebilibili.core.util.HapticType
+
 import com.android.purebilibili.feature.video.ui.overlay.*
 
 import com.android.purebilibili.core.ui.AppContentColors
@@ -57,6 +60,7 @@ internal fun PlaybackOrderSelectionSheet(
     onDismiss: () -> Unit,
     isFullscreen: Boolean = false,
 ) {
+    val selectionHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.MENUS)
     val nativeOptions = listOf(
         PlaybackCompletionBehavior.STOP_AFTER_CURRENT,
         PlaybackCompletionBehavior.PLAY_IN_ORDER,
@@ -77,7 +81,10 @@ internal fun PlaybackOrderSelectionSheet(
                 isSelected = selected,
                 index = index,
                 enabled = !selected,
-                onSelectedIndexChange = { onSelect(behavior) },
+                onSelectedIndexChange = {
+                    if (!selected) selectionHaptic(HapticType.LIGHT)
+                    onSelect(behavior)
+                },
             )
         }
     }

@@ -7,7 +7,7 @@ import com.android.purebilibili.core.ui.components.appElasticPress
 import coil3.request.crossfade
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import com.android.purebilibili.core.ui.components.appActionClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,7 +102,8 @@ fun TopicDetailScreen(
     onCollectionClick: (Long, Long, String, String) -> Unit = { _, _, _, _ -> },
     onCourseClick: (String, String) -> Unit = { _, _ -> },
     onArticleClick: (Long, String) -> Unit,
-    onDynamicDetailClick: (String) -> Unit
+    onDynamicDetailClick: (String) -> Unit,
+    onMatchClick: ((Long) -> Unit)? = null,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
@@ -252,6 +253,7 @@ fun TopicDetailScreen(
                                             onCourseClick = onCourseClick,
                                             onArticleClick = onArticleClick,
                                             onDynamicDetailClick = onDynamicDetailClick,
+                                            onMatchClick = onMatchClick,
                                         ),
                                         interaction = DynamicCardInteractionActions(
                                             onCommentClick = onDynamicDetailClick,
@@ -440,7 +442,7 @@ private fun TopicParticipateButton(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(AppShapes.container(ContainerLevel.Pill))
-                    .clickable(onClick = onClick)
+                    .appActionClickable(onClick = onClick)
                     .padding(horizontal = AppSpacingTokens.Medium),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
@@ -582,7 +584,7 @@ private fun TopicHeaderCard(
                         .size(34.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable(enabled = (creator?.uid ?: 0L) > 0L) {
+                        .appActionClickable(enabled = (creator?.uid ?: 0L) > 0L) {
                             onUserClick(creator?.uid ?: 0L)
                         },
                     contentScale = ContentScale.Crop

@@ -98,7 +98,8 @@ data class LiveRoom(
     @JsonNames("parent_name", "area_v2_parent_name")
     @SerialName("parent_name")
     val parentName: String = "",
-    val keyframe: String = ""
+    val keyframe: String = "",
+    val feedback: List<LiveFeedbackGroup> = emptyList()
 ) {
     fun displayCover(preferFirstFrame: Boolean = false): String {
         val ordered = if (preferFirstFrame) {
@@ -202,7 +203,7 @@ data class FollowedLiveResponse(
 @OptIn(ExperimentalSerializationApi::class)
 data class FollowedLiveData(
     val list: List<FollowedLiveRoom>? = null,
-    @JsonNames("living_num", "live_count") val livingNum: Int = 0,
+    @JsonNames("living_num", "live_count") val livingNum: Int? = null,
     @JsonNames("not_living_num", "count") val notLivingNum: Int = 0,
     val pageinfo: PageInfo? = null
 )

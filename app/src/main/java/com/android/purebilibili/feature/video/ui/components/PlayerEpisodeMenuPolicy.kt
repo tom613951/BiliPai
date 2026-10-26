@@ -15,6 +15,11 @@ internal data class PlayerEpisodeMenuEntry(
     val durationSeconds: Long,
     val target: PlayerEpisodeMenuTarget,
     val cover: String = "",
+    /** 合集剧集的发布时间（秒）；分P没有，0 表示未知。 */
+    val pubdateSeconds: Long = 0,
+    /** 播放/弹幕计数；null 表示未知（分P），0 是真实的零。 */
+    val viewCount: Long? = null,
+    val danmakuCount: Long? = null,
 )
 
 internal data class PlayerEpisodeMenuSection(
@@ -28,7 +33,7 @@ internal data class PlayerEpisodeMenuContent(
     val currentEntryIndex: Int = -1,
 )
 
-/** Player panel projection; below-video collection and part selectors remain independent. */
+/** Shared projection for detail, audio-mode and player episode menus. */
 internal fun resolvePlayerEpisodeMenuContent(
     pages: List<Page>,
     currentPageIndex: Int,
@@ -66,6 +71,9 @@ internal fun resolvePlayerEpisodeMenuContent(
                             title = title,
                             durationSeconds = episode.arc?.duration?.toLong() ?: 0L,
                             cover = episode.arc?.pic.orEmpty().ifBlank { ugcSeason?.cover.orEmpty() },
+                            pubdateSeconds = episode.arc?.pubdate ?: 0L,
+                            viewCount = episode.arc?.stat?.view?.toLong(),
+                            danmakuCount = episode.arc?.stat?.danmaku?.toLong(),
                             target = PlayerEpisodeMenuTarget.Episode(episode),
                         ))
                     } else {
@@ -84,6 +92,10 @@ internal fun resolvePlayerEpisodeMenuContent(
                                 },
                                 durationSeconds = page.duration,
                                 cover = page.firstFrame.ifBlank { episode.arc?.pic.orEmpty().ifBlank { ugcSeason?.cover.orEmpty() } },
+                                // 嵌套分P沿用所属剧集的发布时间与统计（与 PiliPlus 剧集面板一致）。
+                                pubdateSeconds = episode.arc?.pubdate ?: 0L,
+                                viewCount = episode.arc?.stat?.view?.toLong(),
+                                danmakuCount = episode.arc?.stat?.danmaku?.toLong(),
                                 target = PlayerEpisodeMenuTarget.Episode(
                                     if (page.cid > 0L && page.cid != episode.cid) {
                                         episode.copy(cid = page.cid)
@@ -129,6 +141,28 @@ internal fun groupPlayerEpisodeEntries(entries: List<PlayerEpisodeMenuEntry>): L
         }
     }
     return groups
+}
+
+/** 剧集行元数据：发布日期 · 播放 · 弹幕；无任何已知信息时返回 null。 */
+internal fun buildPlayerEpisodeMetadataText(
+    pubdateSeconds: Long,
+    viewCount: Long?,
+    danmakuCount: Long?,
+): String? {
+    val parts = buildList {
+        if (pubdateSeconds > 0L) {
+            add(java.time.Instant.ofEpochSecond(pubdateSeconds)
+                .atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd")))
+        }
+        if (viewCount != null && viewCount >= 0L) {
+            add(com.android.purebilibili.core.util.FormatUtils.formatStat(viewCount) + "播放")
+        }
+        if (danmakuCount != null && danmakuCount >= 0L) {
+            add(com.android.purebilibili.core.util.FormatUtils.formatStat(danmakuCount) + "弹幕")
+        }
+    }
+    return parts.joinToString(" · ").ifBlank { null }
 }
 
 /** Window coordinates. Inline panels occupy detail space, never the playing video. */

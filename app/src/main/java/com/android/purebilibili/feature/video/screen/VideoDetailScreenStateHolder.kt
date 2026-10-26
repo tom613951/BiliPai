@@ -45,7 +45,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -606,6 +605,15 @@ internal fun VideoDetailScreenStateHolder(
         initialPipMode = isInPipMode,
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val shareInfo = (uiState as? VideoPlaybackUiState.Success)?.info
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.android.purebilibili.feature.share.LocalReplyShareContext provides shareInfo?.let {
+            com.android.purebilibili.feature.share.ReplyShareContext(
+                url = "https://www.bilibili.com/video/${it.bvid}", title = it.title, cover = it.pic,
+                page = it.pages.indexOfFirst { page -> page.cid == it.cid }.coerceAtLeast(0) + 1,
+            )
+        },
+    ) {
     val detailState by viewModel.detailState.collectAsStateWithLifecycle()
     // Keep the handle here; only the mounted info/content scopes read the progress value.
     // Download ticks must not invalidate the transition/player state-holder scope.
@@ -638,6 +646,8 @@ internal fun VideoDetailScreenStateHolder(
             setAudioMode = viewModel::setAudioMode,
             setSleepTimer = viewModel::setSleepTimer,
             switchPage = { pageIndex -> viewModel.switchPage(pageIndex) },
+            jumpToLastPlayedPart = viewModel::jumpToLastPlayedPart,
+            dismissPartResumeNotice = viewModel::dismissPartResumeNotice,
             openDownloadDialog = viewModel::openDownloadDialog,
             showDanmakuSendDialog = viewModel::showDanmakuSendDialog,
             skipSponsorSegment = viewModel::skipCurrentSponsorSegment,
@@ -1131,7 +1141,7 @@ internal fun VideoDetailScreenStateHolder(
                 animationSpec = tween(
                     durationMillis = motionSpec.entryPhaseDurationMillis.coerceAtLeast(1),
                     delayMillis = 48,
-                    easing = FastOutSlowInEasing,
+                    easing = AppMotionEasing.M1Standard,
                 ),
             )
         }
@@ -1177,7 +1187,7 @@ internal fun VideoDetailScreenStateHolder(
                     targetValue = 1f,
                     animationSpec = tween(
                         durationMillis = motionSpec.entryPhaseDurationMillis,
-                        easing = FastOutSlowInEasing
+                        easing = AppMotionEasing.M1Standard
                     )
                 )
                 isTransitionFinished = true
@@ -1522,6 +1532,33 @@ internal fun VideoDetailScreenStateHolder(
         playlistSize = playlistItems.size
     )
     val externalPlaylistQueueTitle = resolveExternalPlaylistQueueTitle(externalPlaylistSource)
+    // 平板队列放在有高度约束的侧栏页中，避免被播放器和简介挤到屏幕外。
+    val tabletExternalQueueContent: (@Composable () -> Unit)? =
+        if (shouldShowExternalPlaylistQueueBar) {
+            {
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    ExternalPlaylistQueueSheetContent(
+                        title = externalPlaylistQueueTitle,
+                        playlist = playlistItems,
+                        currentIndex = playlistCurrentIndex,
+                        listMaxHeight = maxHeight,
+                        bottomSpacerHeight = 12.dp,
+                        modifier = Modifier.fillMaxSize(),
+                        showDismissButton = false,
+                        onVideoSelected = { index, item ->
+                            PlaylistManager.playAt(index)
+                            switchVideoInCurrentDetailPage(
+                                targetBvid = item.bvid,
+                                targetCid = 0L,
+                                autoPlay = true,
+                            )
+                        },
+                        onDismiss = {},
+                    )
+                }
+            }
+        } else null
+
     var showExternalPlaylistQueueSheet by rememberSaveable { mutableStateOf(false) }
     val externalPlaylistQueueSheetPresentation = remember {
         resolveExternalPlaylistQueueSheetPresentation(requireRealtimeHaze = true)
@@ -1699,14 +1736,16 @@ internal fun VideoDetailScreenStateHolder(
         }
     }
     val detailShellModifier = Modifier.videoCardShellSharedBoundsOrEmpty(
+        // 全屏整窗播放不参与详情卡片的尺寸插值和圆角裁切。
         enabled = detailShellSharedBoundsEnabled &&
-            !isNavigatingToVideo,
+            !isFullscreenMode && !isPipMode && !isNavigatingToVideo,
         sharedTransitionScope = rootSharedTransitionScope,
         animatedVisibilityScope = rootAnimatedVisibilityScope,
         bvid = bvid,
         sourceRoute = sourceRouteForSharedElement,
         motionSpec = homeSharedTransitionMotionSpec,
-        clipShape = detailShellShape,
+        // 横屏详情与全屏画面均保持矩形，避免外壳保留来源卡片圆角。
+        clipShape = if (isLandscape) androidx.compose.ui.graphics.RectangleShape else detailShellShape,
         role = VideoCardShellSharedBoundsRole.DetailShell,
         // 竖屏全屏（点赞/关注/发弹幕那套）：整卡展开到全屏，不要按顶部横屏播放器 TopCenter 落点。
         fillFullscreenShell = isPortraitFullscreen ||
@@ -2081,7 +2120,7 @@ internal fun VideoDetailScreenStateHolder(
         targetValue = if (isPortraitFullscreen) 0f else 1f,
         animationSpec = tween(
             durationMillis = inlineReturnAnimMs,
-            easing = FastOutSlowInEasing
+            easing = AppMotionEasing.M1Standard
         ),
         label = "inline-player-alpha"
     )
@@ -2093,7 +2132,7 @@ internal fun VideoDetailScreenStateHolder(
         },
         animationSpec = tween(
             durationMillis = inlineReturnAnimMs,
-            easing = FastOutSlowInEasing
+            easing = AppMotionEasing.M1Standard
         ),
         label = "inline-player-return-scale"
     )
@@ -3326,7 +3365,7 @@ internal fun VideoDetailScreenStateHolder(
     // 避免在此处重复消耗 InputStream
 
     // 辅助函数：切换全屏状态
-    val toggleFullscreen = {
+    fun changeFullscreen(event: ContinuousPlayerTransitionEvent) {
         val activity = context.findActivity()
         com.android.purebilibili.core.util.Logger.d("VideoInputTrace") {
             "fullscreen_toggle fullscreen=$isFullscreenMode portraitFs=$isPortraitFullscreen " +
@@ -3347,7 +3386,7 @@ internal fun VideoDetailScreenStateHolder(
             applyContinuousPlayerDecision(
                 reduceContinuousPlayerTransition(
                     phase = continuousPlayerPhase,
-                    event = ContinuousPlayerTransitionEvent.Toggle,
+                    event = event,
                 )
             )
         } else toggleVideoDetailFullscreen(
@@ -3366,6 +3405,7 @@ internal fun VideoDetailScreenStateHolder(
             onManualPortraitHoldActiveChange = { active -> manualPortraitHoldActive = active }
         )
     }
+    val toggleFullscreen = { changeFullscreen(ContinuousPlayerTransitionEvent.Toggle) }
 
     // Fullscreen removes the inline scrollable nodes while retaining their states. A scroll
     // mutation from the old attachment must not suppress clicks/scrolls after reattachment.
@@ -3396,11 +3436,29 @@ internal fun VideoDetailScreenStateHolder(
         }
     }
 
-    val localBackTarget = resolveVideoDetailLocalBackTarget(
+    fun currentLocalBackTarget() = resolveVideoDetailLocalBackTarget(
         isLandscapeFullscreen = isFullscreenMode,
         isPortraitFullscreen = isPortraitFullscreen,
         directPortraitEntry = directPortraitEntryFromRoute,
+        continuousPlayerPhase = continuousPlayerPhase.takeIf { continuousFullscreenTransitionEnabled },
     )
+    fun consumeLocalBack(): Boolean {
+        return when (currentLocalBackTarget()) {
+            VideoDetailLocalBackTarget.EXIT_PORTRAIT_FULLSCREEN -> {
+                presentationState.setPortraitFullscreen(false)
+                true
+            }
+            VideoDetailLocalBackTarget.EXIT_LANDSCAPE_FULLSCREEN -> {
+                changeFullscreen(ContinuousPlayerTransitionEvent.ExitFullscreen)
+                true
+            }
+            VideoDetailLocalBackTarget.NAVIGATE_BACK -> false
+        }
+    }
+    val handlePlayerBack = {
+        if (!consumeLocalBack()) handleBack()
+    }
+    val localBackTarget = currentLocalBackTarget()
     val localBackEventState = rememberNavigationEventState(NavigationEventInfo.None)
     NavigationBackHandler(
         state = localBackEventState,
@@ -3409,11 +3467,7 @@ internal fun VideoDetailScreenStateHolder(
             com.android.purebilibili.core.util.Logger.d("VideoInputTrace") {
                 "local_back_completed target=$localBackTarget fullscreen=$isFullscreenMode portraitFs=$isPortraitFullscreen"
             }
-            when (localBackTarget) {
-                VideoDetailLocalBackTarget.EXIT_PORTRAIT_FULLSCREEN -> presentationState.setPortraitFullscreen(false)
-                VideoDetailLocalBackTarget.EXIT_LANDSCAPE_FULLSCREEN -> toggleFullscreen()
-                VideoDetailLocalBackTarget.NAVIGATE_BACK -> Unit
-            }
+            consumeLocalBack()
         },
     )
 
@@ -3588,7 +3642,7 @@ internal fun VideoDetailScreenStateHolder(
             onToggleFullscreen = { toggleFullscreen() },
             playbackActions = playbackActions,
             onDoubleTapLike = engagementViewModel::toggleLike,
-            onBack = if (layout.isFullscreen) ({ toggleFullscreen() }) else handleBack,
+            onBack = handlePlayerBack,
             onHomeClick = {
                 handleTopBarAction(resolveVideoDetailTopBarAction(isHomeButton = true))
             },
@@ -3631,7 +3685,7 @@ internal fun VideoDetailScreenStateHolder(
             subtitleDisplayModePreferenceOverride = subtitleDisplayModeOverride,
             onSubtitleDisplayModePreferenceOverrideChange = { subtitleDisplayModeOverride = it },
             fullscreenExtras = ContinuousPlayerFullscreenExtras(
-                danmakuComposerVisible = showDanmakuDialog,
+                danmakuComposerVisible = showDanmakuDialog && isFullscreenMode,
                 onDismissDanmakuComposer = viewModel::hideDanmakuSendDialog,
                 onSendDanmakuComposer = viewModel::sendDanmaku,
                 isSendingDanmakuComposer = isSendingDanmaku,
@@ -3720,387 +3774,118 @@ internal fun VideoDetailScreenStateHolder(
         // 竖屏全屏由 PortraitVideoPager 持有播放面，保持挂载、由 pager 自己隐藏装饰层。
         val pipPlayerOnlyLayer = isPipMode && !isPortraitFullscreen
         if (isFullscreenMode || pipPlayerOnlyLayer) {
-                val useInlineDanmakuComposer =
-                    com.android.purebilibili.feature.video.ui.components.shouldUseInlineDanmakuComposer(
-                        isFullscreenMode = isFullscreenMode
-                    )
-                if (continuousFullscreenTransitionEnabled) {
-                    // 全屏＋物理遮挡铰链：媒体收进首个安全区，不跨缝；软折痕跨整窗。
-                    if (fullscreenOccludingHingePresent) {
-                        com.android.purebilibili.core.ui.adaptive.AppHingePaneLayout(
-                            modifier = Modifier.fillMaxSize().background(Color.Black),
-                            primaryContent = {
-                                BoxWithConstraints(Modifier.fillMaxSize()) {
-                                    continuousPlayerContent(
-                                        ContinuousPlayerHostLayout(
-                                            modifier = Modifier.fillMaxSize(),
-                                            viewportWidth = maxWidth,
-                                            alpha = continuousPlayerUnitState,
-                                            scale = continuousPlayerUnitState,
-                                            isFullscreen = true,
-                                        )
+                // 视图复用不受动画、设备方向策略或分屏开关影响。
+                // 只移动现有播放器；过渡开关仅控制布局动画，不再创建第二份输出面。
+                // 全屏＋物理遮挡铰链：媒体收进首个安全区，不跨缝；软折痕跨整窗。
+                if (fullscreenOccludingHingePresent) {
+                    com.android.purebilibili.core.ui.adaptive.AppHingePaneLayout(
+                        modifier = Modifier.fillMaxSize().background(Color.Black),
+                        primaryContent = {
+                            BoxWithConstraints(Modifier.fillMaxSize()) {
+                                continuousPlayerContent(
+                                    ContinuousPlayerHostLayout(
+                                        modifier = Modifier.fillMaxSize(),
+                                        viewportWidth = maxWidth,
+                                        alpha = continuousPlayerUnitState,
+                                        scale = continuousPlayerUnitState,
+                                        isFullscreen = true,
                                     )
-                                }
-                            },
-                        )
-                    } else {
-                        continuousPlayerContent(
-                            ContinuousPlayerHostLayout(
-                                modifier = Modifier.fillMaxSize(),
-                                viewportWidth = configuration.screenWidthDp.dp,
-                                alpha = continuousPlayerUnitState,
-                                scale = continuousPlayerUnitState,
-                                isFullscreen = true,
-                            )
-                        )
-                    }
-                    val success = uiState as? VideoPlaybackUiState.Success
-                    if (canShowLandscapeComments && landscapeCommentPanelVisible && success != null) {
-                        VideoDetailCommentStateScope(commentStateHandle, subReplyStateHandle) { commentState, subReplyState ->
-                            LandscapeCommentPanel(
-                                info = success.info, listState = landscapeCommentListState,
-                                replies = commentState.replies, replyCount = commentState.replyCount,
-                                emoteMap = success.emoteMap, isRepliesLoading = commentState.isRepliesLoading,
-                                isRepliesRefreshing = commentState.isRepliesRefreshing,
-                                repliesError = commentState.repliesError,
-                                isRepliesEnd = commentState.isRepliesEnd, videoTags = success.videoTags,
-                                paginationPage = commentState.nextPage,
-                                voteCard = commentState.voteCard,
-                                sortMode = commentState.sortMode,
-                                currentMid = commentState.currentMid, showUpFlag = commentState.showUpFlag,
-                                showIdentityDecorations = commentMemberDecorationsEnabled,
-                                dissolvingIds = commentState.dissolvingIds, likedComments = commentState.likedComments,
-                                onSortModeChange = commentActions.setSortMode,
-                                onUpClick = navigateToUserSpaceFromVideo,
-                                onSubReplyClick = commentActions.openSubReply,
-                                onCommentReplyClick = playbackActions.replyTo, onLoadMoreReplies = commentActions.loadComments,
-                                onRefreshReplies = commentActions.refreshComments,
-                                onDeleteComment = commentActions.deleteComment, onDissolveStart = commentActions.startDissolve,
-                                onCommentLike = commentActions.likeComment,
-                                onCommentHate = commentActions.hateComment,
-                                hatedComments = commentState.hatedComments,
-                                onCommentUrlClick = openCommentUrl,
-                                onReportComment = commentActions.reportComment,
-                                onToggleTopComment = commentActions.toggleTopComment,
-                                onCheckCommentFraud = commentActions.checkCommentFraud,
-                                onTimestampClick = { position -> seekPlayerFromUserAction(playerState.player, position) },
-                                onDismiss = {
-                                    commentActions.closeSubReply()
-                                    landscapeCommentPanelVisible = false
-                                },
-                                onSwitchSide = { landscapeCommentPanelOnLeft = !landscapeCommentPanelOnLeft },
-                                isOnLeft = landscapeCommentPanelOnLeft,
-                                closeProgress = landscapeCommentCloseProgress,
-                                drawerWidth = com.android.purebilibili.feature.video.ui.overlay
-                                    .resolveLandscapeEndDrawerLayoutPolicy(configuration.screenWidthDp)
-                                    .drawerWidthDp.dp,
-                                threadContent = if (subReplyState.visible && subReplyState.rootReply != null) {
-                                    { onImagePreview ->
-                                        VideoInlineSubReplyDetailContent(
-                                            state = subReplyState,
-                                            commentState = commentState,
-                                            emoteMap = success.emoteMap,
-                                            maxTimestampMs = success.videoDurationMs.takeIf { it > 0L },
-                                            onLoadMore = commentActions.loadMoreSubReplies,
-                                            onRefresh = commentActions.refreshSubReplies,
-                                            onSortModeChange = commentActions.setSubReplySortMode,
-                                            onDismiss = commentActions.closeSubReply,
-                                            onRootCommentClick = playbackActions.openRootCommentComposer,
-                                            onTimestampClick = { positionMs ->
-                                                seekPlayerFromUserAction(playerState.player, positionMs)
-                                                commentActions.closeSubReply()
-                                            },
-                                            onImagePreview = onImagePreview,
-                                            onReplyClick = playbackActions.replyTo,
-                                            onConversationClick = commentActions.openSubReplyConversation,
-                                            onConversationBack = commentActions.closeSubReplyConversation,
-                                            onDissolveStart = commentActions.startSubDissolve,
-                                            onDeleteComment = commentActions.deleteSubComment,
-                                            onCheckCommentFraud = commentActions.checkCommentFraud,
-                                            onCommentLike = commentActions.likeComment,
-                                            onCommentHate = commentActions.hateComment,
-                                            onReportComment = commentActions.reportComment,
-                                            onUrlClick = openCommentUrl,
-                                            showIdentityDecorations = commentMemberDecorationsEnabled,
-                                            onAvatarClick = { mid ->
-                                                mid.toLongOrNull()?.let(navigateToUserSpaceFromVideo) ?: Unit
-                                            },
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
-                                    }
-                                } else {
-                                    null
-                                },
-                                modifier = Modifier
-                                    .align(if (landscapeCommentPanelOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
-                                    .fillMaxHeight(),
-                            )
-                        }
-                    }
+                                )
+                            }
+                        },
+                    )
                 } else {
-                    val fullscreenPlayerSection: @Composable () -> Unit = {
-                        VideoPlayerSection(
-                    state = VideoPlayerSectionState(
-                        playerState = playerState,
-                        uiState = uiState,
-                        isFullscreen = true,
-                        isInPipMode = isPipMode,
-                        danmakuHostActive = !hasCommittedRelatedVideoNavigation,
-                        suppressTransientOverlaysForTransition = suppressOverlayControlsForReturn,
-                        transitionEnabled = detailChildTransitionEnabled,
-                        landscapeCommentPanelVisible = canShowLandscapeComments && landscapeCommentPanelVisible,
-                        landscapeCommentPanelOnLeft = landscapeCommentPanelOnLeft,
-                landscapeCommentCloseProgressProvider = { landscapeCommentCloseProgress.floatValue },
-                        danmakuComposerVisible = showDanmakuDialog && useInlineDanmakuComposer,
-                        isSendingDanmakuComposer = isSendingDanmaku,
-                        danmakuComposerInitialText = composerDrafts.danmaku.text,
-                        danmakuComposerInitialAttentionCommand = composerDrafts.danmaku.attentionCommand,
-                        danmakuComposerInitialColor = rememberedDanmakuSendColor,
-                        danmakuComposerInitialMode = rememberedDanmakuSendMode,
-                        danmakuComposerInitialFontSize = rememberedDanmakuSendFontSize,
-                        bvid = videoPlayerSectionTarget.bvid,
-                        coverUrl = videoPlayerSectionTarget.entryCoverUrl,
-                        stationaryListCoverUrl = residentCoverSource?.url.orEmpty(),
-                        stationaryListCoverCacheKey = residentCoverSource?.cacheKey.orEmpty(),
-                        stationaryListCoverDecodeWidthPx = residentCoverSource?.decodeWidthPx ?: 0,
-                        stationaryListCoverDecodeHeightPx = residentCoverSource?.decodeHeightPx ?: 0,
-                        sharedElementBvid = videoPlayerSectionTarget.sharedElementBvid,
-                        sponsorSegment = sponsorSegment,
-                        showSponsorSkipButton = showSponsorSkipButton,
-                        sponsorContributionState = sponsorContributionState,
-                        cdnCount = (uiState as? VideoPlaybackUiState.Success)?.cdnCount ?: 1,
-                        cdnLineDiagnostics = (uiState as? VideoPlaybackUiState.Success)
-                            ?.cdnLineDiagnostics.orEmpty(),
-                        isCdnProbing = (uiState as? VideoPlaybackUiState.Success)?.isCdnProbing ?: false,
-                        isAudioOnly = false,
-                        sleepTimerMinutes = sleepTimerMinutes,
-                        videoshotData = (uiState as? VideoPlaybackUiState.Success)?.videoshotData,
-                        viewPoints = viewPoints,
-                        pbpProgressData = visiblePbpProgressData,
-                        sponsorMarkers = sponsorProgressMarkers,
-                        isVerticalVideo = isVerticalVideo,
-                        isPortraitFullscreen = isPortraitFullscreen,
-                        currentPlayMode = currentPlayMode,
-                        relatedVideos = (uiState as? VideoPlaybackUiState.Success)?.related
-                            ?: emptyList(),
-                        ugcSeason = (uiState as? VideoPlaybackUiState.Success)?.info?.ugc_season,
-                        isFollowed = engagementState.isFollowing,
-                        followStatusKnown = engagementState.followStatusKnown,
-                        isFollowSubmitting = engagementState.isFollowSubmitting,
-                        isTripleSubmitting = engagementState.isTripleSubmitting,
-                        isLiked = engagementState.isLiked,
-                        isDisliked = engagementState.isDisliked,
-                        likeStatusKnown = engagementState.likeStatusKnown,
-                        isCoined = engagementState.coinCount > 0,
-                        isFavorited = engagementState.isFavorited,
-                        hasFavoritePlaylist = isExternalPlaylist &&
-                            externalPlaylistSource == ExternalPlaylistSource.FAVORITE &&
-                            playlistItems.size > 1,
-                        forceCoverOnly = forceCoverOnlyForLiveSafeReturn,
-                        preserveCurrentFrameOnFullscreenChange = preserveCurrentFrameOnFullscreenChange,
-                        useTextureSurfaceForNavigation = useTextureSurfaceForNavigation,
-                        isPlayerSurfaceReady = isPlayerSurfaceReady,
-                        predictiveBackCancelRecoveryGeneration = predictiveBackCancelRecoveryGeneration,
-                        allowLivePlayerSharedElement = allowLivePlayerSharedElement,
-                        sourceRouteForSharedElement = sourceRouteForSharedElement,
-                        suppressSubtitleOverlay = shouldSuppressSubtitleOverlay,
-                        subtitleDisplayModePreferenceOverride = subtitleDisplayModeOverride,
-                        currentCodec = codecPreference,
-                        currentSecondCodec = secondCodecPreference,
-                        currentAudioQuality = audioQualityPreference,
-                    ),
-                    actions = VideoPlayerSectionActions(
-                        resolveNextWatch = viewModel::resolveNextWatchSuggestion,
-                        playNextWatch = viewModel::playNextWatchSuggestion,
-                        onToggleFullscreen = { toggleFullscreen() },
-                        onQualityChange = { qid -> viewModel.changeQuality(qid) },
-                        onBack = { toggleFullscreen() },
-                        onHomeClick = {
-                            handleTopBarAction(resolveVideoDetailTopBarAction(isHomeButton = true))
-                        },
-                        menuActions = playbackActions.menuActions,
-                        onQuickFavorite = { engagementActions.onFavoriteAction(true) },
-                        onLandscapeCommentClick = {
-                            landscapeCommentPanelVisible = !landscapeCommentPanelVisible
-                        },
-                        onDanmakuInputClick = { viewModel.showDanmakuSendDialog() },
-                        onDismissDanmakuComposer = { viewModel.hideDanmakuSendDialog() },
-                        onSendDanmakuComposer = { message, color, mode, fontSize, encourage ->
-                            viewModel.sendDanmaku(message, color, mode, fontSize, encourage)
-                        },
-                        onDanmakuComposerDraftChange = viewModel::updateDanmakuDraft,
-                        onDanmakuComposerSelectionChange = { color, mode, fontSize ->
-                            danmakuSendPreferenceScope.launch {
-                                com.android.purebilibili.core.store.SettingsManager.setDanmakuSendColor(context, color)
-                                com.android.purebilibili.core.store.SettingsManager.setDanmakuSendMode(context, mode)
-                                com.android.purebilibili.core.store.SettingsManager.setDanmakuSendFontSize(context, fontSize)
-                            }
-                        },
-                        onDoubleTapLike = { engagementViewModel.toggleLike() },
-                        onSponsorSkip = { viewModel.skipCurrentSponsorSegment() },
-                        onSponsorDismiss = { viewModel.dismissSponsorSkipButton() },
-                        onSponsorVote = viewModel::voteCurrentSponsorSegment,
-                        onSponsorContributionMarkBoundary = viewModel::markSponsorContributionBoundary,
-                        onSponsorContributionMarkWholeVideo = viewModel::markWholeVideoAsSponsor,
-                        onSponsorContributionCategoryChange = viewModel::setSponsorContributionCategory,
-                        onSponsorContributionActionTypeChange = viewModel::setSponsorContributionActionType,
-                        onSponsorContributionSubmit = viewModel::submitSponsorContribution,
-                        onSponsorContributionCancel = viewModel::cancelSponsorContribution,
-                        onReloadVideo = { viewModel.reloadVideo() },
-                        onSwitchCdn = { viewModel.switchCdn() },
-                        onSwitchCdnTo = { viewModel.switchCdnTo(it) },
-                        onProbeCdnCandidates = { viewModel.probeCurrentCdnCandidates() },
-                        onCodecChange = { viewModel.setVideoCodec(it) },
-                        onSecondCodecChange = { viewModel.setVideoSecondCodec(it) },
-                        onAudioQualityChange = { viewModel.setAudioQuality(it) },
-                        onPlaybackSpeedChange = { viewModel.applyPlaybackSpeedFromUi(it) },
-                        onAudioLangChange = { viewModel.changeAudioLanguage(it) },
-                        onAudioOnlyToggle = {
-                            viewModel.setAudioMode(true)
-                            presentationState.markNavigatingToAudioMode()
-                            onNavigateToAudioMode()
-                        },
-                        onSleepTimerChange = { viewModel.setSleepTimer(it) },
-                        onUserSeek = { position -> viewModel.notifyPluginsOfExplicitSeek(position) },
-                        onPortraitFullscreen = {
-                            if (allowStandalonePortraitExperience) {
-                                if (!isPortraitFullscreen) {
-                                    if (isFullscreenMode) {
-                                        toggleFullscreen()
-                                    }
-                                    enterPortraitFullscreen()
-                                } else {
-                                    presentationState.setPortraitFullscreen(false)
-                                }
-                            }
-                        },
-                        onPlayModeClick = {
-                            com.android.purebilibili.feature.video.player.PlaylistManager.togglePlayMode()
-                        },
-                        onSaveCover = { viewModel.saveCover(context) },
-                        onDownloadAudio = { viewModel.downloadAudio(context) },
-                        onToggleFollow = { engagementViewModel.toggleFollow() },
-                        onFollow = engagementActions.followOwner,
-                        onToggleLike = { engagementViewModel.toggleLike() },
-                        onDislike = engagementViewModel::toggleDislike,
-                        onCoin = { engagementViewModel.openCoinDialog() },
-                        onToggleFavorite = {
-                            openFavoriteFolders(VideoFavoriteEntryPoint.FullscreenOverlay, false)
-                        },
-                        onTriple = { engagementViewModel.doTripleAction() },
-                        onRelatedVideoClick = navigateToRelatedVideo,
-                        onPageSelect = playbackActions.switchPage,
-                        onFavoritePlaylistClick = {
-                            showExternalPlaylistQueueSheet = true
-                        },
-                        onSubtitleDisplayModePreferenceOverrideChange = {
-                            subtitleDisplayModeOverride = it
-                        },
-                        onSubtitleTrackSelected = viewModel::selectSubtitleTrack,
-                    ),
-                    )
-                    }
-                    // 全屏＋物理遮挡铰链：媒体收进首个安全区，不跨缝；软折痕跨整窗。
-                    if (fullscreenOccludingHingePresent) {
-                        com.android.purebilibili.core.ui.adaptive.AppHingePaneLayout(
-                            modifier = Modifier.fillMaxSize().background(Color.Black),
-                            primaryContent = fullscreenPlayerSection,
+                    continuousPlayerContent(
+                        ContinuousPlayerHostLayout(
+                            modifier = Modifier.fillMaxSize(),
+                            viewportWidth = configuration.screenWidthDp.dp,
+                            alpha = continuousPlayerUnitState,
+                            scale = continuousPlayerUnitState,
+                            isFullscreen = true,
                         )
-                    } else {
-                        fullscreenPlayerSection()
-                    }
-                    val success = uiState as? VideoPlaybackUiState.Success
-                    if (canShowLandscapeComments && landscapeCommentPanelVisible && success != null) {
-                        VideoDetailCommentStateScope(commentStateHandle, subReplyStateHandle) { commentState, subReplyState ->
-                            LandscapeCommentPanel(
-                                info = success.info,
-                                listState = landscapeCommentListState,
-                                replies = commentState.replies,
-                                replyCount = commentState.replyCount,
-                                emoteMap = success.emoteMap,
-                                isRepliesLoading = commentState.isRepliesLoading,
-                                isRepliesRefreshing = commentState.isRepliesRefreshing,
-                                repliesError = commentState.repliesError,
-                                isRepliesEnd = commentState.isRepliesEnd,
-                                paginationPage = commentState.nextPage,
-                                voteCard = commentState.voteCard,
-                                videoTags = success.videoTags,
-                                sortMode = commentState.sortMode,
-                                currentMid = commentState.currentMid,
-                                showUpFlag = commentState.showUpFlag,
-                                showIdentityDecorations = commentMemberDecorationsEnabled,
-                                dissolvingIds = commentState.dissolvingIds,
-                                likedComments = commentState.likedComments,
-                                onSortModeChange = commentActions.setSortMode,
-                                onUpClick = navigateToUserSpaceFromVideo,
-                                onSubReplyClick = commentActions.openSubReply,
-                                onCommentReplyClick = playbackActions.replyTo,
-                                onLoadMoreReplies = commentActions.loadComments,
-                                onRefreshReplies = commentActions.refreshComments,
-                                onDeleteComment = commentActions.deleteComment,
-                                onDissolveStart = commentActions.startDissolve,
-                                onCommentLike = commentActions.likeComment,
-                                onCommentHate = commentActions.hateComment,
-                                hatedComments = commentState.hatedComments,
-                                onCommentUrlClick = openCommentUrl,
-                                onReportComment = commentActions.reportComment,
-                                onToggleTopComment = commentActions.toggleTopComment,
-                                onCheckCommentFraud = commentActions.checkCommentFraud,
-                                onTimestampClick = { position -> seekPlayerFromUserAction(playerState.player, position) },
-                                onDismiss = {
-                                    commentActions.closeSubReply()
-                                    landscapeCommentPanelVisible = false
-                                },
-                                onSwitchSide = { landscapeCommentPanelOnLeft = !landscapeCommentPanelOnLeft },
-                                isOnLeft = landscapeCommentPanelOnLeft,
-                                closeProgress = landscapeCommentCloseProgress,
-                                drawerWidth = com.android.purebilibili.feature.video.ui.overlay
-                                    .resolveLandscapeEndDrawerLayoutPolicy(configuration.screenWidthDp)
-                                    .drawerWidthDp.dp,
-                                threadContent = if (subReplyState.visible && subReplyState.rootReply != null) {
-                                    { onImagePreview ->
-                                        VideoInlineSubReplyDetailContent(
-                                            state = subReplyState,
-                                            commentState = commentState,
-                                            emoteMap = success.emoteMap,
-                                            maxTimestampMs = success.videoDurationMs.takeIf { it > 0L },
-                                            onLoadMore = commentActions.loadMoreSubReplies,
-                                            onRefresh = commentActions.refreshSubReplies,
-                                            onSortModeChange = commentActions.setSubReplySortMode,
-                                            onDismiss = commentActions.closeSubReply,
-                                            onRootCommentClick = playbackActions.openRootCommentComposer,
-                                            onTimestampClick = { positionMs ->
-                                                seekPlayerFromUserAction(playerState.player, positionMs)
-                                                commentActions.closeSubReply()
-                                            },
-                                            onImagePreview = onImagePreview,
-                                            onReplyClick = playbackActions.replyTo,
-                                            onConversationClick = commentActions.openSubReplyConversation,
-                                            onConversationBack = commentActions.closeSubReplyConversation,
-                                            onDissolveStart = commentActions.startSubDissolve,
-                                            onDeleteComment = commentActions.deleteSubComment,
-                                            onCheckCommentFraud = commentActions.checkCommentFraud,
-                                            onCommentLike = commentActions.likeComment,
-                                            onCommentHate = commentActions.hateComment,
-                                            onReportComment = commentActions.reportComment,
-                                            onUrlClick = openCommentUrl,
-                                            showIdentityDecorations = commentMemberDecorationsEnabled,
-                                            onAvatarClick = { mid ->
-                                                mid.toLongOrNull()?.let(navigateToUserSpaceFromVideo) ?: Unit
-                                            },
-                                            modifier = Modifier.fillMaxSize(),
-                                        )
-                                    }
-                                } else {
-                                    null
-                                },
-                                modifier = Modifier
-                                    .align(
-                                        if (landscapeCommentPanelOnLeft) Alignment.CenterStart else Alignment.CenterEnd
+                    )
+                }
+                val success = uiState as? VideoPlaybackUiState.Success
+                if (canShowLandscapeComments && landscapeCommentPanelVisible && success != null) {
+                    VideoDetailCommentStateScope(commentStateHandle, subReplyStateHandle) { commentState, subReplyState ->
+                        LandscapeCommentPanel(
+                            info = success.info, listState = landscapeCommentListState,
+                            replies = commentState.replies, replyCount = commentState.replyCount,
+                            emoteMap = success.emoteMap, isRepliesLoading = commentState.isRepliesLoading,
+                            isRepliesRefreshing = commentState.isRepliesRefreshing,
+                            repliesError = commentState.repliesError,
+                            isRepliesEnd = commentState.isRepliesEnd, videoTags = success.videoTags,
+                            paginationPage = commentState.nextPage,
+                            voteCard = commentState.voteCard,
+                            sortMode = commentState.sortMode,
+                            currentMid = commentState.currentMid, showUpFlag = commentState.showUpFlag,
+                            showIdentityDecorations = commentMemberDecorationsEnabled,
+                            dissolvingIds = commentState.dissolvingIds, likedComments = commentState.likedComments,
+                            onSortModeChange = commentActions.setSortMode,
+                            onUpClick = navigateToUserSpaceFromVideo,
+                            onSubReplyClick = commentActions.openSubReply,
+                            onCommentReplyClick = playbackActions.replyTo, onLoadMoreReplies = commentActions.loadComments,
+                            onRefreshReplies = commentActions.refreshComments,
+                            onDeleteComment = commentActions.deleteComment, onDissolveStart = commentActions.startDissolve,
+                            onCommentLike = commentActions.likeComment,
+                            onCommentHate = commentActions.hateComment,
+                            hatedComments = commentState.hatedComments,
+                            onCommentUrlClick = openCommentUrl,
+                            onReportComment = commentActions.reportComment,
+                            onToggleTopComment = commentActions.toggleTopComment,
+                            onCheckCommentFraud = commentActions.checkCommentFraud,
+                            onTimestampClick = { position -> seekPlayerFromUserAction(playerState.player, position) },
+                            onDismiss = {
+                                commentActions.closeSubReply()
+                                landscapeCommentPanelVisible = false
+                            },
+                            onSwitchSide = { landscapeCommentPanelOnLeft = !landscapeCommentPanelOnLeft },
+                            isOnLeft = landscapeCommentPanelOnLeft,
+                            closeProgress = landscapeCommentCloseProgress,
+                            drawerWidth = com.android.purebilibili.feature.video.ui.overlay
+                                .resolveLandscapeEndDrawerLayoutPolicy(configuration.screenWidthDp)
+                                .drawerWidthDp.dp,
+                            threadContent = if (subReplyState.visible && subReplyState.rootReply != null) {
+                                { onImagePreview ->
+                                    VideoInlineSubReplyDetailContent(
+                                        state = subReplyState,
+                                        commentState = commentState,
+                                        emoteMap = success.emoteMap,
+                                        maxTimestampMs = success.videoDurationMs.takeIf { it > 0L },
+                                        onLoadMore = commentActions.loadMoreSubReplies,
+                                        onRefresh = commentActions.refreshSubReplies,
+                                        onSortModeChange = commentActions.setSubReplySortMode,
+                                        onDismiss = commentActions.closeSubReply,
+                                        onRootCommentClick = playbackActions.openRootCommentComposer,
+                                        onTimestampClick = { positionMs ->
+                                            seekPlayerFromUserAction(playerState.player, positionMs)
+                                            commentActions.closeSubReply()
+                                        },
+                                        onImagePreview = onImagePreview,
+                                        onReplyClick = playbackActions.replyTo,
+                                        onConversationClick = commentActions.openSubReplyConversation,
+                                        onConversationBack = commentActions.closeSubReplyConversation,
+                                        onDissolveStart = commentActions.startSubDissolve,
+                                        onDeleteComment = commentActions.deleteSubComment,
+                                        onCheckCommentFraud = commentActions.checkCommentFraud,
+                                        onCommentLike = commentActions.likeComment,
+                                        onCommentHate = commentActions.hateComment,
+                                        onReportComment = commentActions.reportComment,
+                                        onUrlClick = openCommentUrl,
+                                        showIdentityDecorations = commentMemberDecorationsEnabled,
+                                        onAvatarClick = { mid ->
+                                            mid.toLongOrNull()?.let(navigateToUserSpaceFromVideo) ?: Unit
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
                                     )
-                                    .fillMaxHeight(),
-                            )
-                        }
+                                }
+                            } else {
+                                null
+                            },
+                            modifier = Modifier
+                                .align(if (landscapeCommentPanelOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
+                                .fillMaxHeight(),
+                        )
                     }
                 }
 
@@ -4202,7 +3987,7 @@ internal fun VideoDetailScreenStateHolder(
                                 bvid = bvid,
                                 danmakuManager = sharedDanmakuManager,
                                 coverUrl = coverUrl,
-                                onBack = { handleBack() },
+                                onBack = handlePlayerBack,
                                 onUpClick = navigateToUserSpaceFromVideo,
                                 onNavigateToAudioMode = {
                                     presentationState.markNavigatingToAudioMode()
@@ -4249,6 +4034,8 @@ internal fun VideoDetailScreenStateHolder(
                                 videoAiSummaryEntryEnabled = videoAiSummaryEntryEnabled,
                                 videoNoteEnabled = videoNoteEnabled,
                                 videoNoteDefaultCollapsed = videoNoteDefaultCollapsed,
+                                externalQueueTitle = externalPlaylistQueueTitle,
+                                externalQueueContent = tabletExternalQueueContent,
                                 playerContent = continuousPlayerSlot,
                                 transitionChromeAlphaProvider = videoCardDetailChromeAlphaProvider,
                             )
@@ -4273,13 +4060,7 @@ internal fun VideoDetailScreenStateHolder(
                             bvid = bvid,
                             danmakuManager = sharedDanmakuManager,
                             coverUrl = coverUrl,
-                            onBack = {
-                                com.android.purebilibili.core.util.Logger.d(
-                                    "VideoDetailScreen",
-                                    "📱 Calling handleBack()"
-                                )
-                                handleBack()
-                            },
+                            onBack = handlePlayerBack,
                             onUpClick = navigateToUserSpaceFromVideo,
                             onBgmClick = onBgmClick,
                             onNavigateToAudioMode = {
@@ -4326,6 +4107,8 @@ internal fun VideoDetailScreenStateHolder(
                             videoAiSummaryEntryEnabled = videoAiSummaryEntryEnabled,
                             videoNoteEnabled = videoNoteEnabled,
                             videoNoteDefaultCollapsed = videoNoteDefaultCollapsed,
+                            externalQueueTitle = externalPlaylistQueueTitle,
+                            externalQueueContent = tabletExternalQueueContent,
                             playerContent = continuousPlayerSlot,
                             transitionChromeAlphaProvider = videoCardDetailChromeAlphaProvider,
                             )
@@ -4659,7 +4442,7 @@ internal fun VideoDetailScreenStateHolder(
                                 durationMillis = resolveInlinePortraitPlayerCommentCollapseDurationMillis(
                                     videoContentTabSwitchAnimationSpec
                                 ),
-                                easing = FastOutSlowInEasing
+                                easing = AppMotionEasing.M1Standard
                             ),
                             label = "inline_portrait_comment_tab_collapse"
                         )
@@ -4682,7 +4465,7 @@ internal fun VideoDetailScreenStateHolder(
                                     durationMillis = resolveInlinePortraitPlayerCommentCollapseDurationMillis(
                                         videoContentTabSwitchAnimationSpec
                                     ),
-                                    easing = FastOutSlowInEasing
+                                    easing = AppMotionEasing.M1Standard
                                 )
                             } else {
                                 snap()
@@ -4771,7 +4554,7 @@ internal fun VideoDetailScreenStateHolder(
                                     durationMillis = resolveInlinePortraitPlayerCommentCollapseDurationMillis(
                                         videoContentTabSwitchAnimationSpec
                                     ),
-                                    easing = FastOutSlowInEasing
+                                    easing = AppMotionEasing.M1Standard
                                 )
                             } else {
                                 snap()
@@ -4820,7 +4603,14 @@ internal fun VideoDetailScreenStateHolder(
                             with(insetDensity) { maxOf(rootInsetPx, resourceInsetPx).toDp() }
                         }
                         val inlinePlayerHeight = inlineViewportHeight + collapsedSystemBarInset
-                        val fullscreenPlayerHeight = screenHeightDp.coerceAtLeast(1.dp)
+                        // 全屏容器高：全屏（横屏窗口）取窗口高；收起动画起点（竖屏窗口）取
+                        // 横屏窗口高的等效几何 ≈ 竖屏窗口宽。此前取 screenHeightDp，旋转回
+                        // 竖屏后首帧容器为整屏高、媒体上下大黑边，产生 letterbox 跳变。
+                        val fullscreenPlayerHeight = if (isFullscreenMode) {
+                            screenHeightDp.coerceAtLeast(1.dp)
+                        } else {
+                            screenWidthDp.coerceAtLeast(1.dp)
+                        }
 
                         //  视频播放器区域：状态栏可见时避让，隐藏时让画面沉浸到顶部。
                         //  尝试获取共享元素作用域
@@ -5375,7 +5165,7 @@ internal fun VideoDetailScreenStateHolder(
                                 CollapsedPlayerNavigationBar(
                                     scrollRatio = layoutCollapseProgress,
                                     topInset = collapsedSystemBarInset,
-                                    onBack = handleBack,
+                                    onBack = handlePlayerBack,
                                     onHomeClick = {
                                         handleTopBarAction(resolveVideoDetailTopBarAction(isHomeButton = true))
                                     },
@@ -5565,7 +5355,10 @@ internal fun VideoDetailScreenStateHolder(
                                         isLeaving = isLeaving,
                                         rootTransitionOwnsContentAlpha = detailShellSharedBoundsEnabled,
                                         animateLateEntryContent = currentBvid == bvid &&
-                                            isTransitionFinished && detailShellSharedBoundsEnabled &&
+                                            isTransitionFinished &&
+                                            // 关闭卡片过渡时同样启用骨架垫底交接：否则 Loading 骨架
+                                            // 在内容可用的同一帧硬切消失，正文区出现跳动。
+                                            (detailShellSharedBoundsEnabled || !transitionEnabled) &&
                                             !keepLoadedContentForBackPreview &&
                                             !suppressEnterFadeAfterBackPreview,
                                         keepContentVisibleAfterBackPreview =
@@ -5819,13 +5612,7 @@ internal fun VideoDetailScreenStateHolder(
             sharedPlayer = if (useSharedPortraitPlayer) playerState.player else null,
             useTextureSurfaceForNavigation = useTextureSurfaceForNavigation,
             isPlayerSurfaceReady = isPlayerSurfaceReady,
-            onBack = {
-                if (directPortraitEntryFromRoute) {
-                    handleBack()
-                } else {
-                    presentationState.setPortraitFullscreen(false)
-                }
-            },
+            onBack = handlePlayerBack,
             onHomeClick = {
                 presentationState.setPortraitFullscreen(false)
                 handleTopBarAction(resolveVideoDetailTopBarAction(isHomeButton = true))
@@ -6108,5 +5895,6 @@ internal fun VideoDetailScreenStateHolder(
         mainContent = { VideoDetailRouteSheetMainContent() },
         overlayContent = { VideoDetailRouteSheetOverlayContent() }
     )
+    }
     }
 }

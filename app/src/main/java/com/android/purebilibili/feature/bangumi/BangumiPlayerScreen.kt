@@ -1,6 +1,7 @@
 // 文件路径: feature/bangumi/BangumiPlayerScreen.kt
 package com.android.purebilibili.feature.bangumi
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.appElasticPress
 
@@ -80,7 +81,6 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.android.purebilibili.core.util.FormatUtils
 import androidx.compose.material.icons.Icons
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -460,6 +460,7 @@ fun BangumiPlayerScreen(
         com.android.purebilibili.feature.video.usecase.seekPlayerFromUserAction(exoPlayer, positionMs.coerceIn(0L, duration))
     }
     val playerFeatures = BangumiPlayerFeatures(
+        shareSeasonType = successState?.seasonDetail?.seasonType ?: 0,
         commentVisible = commentPanelVisible, commentOnLeft = landscapeCommentOnLeft,
         commentWidthDp = commentWidthDp,
         commentCloseProgressProvider = { landscapeCommentCloseProgress.floatValue },
@@ -602,12 +603,15 @@ fun BangumiPlayerScreen(
         }
     }
 
+    com.android.purebilibili.feature.video.screen.VideoDetailKeepScreenOnEffect(
+        window = context.findActivity()?.window,
+        player = exoPlayer,
+    )
+
     // 清理播放器 +  屏幕常亮管理
     DisposableEffect(Unit) {
         val window = context.findActivity()?.window
 
-        //  [修复] 进入番剧播放页时保持屏幕常亮，防止自动熄屏
-        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         onDispose {
             miniPlayerManager.endBangumiPlayback(exoPlayer)
@@ -1068,7 +1072,7 @@ fun BangumiPlayerScreen(
                     inlinePlayerCollapseState.layoutReconciled ||
                     !inlineCollapseEnabled
             ) {
-                tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                tween(durationMillis = 280, easing = AppMotionEasing.M1Standard)
             } else {
                 snap()
             },

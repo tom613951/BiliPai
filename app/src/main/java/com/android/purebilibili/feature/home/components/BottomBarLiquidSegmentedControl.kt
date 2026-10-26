@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.home.components
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 
 import android.os.Build
@@ -13,7 +14,6 @@ import com.android.purebilibili.core.ui.OpticalContrastPalette
 import androidx.compose.animation.core.EaseOut
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -427,6 +427,9 @@ fun BottomBarLiquidSegmentedControl(
     onIndicatorDragStateChanged: ((Boolean) -> Unit)? = null,
     isScrollInProgressProvider: () -> Boolean = { false },
     externalPagerMotionEffectsEnabled: Boolean = false,
+    // Glass pager release and landing signals; native branches keep their existing motion.
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
     liquidGlassTuningOverride: LiquidGlassTuning? = null,
     geometryMode: FloatingBottomBarGeometryMode = FloatingBottomBarGeometryMode.Segmented,
     centerGlassContent: Boolean = false,
@@ -438,6 +441,8 @@ fun BottomBarLiquidSegmentedControl(
     liquidGlassAnimateLabelWidthChanges: Boolean = false,
     // Explicit native placement opt-in, independent from glass-only geometry and shared defaults.
     centerNativeContent: Boolean = false,
+    // Glass-only indicator measurement can follow visible labels while slots reserve badge limits.
+    liquidGlassIndicatorMeasurementLabels: List<String>? = null,
 ): Unit = AppExactTouchTargets {
     if (items.isEmpty()) return@AppExactTouchTargets
     val effectiveLabelFontSize = com.android.purebilibili.core.ui.appTabLabelFontSize(labelFontSize)
@@ -594,14 +599,15 @@ fun BottomBarLiquidSegmentedControl(
         val liquidItemWidth = if (animateLabelWidths && renderedItemWidth == null && measuredLiquidItemWidth != null) {
             animateDpAsState(
                 targetValue = measuredLiquidItemWidth,
-                animationSpec = tween(180, easing = FastOutSlowInEasing),
+                animationSpec = tween(180, easing = AppMotionEasing.M1Standard),
                 label = "glassAsyncBadgeSlotWidth",
             ).value
         } else measuredLiquidItemWidth
         BottomBarFloatingSegmentedControl(
             adaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
             items = items,
-            liquidGlassMeasurementLabels = glassMeasurementLabels,
+            liquidGlassMeasurementLabels = liquidGlassIndicatorMeasurementLabels
+                ?.takeIf { it.size == items.size } ?: glassMeasurementLabels,
             liquidGlassAnimateLabelWidthChanges = liquidGlassAnimateLabelWidthChanges,
             liquidGlassLabelHorizontalPadding = liquidGlassLabelHorizontalPadding,
             selectedIndex = selectedIndex,
@@ -630,6 +636,8 @@ fun BottomBarLiquidSegmentedControl(
             isScrollInProgressProvider = isScrollInProgressProvider,
             onIndicatorDragStateChanged = onIndicatorDragStateChanged,
             externalPagerMotionEffectsEnabled = externalPagerMotionEffectsEnabled,
+            isPagerDraggingProvider = isPagerDraggingProvider,
+            pagerTargetPositionProvider = pagerTargetPositionProvider,
             liquidGlassTuningOverride = liquidGlassTuningOverride,
             geometryMode = geometryMode,
             scrollState = scrollState,

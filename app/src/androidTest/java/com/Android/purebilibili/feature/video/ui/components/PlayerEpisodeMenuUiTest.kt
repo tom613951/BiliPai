@@ -2,18 +2,11 @@ package com.android.purebilibili.feature.video.ui.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
@@ -22,22 +15,17 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.purebilibili.core.theme.AppUiStyle
 import com.android.purebilibili.core.theme.LocalAppUiStyle
 import com.android.purebilibili.core.ui.AppThemeConfig
 import com.android.purebilibili.core.ui.LocalAppThemeConfig
-import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.data.model.response.Page
 import com.android.purebilibili.data.model.response.UgcEpisode
 import com.android.purebilibili.data.model.response.UgcSeason
 import com.android.purebilibili.data.model.response.UgcSection
-import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -60,12 +48,11 @@ class PlayerEpisodeMenuUiTest {
         }
         composeTestRule.setContent {
             EpisodeMenuTheme(nativePopup.value) {
-                EpisodeAnchor { anchor ->
+                Box(Modifier.fillMaxSize()) {
                     if (visible.value) {
                         PlayerEpisodeMenu(
                             pages = pages, currentPageIndex = 58, ugcSeason = null,
                             currentBvid = "BVparts", currentCid = 59,
-                            anchorBounds = anchor,
                             isFullscreen = true,
                             onDismiss = { visible.value = false },
                             onPageSelect = { assertFalse(visible.value); selected.add(it) },
@@ -104,11 +91,11 @@ class PlayerEpisodeMenuUiTest {
         var selected: UgcEpisode? = null
         composeTestRule.setContent {
             EpisodeMenuTheme(nativePopup.value) {
-                EpisodeAnchor { anchor ->
+                Box(Modifier.fillMaxSize()) {
                     if (visible.value) {
                         PlayerEpisodeMenu(
                             pages = emptyList(), currentPageIndex = 0, ugcSeason = season,
-                            currentBvid = "BVcurrent", currentCid = 200, anchorBounds = anchor,
+                            currentBvid = "BVcurrent", currentCid = 200,
                             isFullscreen = true,
                             onDismiss = { visible.value = false },
                             onPageSelect = { error("Collection must not invoke page callback") },
@@ -127,20 +114,6 @@ class PlayerEpisodeMenuUiTest {
         }
     }
 
-    @Composable
-    private fun EpisodeAnchor(content: @Composable (IntRect?) -> Unit) {
-        var anchor by remember { mutableStateOf<IntRect?>(null) }
-        Box(Modifier.fillMaxSize()) {
-            AppText(
-                text = "选集入口",
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).onGloballyPositioned {
-                    val bounds = it.boundsInWindow()
-                    anchor = IntRect(bounds.left.roundToInt(), bounds.top.roundToInt(), bounds.right.roundToInt(), bounds.bottom.roundToInt())
-                },
-            )
-            content(anchor)
-        }
-    }
 
     @Composable
     private fun EpisodeMenuTheme(nativePopup: Boolean, content: @Composable () -> Unit) {

@@ -22,7 +22,7 @@ import com.android.purebilibili.data.repository.LiveShieldInfo
 import com.android.purebilibili.data.repository.LiveSuperChatReportRequest
 import com.android.purebilibili.data.repository.LiveVoteSnapshot
 import com.android.purebilibili.data.repository.buildLiveEmoticonSendRequest
-import com.android.purebilibili.feature.plugin.PlaybackCdnPlugin
+import com.android.purebilibili.plugin.sdk.PlaybackCdnPlugin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -46,6 +46,7 @@ import kotlinx.serialization.json.jsonObject
 /**
  * 直播弹幕 UI 模型
  */
+@kotlinx.serialization.Serializable
 data class LiveDanmakuItem(
     val text: String,
     val color: Int = 16777215, // Default White
@@ -53,8 +54,12 @@ data class LiveDanmakuItem(
     val uid: Long = 0,
     val uname: String = "",
     val isSelf: Boolean = false, // 是否自己发送
+    val emoticon: com.android.purebilibili.data.model.response.LiveMessageEmote? = null,
+    val inlineEmotes: Map<String, com.android.purebilibili.data.model.response.LiveMessageEmote> = emptyMap(),
     val emoticonUrl: String? = null, // [NEW] B站自定义表情 URL
     // [新增] 视觉优化字段
+    val medal: com.android.purebilibili.data.model.response.LiveMessageMedal? = null,
+    val rawMessage: kotlinx.serialization.json.JsonObject? = null,
     val medalName: String = "",
     val medalLevel: Int = 0,
     val medalColor: Int = 0,
@@ -67,6 +72,13 @@ data class LiveDanmakuItem(
     val superChatId: Long = 0,
     val superChatPrice: String = "",
     val superChatBackgroundColor: Int = 0,
+    val superChatHeaderColor: Int = 0,
+    val superChatMessageColor: Int = 0,
+    val superChatNameColor: Int = 0,
+    val superChatFace: String = "",
+    val superChatFaceFrame: String = "",
+    val superChatHeaderImage: String = "",
+    val superChatRawInfo: String = "",
     val dmType: Int = 0,
     val idStr: String = "",
     val reportTs: Long = 0,
@@ -75,6 +87,7 @@ data class LiveDanmakuItem(
     val superChatReportTs: Long = 0,
     // SC 展示时长（秒），用于全屏大字浮层自动消失
     val superChatDuration: Int = 0,
+    val superChatStartTime: Long = 0,
     val superChatEndTime: Long = 0,
     val isSystem: Boolean = false
 )
@@ -205,7 +218,9 @@ class LivePlayerViewModel : ViewModel() {
     private var danmakuConnectJob: Job? = null
     private var danmakuCollectJob: Job? = null
     private var liveHeartbeatJob: Job? = null
+    private var superChatEnabled = true
     private var superChatExpiryJob: Job? = null
+    private val superChatMenuPauses = LiveSuperChatMenuPausePolicy()
     private var followJob: Job? = null
     
     private var currentRoomId: Long = 0
@@ -213,7 +228,10 @@ class LivePlayerViewModel : ViewModel() {
     private var currentRequestedQuality: Int = 10000
     private var currentAudioOnly: Boolean = false
     // 清晰度记忆：仅首次加载读取一次用户上次选择的清晰度
-    private var preferredQualityLoaded = false
+    private var initialPreferencesLoaded = false
+    private var preferredStream: String? = null
+    private var preferredCdnHost: String? = null
+    private var persistSuperChats = false
     // 进房历史上报去重（每个房间只报一次）
     private var roomEntryReportedFor: Long = 0
     private var resolvedPlayback: ResolvedLivePlayback? = null
@@ -225,6 +243,15 @@ class LivePlayerViewModel : ViewModel() {
     /**
      * 加载直播流和直播间详情
      */
+    fun updateVideoOrientation(width: Int, height: Int, pixelRatio: Float) {
+        val portrait = resolveLiveVideoIsPortrait(width, height, pixelRatio) ?: return
+        _uiState.update { state ->
+            if (state is LivePlayerState.Success && state.roomInfo.isPortrait != portrait) {
+                state.copy(roomInfo = state.roomInfo.copy(isPortrait = portrait))
+            } else state
+        }
+    }
+
     fun loadLiveStream(roomId: Long, qn: Int = 10000) {
         resetPlaybackReloadBudget()
         loadLiveStreamInternal(
@@ -247,6 +274,7 @@ class LivePlayerViewModel : ViewModel() {
         if (currentRoomId != roomId) {
             _voteSnapshot.value = LiveVoteSnapshot()
             clearChatHistory()
+            superChatMenuPauses.clear()
             _superChatItems.value = emptyList()
             superChatExpiryJob?.cancel()
             followJob?.cancel()
@@ -276,15 +304,16 @@ class LivePlayerViewModel : ViewModel() {
                 CrashReporter.markLivePlaybackStage("load_stream_loading")
             }
 
-            // 清晰度记忆（对齐 PiliPlus liveQuality）：首次加载时读取用户上次选择的清晰度
-            var effectiveQn = qn
-            if (!preferredQualityLoaded) {
-                preferredQualityLoaded = true
+            // 清晰度由当前网络偏好或手动选择传入；初始化线路与 SC 偏好。
+            val effectiveQn = qn
+            NetworkModule.appContext?.let { preferredCdnHost = SettingsManager.getLiveCdnHost(it).first() }
+            if (!initialPreferencesLoaded) {
+                initialPreferencesLoaded = true
                 val appContext = NetworkModule.appContext
                 if (appContext != null) {
-                    SettingsManager.getLivePreferredQuality(appContext).first()
-                        .takeIf { it > 0 }
-                        ?.let { effectiveQn = it }
+                    preferredStream = SettingsManager.getLivePreferredStream(appContext).first()
+                    persistSuperChats = SettingsManager.getLiveSuperChatPersistent(appContext).first()
+                    setSuperChatEnabled(SettingsManager.getLiveSuperChatEnabled(appContext).first())
                 }
             }
             currentRequestedQuality = effectiveQn
@@ -587,7 +616,7 @@ class LivePlayerViewModel : ViewModel() {
         resetPlaybackReloadBudget()
         // 持久化用户选择的直播清晰度（下次进入房间沿用）
         NetworkModule.appContext?.let { ctx ->
-            viewModelScope.launch { SettingsManager.setLivePreferredQuality(ctx, qn) }
+            viewModelScope.launch { SettingsManager.setLivePreferredQuality(ctx, qn, com.android.purebilibili.core.util.NetworkUtils.isWifi(ctx)) }
         }
         
         liveStreamLoadJob?.cancel()
@@ -758,6 +787,11 @@ class LivePlayerViewModel : ViewModel() {
         val url = candidate.urls.getOrNull(urlIndex) ?: return
         activeCandidateIndex = candidateIndex
         activeUrlIndex = urlIndex
+        preferredStream = listOf(candidate.protocolName, candidate.formatName, candidate.codecName).joinToString("|")
+        val preference = preferredStream
+        NetworkModule.appContext?.let { context ->
+            viewModelScope.launch { SettingsManager.setLivePreferredStream(context, preference.orEmpty()) }
+        }
         resetPlaybackReloadBudget()
         android.util.Log.d("LivePlayer", " Manual switch source (candidate=$candidateIndex, url=$urlIndex): ${url.take(80)}...")
         CrashReporter.markLivePlaybackStage("manual_switch_source_${candidateIndex}_${urlIndex}")
@@ -791,18 +825,24 @@ class LivePlayerViewModel : ViewModel() {
                     )
                 }
             )
+        }?.let { playback ->
+            playback.copy(candidates = playback.candidates.map { candidate ->
+                candidate.copy(urls = candidate.urls.map { overrideLiveCdnUrl(it, preferredCdnHost) }.distinct())
+            })
         }
-        val primaryUrl = resolved?.primaryUrl
-        if (resolved != null && primaryUrl != null) {
+        val preferredIndex = resolveLivePreferredCandidateIndex(resolved?.candidates.orEmpty(), preferredStream)
+        val selected = resolved?.candidates?.getOrNull(preferredIndex)
+        val primaryUrl = selected?.urls?.firstOrNull()
+        if (resolved != null && selected != null && primaryUrl != null) {
             resolvedPlayback = resolved
-            activeCandidateIndex = 0
+            activeCandidateIndex = preferredIndex
             activeUrlIndex = 0
             _uiState.value = LivePlayerState.Success(
                 playUrl = primaryUrl,
-                allPlayUrls = resolved.candidates.first().urls,
+                allPlayUrls = selected.urls,
                 currentUrlIndex = 0,
-                currentQuality = resolved.currentQuality,
-                qualityList = resolved.qualityList,
+                currentQuality = selected.currentQuality,
+                qualityList = selected.qualityList,
                 roomInfo = roomInfo,
                 anchorInfo = anchorInfo,
                 isFollowing = isFollowing,
@@ -890,6 +930,13 @@ class LivePlayerViewModel : ViewModel() {
                         uid = seed.uid,
                         uname = seed.uname,
                         emoticonUrl = seed.emoticonUrl,
+                        emoticon = seed.emoticon,
+                        inlineEmotes = seed.inlineEmotes,
+                        medal = seed.medal,
+                        rawMessage = seed.rawMessage,
+                        medalName = seed.medalName,
+                        medalLevel = seed.medalLevel,
+                        medalColor = seed.medalColor,
                         replyToName = seed.replyToName,
                         replyToUid = seed.replyToUid,
                         dmType = seed.dmType,
@@ -900,12 +947,13 @@ class LivePlayerViewModel : ViewModel() {
                 )
             }
         }
+        if (!superChatEnabled) return
         LiveRepository.getLiveSuperChatMessages(roomId).onSuccess { items ->
+            if (!superChatEnabled) return@onSuccess
             items.forEach { seed ->
                 currentCoroutineContext().ensureActive()
                 val nowSeconds = System.currentTimeMillis() / 1000L
                 val endTime = resolveLiveSuperChatEndTime(seed.endTime, seed.startTime, seed.duration, nowSeconds)
-                if (remainingLiveSuperChatSeconds(endTime, nowSeconds) <= 0) return@forEach
                 val item = LiveDanmakuItem(
                     text = seed.message,
                     uid = seed.uid,
@@ -914,12 +962,24 @@ class LivePlayerViewModel : ViewModel() {
                     superChatId = seed.id,
                     superChatPrice = seed.price,
                     superChatBackgroundColor = seed.backgroundColor,
+                    superChatHeaderColor = seed.headerColor,
+                    superChatMessageColor = seed.messageColor,
+                    superChatNameColor = seed.nameColor,
+                    superChatFace = seed.face,
+                    superChatFaceFrame = seed.faceFrame,
+                    superChatHeaderImage = seed.headerImage,
+                    superChatRawInfo = seed.rawInfo,
+                    medal = seed.medal,
+                    medalName = seed.medalName,
+                    medalLevel = seed.medalLevel,
+                    medalColor = seed.medalColor,
                     superChatToken = seed.token,
                     superChatReportTs = seed.reportTs,
                     superChatDuration = seed.duration,
+                    superChatStartTime = seed.startTime,
                     superChatEndTime = endTime
                 )
-                prefetchedSuperChats += item
+                if (persistSuperChats || remainingLiveSuperChatSeconds(endTime, nowSeconds) > 0) prefetchedSuperChats += item
                 appendChatHistory(item)
             }
         }
@@ -929,16 +989,71 @@ class LivePlayerViewModel : ViewModel() {
         }
     }
 
+    fun setSuperChatEnabled(enabled: Boolean) {
+        superChatEnabled = enabled
+        if (!enabled) {
+            superChatMenuPauses.clear()
+            _superChatItems.value = emptyList()
+            _chatHistory.update { entries -> entries.filterNot { it.item.isSuperChat } }
+            scheduleSuperChatExpiry()
+        }
+    }
+
+    fun reloadPlaybackPreferences() {
+        val context = NetworkModule.appContext ?: return
+        val roomId = currentRoomId
+        viewModelScope.launch {
+            val quality = SettingsManager.getLivePreferredQuality(
+                context, com.android.purebilibili.core.util.NetworkUtils.isWifi(context),
+            ).first()
+            currentCoroutineContext().ensureActive()
+            if (roomId == currentRoomId && roomId > 0L) {
+                resetPlaybackReloadBudget()
+                loadLiveStreamInternal(
+                    roomId = roomId,
+                    qn = quality,
+                    showLoading = false,
+                    reconnectDanmaku = false,
+                    refreshEmoticons = false,
+                )
+            }
+        }
+    }
+
+    fun setSuperChatPersistence(enabled: Boolean) {
+        if (persistSuperChats == enabled) return
+        persistSuperChats = enabled
+        if (enabled) superChatExpiryJob?.cancel() else scheduleSuperChatExpiry()
+    }
+
+    fun setSuperChatMenuOpen(roomId: Long, id: Long, paused: Boolean) {
+        if (roomId != currentRoomId || id <= 0L) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (paused) {
+            superChatMenuPauses.open(id, now)
+        } else {
+            val extraSeconds = superChatMenuPauses.close(id, now) ?: return
+            fun LiveDanmakuItem.resume(): LiveDanmakuItem = if (superChatId == id) {
+                copy(superChatEndTime = superChatEndTime + extraSeconds)
+            } else this
+            _superChatItems.update { items -> items.map { it.resume() } }
+            _chatHistory.update { history -> history.map { it.copy(item = it.item.resume()) } }
+        }
+        scheduleSuperChatExpiry()
+    }
+
     private fun scheduleSuperChatExpiry() {
         superChatExpiryJob?.cancel()
+        if (persistSuperChats) return
         superChatExpiryJob = viewModelScope.launch {
             while (isActive) {
-                val nextEnd = _superChatItems.value.minOfOrNull { it.superChatEndTime } ?: break
+                val nextEnd = _superChatItems.value.filterNot { superChatMenuPauses.isPaused(it.superChatId) }
+                    .minOfOrNull { it.superChatEndTime } ?: break
                 val now = System.currentTimeMillis() / 1000L
                 if (nextEnd > now) delay((nextEnd - now) * 1000L)
                 val cutoff = System.currentTimeMillis() / 1000L
                 _superChatItems.update { items ->
-                    items.filterNot { shouldExpireLiveSuperChat(it.superChatEndTime, cutoff) }
+                    items.filterNot { !superChatMenuPauses.isPaused(it.superChatId) && shouldExpireLiveSuperChat(it.superChatEndTime, cutoff) }
                 }
             }
         }
@@ -1056,7 +1171,11 @@ class LivePlayerViewModel : ViewModel() {
                             isSelf = true,
                             replyToName = if (item.dmType == 0) reply?.uname.orEmpty() else "",
                             replyToUid = if (item.dmType == 0) reply?.uid ?: 0L else 0L,
+                            emoticon = item.messageEmote().takeIf { item.dmType == 1 },
                             emoticonUrl = item.url.takeIf { item.dmType == 1 && it.isNotBlank() },
+                            inlineEmotes = if (item.dmType == 0) {
+                                item.messageEmote()?.let { mapOf(item.emoji to it) }.orEmpty()
+                            } else emptyMap(),
                             dmType = item.dmType
                         )
                     )
@@ -1085,17 +1204,17 @@ class LivePlayerViewModel : ViewModel() {
      */
     fun clickLike(clickTime: Int = 1) {
         val currentState = _uiState.value as? LivePlayerState.Success ?: return
-        if (currentRoomId == 0L) return
-        
+        val roomId = currentRoomId
+        val uid = TokenManager.midCache ?: 0L
+        if (uid <= 0L) {
+            _events.tryEmit(LivePlayerEvent.Toast("账号未登录"))
+            return
+        }
+        if (roomId <= 0L || clickTime <= 0) return
         viewModelScope.launch {
-            val uid = TokenManager.midCache ?: 0L
-            if (uid <= 0L) return@launch
-            LiveRepository.clickLike(
-                roomId = currentRoomId,
-                uid = uid,
-                anchorId = currentState.anchorInfo.uid,
-                clickTime = clickTime
-            )
+            LiveRepository.clickLike(roomId, uid, currentState.anchorInfo.uid, clickTime)
+                .onSuccess { if (currentRoomId == roomId) _events.tryEmit(LivePlayerEvent.Toast("点赞成功")) }
+                .onFailure { if (currentRoomId == roomId) _events.tryEmit(LivePlayerEvent.Toast(it.message ?: "点赞失败")) }
         }
     }
 
@@ -1298,7 +1417,8 @@ class LivePlayerViewModel : ViewModel() {
             is LiveRealtimeAction.UpdateRoomTitle -> updateRoomTitle(action.title)
             is LiveRealtimeAction.EmitChat -> emitLiveChatItem(action.item)
             is LiveRealtimeAction.EmitSuperChat -> {
-                if (shouldExpireLiveSuperChat(action.item.superChatEndTime, System.currentTimeMillis() / 1000L)) return
+                if (!superChatEnabled) return
+                if (!persistSuperChats && shouldExpireLiveSuperChat(action.item.superChatEndTime, System.currentTimeMillis() / 1000L)) return
                 _superChatItems.value = (
                     listOf(action.item) + _superChatItems.value
                         .filterNot { it.superChatId > 0L && it.superChatId == action.id }
@@ -1366,8 +1486,9 @@ class LivePlayerViewModel : ViewModel() {
             android.util.Log.d("LivePlayer", "🔄 Skipped duplicate self-sent danmaku: ${item.text}")
             return
         }
-        appendChatHistory(item)
-        _danmakuFlow.tryEmit(item)
+        val resolved = resolveLiveMessageEmoteResources(item, _emoticonPackages.value)
+        appendChatHistory(resolved)
+        if (!resolved.isSuperChat) _danmakuFlow.tryEmit(resolved)
     }
 
     private fun appendChatHistory(item: LiveDanmakuItem) {
@@ -1385,8 +1506,9 @@ class LivePlayerViewModel : ViewModel() {
     }
 
     private fun emitOwnLiveChatItem(item: LiveDanmakuItem) {
-        appendChatHistory(item)
-        _danmakuFlow.tryEmit(item)
+        val resolved = resolveLiveMessageEmoteResources(item, _emoticonPackages.value)
+        appendChatHistory(resolved)
+        _danmakuFlow.tryEmit(resolved)
     }
 
     private fun updateRoomWatchedText(text: String) {
@@ -1398,7 +1520,7 @@ class LivePlayerViewModel : ViewModel() {
     }
 
     private fun updateRoomOnlineRank(count: Long) {
-        if (count <= 0L) return
+        if (count < 0L) return
         val current = _uiState.value as? LivePlayerState.Success ?: return
         _uiState.value = current.copy(
             roomInfo = current.roomInfo.copy(onlineRankText = "高能观众(${formatLiveCompactCount(count)})")

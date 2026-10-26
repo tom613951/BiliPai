@@ -1,6 +1,7 @@
 package com.android.purebilibili.feature.video.ambient
 
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -88,6 +89,7 @@ internal data class AmbientRenderFrame(
 
 @Stable
 internal class AmbientPresentation {
+    private var bindingOwner: Any? = null
     var previous by mutableStateOf<AmbientRenderFrame?>(null)
     var current by mutableStateOf<AmbientRenderFrame?>(null)
     var visible by mutableStateOf(false)
@@ -101,6 +103,19 @@ internal class AmbientPresentation {
     var aspectRatio by mutableStateOf(16f / 9f)
     var failureFadeAt by mutableStateOf<Long?>(null)
     fun clear() { epoch++; previous = null; current = null; failureFadeAt = null }
+
+    fun claimBinding(owner: Any) { bindingOwner = owner }
+
+    /** 旧输出的退出回调不能清除新输出；同时解除捕获视频 View 的几何回调。 */
+    fun releaseBinding(owner: Any): Boolean {
+        if (bindingOwner !== owner) return false
+        bindingOwner = null
+        visibilityGate = { false }
+        videoBoundsInWindow = { null }
+        visible = false
+        layoutEnabled = false
+        return true
+    }
 }
 
 internal data class AmbientRunPolicy(
@@ -170,8 +185,19 @@ internal class AmbientFrameController(
                         val raw = sample.copy(Bitmap.Config.ARGB_8888, false) ?: continue
                         val analyzed = withContext(Dispatchers.Default) {
                             val crop = analyzer.analyze(pixels, w, h, started)
-                            val glow = if (config.glow) Bitmap.createBitmap(analyzer.blur(pixels, w, h, crop), w, h, Bitmap.Config.ARGB_8888)
-                                else raw
+                            val glow = if (config.glow) {
+                                // API 33+ 优先 RenderEffect GPU 模糊；失败或低版本回退 CPU 内核。
+                                val gpuGlow = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    AmbientGpuBlurPolicy.glow(raw, crop)
+                                } else {
+                                    null
+                                }
+                                gpuGlow ?: Bitmap.createBitmap(
+                                    analyzer.blur(pixels, w, h, crop), w, h, Bitmap.Config.ARGB_8888
+                                )
+                            } else {
+                                raw
+                            }
                             crop to glow
                         }
                         val result = analyzed.second

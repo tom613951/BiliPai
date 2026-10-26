@@ -6,7 +6,8 @@ data class LivePagedResult<T>(
     val items: List<T>,
     val hasMore: Boolean,
     val nextPage: Int,
-    val totalCount: Int = 0
+    // 未返回总数时保留未知，避免将缺失数据展示为无人开播。
+    val totalCount: Int? = null
 )
 
 data class LiveDanmakuSendRequest(

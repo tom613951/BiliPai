@@ -9,7 +9,7 @@ import com.android.purebilibili.data.model.response.SponsorSegment
 import com.android.purebilibili.data.model.response.UgcSeason
 import com.android.purebilibili.data.model.response.VideoshotData
 import com.android.purebilibili.data.model.response.ViewPoint
-import com.android.purebilibili.feature.plugin.CdnLineDiagnostic
+import com.android.purebilibili.plugin.sdk.CdnLineDiagnostic
 import com.android.purebilibili.feature.video.player.PlayMode
 import com.android.purebilibili.feature.video.progress.PbpProgressData
 import com.android.purebilibili.feature.video.state.VideoPlayerState
@@ -156,6 +156,8 @@ internal data class VideoPlayerSectionActions(
     val onToggleFavorite: () -> Unit = {},
     val onTriple: () -> Unit = {},
     val onPageSelect: (Int) -> Unit = {},
+    val onJumpToLastPlayedPart: () -> Unit = {},
+    val onDismissPartResumeNotice: () -> Unit = {},
     val onFavoritePlaylistClick: () -> Unit = {},
     val onSubtitleDisplayModePreferenceOverrideChange: (SubtitleDisplayMode) -> Unit = {},
     val onSubtitleTrackSelected: (String) -> Unit = {},

@@ -2,6 +2,7 @@ package com.android.purebilibili.feature.live
 
 import com.android.purebilibili.core.ui.AppContentColors
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.pager.rememberPagerState
@@ -10,6 +11,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Photo
 import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -17,6 +19,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import com.android.purebilibili.core.ui.*
 import com.android.purebilibili.core.ui.components.*
 import com.android.purebilibili.core.ui.components.AppLazyVerticalGrid as LazyVerticalGrid
@@ -128,21 +135,74 @@ fun LiveAreaDetailScreen(
         }
     }
     if (showMenu) {
-        AppModalBottomSheet(onDismissRequest = { showMenu = false }) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(100.dp),
-                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
-                contentPadding = PaddingValues(AppSpacingTokens.Large),
+        LiveAreaMenuSheet(
+            title = parentTitle,
+            tabs = tabs,
+            selectedIndex = pager.currentPage,
+            onSelect = { target -> scope.launch { animatePagerSelection(pager, target) } },
+            onDismiss = { showMenu = false },
+        )
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun LiveAreaMenuSheet(
+    title: String,
+    tabs: List<LiveAreaTab>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var visible by remember { mutableStateOf(true) }
+    var pendingIndex by remember { mutableStateOf<Int?>(null) }
+    val latestSelect by rememberUpdatedState(onSelect)
+    val latestDismiss by rememberUpdatedState(onDismiss)
+    val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = selectedIndex.coerceIn(0, tabs.lastIndex.coerceAtLeast(0)))
+    AppModalBottomSheet(
+        visible = visible,
+        presentationOverride = AppModalPresentation.BottomSheet,
+        windowInsets = WindowInsets.safeDrawing,
+        onDismissRequest = {
+            latestDismiss()
+            pendingIndex?.let(latestSelect)
+        },
+    ) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight()) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                itemsIndexed(tabs) { index, tab ->
-                    AppTextButton(onClick = {
-                        showMenu = false
-                        scope.launch { animatePagerSelection(pager, index) }
-                    }) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            coil3.compose.AsyncImage(model = tab.cover, contentDescription = null, modifier = Modifier.size(48.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit)
-                            AppText(tab.title)
-                        }
+                Spacer(Modifier.size(40.dp))
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    AppText(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                AppIconButton(onClick = { visible = false }, modifier = Modifier.size(40.dp)) {
+                    AppIcon(Icons.Outlined.Close, "关闭分区菜单")
+                }
+            }
+            LazyVerticalGrid(
+                columns = LiveRoomGridCells(100.dp),
+                state = gridState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 100.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                itemsIndexed(tabs, key = { _, tab -> tab.id }) { index, tab ->
+                    Column(
+                        modifier = Modifier.fillMaxWidth().height(80.dp)
+                            .semantics { selected = index == selectedIndex }
+                            .clickable(role = Role.Button) { pendingIndex = index; visible = false },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        coil3.compose.AsyncImage(
+                            model = tab.cover, contentDescription = null,
+                            modifier = Modifier.size(45.dp), contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        AppText(tab.title, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -161,7 +221,7 @@ private fun LiveAreaRoomPage(
     val grid = rememberLazyGridState()
     val spec = resolveLiveVisualSpec(rememberAppTopChromePolicy().tabPresentation)
     val window = LocalWindowSizeClass.current
-    val columns = resolveLiveBiliPaiGridColumns(minOf(window.widthDp.value.toInt(), spec.maxContentWidthDp), window.isTablet)
+    val columns = resolveLiveBiliPaiGridColumns(window.widthDp.value.toInt(), window.isTablet)
     var saveCover by remember { mutableStateOf<LiveRoomCardUiModel?>(null) }
     fun load(reset: Boolean) {
         val request = if (reset) state.requests.refresh(replace = true) else state.requests.loadMore(state.hasMore)
@@ -205,9 +265,9 @@ private fun LiveAreaRoomPage(
         modifier = Modifier.fillMaxSize(),
     ) {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
+            columns = LiveRoomGridCells(),
             state = grid,
-            modifier = Modifier.responsiveContentWidth(maxWidth = spec.maxContentWidthDp.dp).fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 start = spec.homeMetrics.safeSpaceDp.dp,
                 end = spec.homeMetrics.safeSpaceDp.dp,
@@ -219,7 +279,7 @@ private fun LiveAreaRoomPage(
         ) {
             if (state.tags.isNotEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                 LiveSortTagChipRow(state.tags, state.sortType) { sort ->
-                    if (state.sortType != sort) {
+                    if (!state.loading) {
                         state.sortType = sort
                         state.rooms = emptyList()
                         load(true)

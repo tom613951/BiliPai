@@ -334,6 +334,7 @@ fun PiliExternalSubtitleOverlay(
     bottomControlsHeightPx: Int,
     modifier: Modifier = Modifier,
     isPortrait: Boolean = false,
+    persistentBottomOverlayHeightProvider: () -> Int = { 0 },
 ) {
     val session = tools.session
     val track = session.importedTracks.firstOrNull { it.key == session.selectedTrackKey }
@@ -366,11 +367,12 @@ fun PiliExternalSubtitleOverlay(
         val density = LocalDensity.current
         val heightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
         val navigationInsetPx = WindowInsets.navigationBars.getBottom(density)
-        val bottomOffsetPx = resolveSubtitleBottomOffsetPx(
-            isFullscreen, controlsVisible, tools.controls.positionLocked,
-            navigationInsetPx, bottomControlsHeightPx, density.density,
-        )
         val spatialModifier = Modifier.offset {
+            val bottomOffsetPx = resolveSubtitleBottomOffsetPx(
+                isFullscreen, controlsVisible, tools.controls.positionLocked,
+                navigationInsetPx, bottomControlsHeightPx, density.density,
+                persistentBottomOverlayHeightPx = persistentBottomOverlayHeightProvider(),
+            )
             IntOffset(0, (heightPx * verticalOffset).roundToInt() - bottomOffsetPx)
         }.padding(horizontal = tools.appearance.horizontalPadding.dp)
             .padding(bottom = tools.appearance.bottomPadding.dp)
@@ -394,7 +396,7 @@ fun PiliExternalSubtitleOverlay(
         Column(spatialModifier, horizontalAlignment = Alignment.CenterHorizontally) {
             if (!secondaryText.isNullOrBlank()) PiliStyledSubtitleText(
                 secondaryText, if (tools.controls.largeTextEnabled) 16 else 14, tools.appearance, isFullscreen,
-                color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.88f))
+                color = androidx.compose.ui.graphics.Color(tools.appearance.textColor).copy(alpha = 0.88f))
             if (!text.isNullOrBlank()) PiliStyledSubtitleText(
                 text, if (tools.controls.largeTextEnabled) 18 else 16, tools.appearance, isFullscreen)
         }

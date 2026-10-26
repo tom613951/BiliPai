@@ -9,6 +9,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -63,15 +65,17 @@ fun PiliStyledSubtitleText(
     appearance: PlayerSubtitleAppearance,
     isFullscreen: Boolean,
     modifier: Modifier = Modifier,
-    color: Color = Color.White,
+    color: Color = Color(appearance.textColor),
 ) {
     if (text.isBlank()) return
     val scale = if (isFullscreen) appearance.fullscreenFontScale else appearance.inlineFontScale
-    val style = TextStyle(color = color, fontSize = (baseFontSizeSp * scale).sp,
+    val context = LocalContext.current
+    val fontFamily = remember(context, appearance.fontFileName) { loadSubtitleFontFamily(context, appearance.fontFileName) }
+    val style = TextStyle(fontFamily = fontFamily, color = color, fontSize = (baseFontSizeSp * scale).sp,
         fontWeight = FontWeight(appearance.fontWeight * 100), textAlign = TextAlign.Center)
     val strokePx = with(LocalDensity.current) { appearance.strokeWidth.dp.toPx() }
     Box(modifier.background(Color.Black.copy(alpha = appearance.backgroundOpacity)).padding(horizontal = 4.dp, vertical = 2.dp)) {
-        if (strokePx > 0f) BasicText(text, style = style.copy(color = Color.Black, drawStyle = Stroke(strokePx)), maxLines = 4)
+        if (strokePx > 0f) BasicText(text, style = style.copy(color = Color(appearance.strokeColor), drawStyle = Stroke(strokePx)), maxLines = 4)
         BasicText(text, style = style, maxLines = 4)
     }
 }

@@ -82,13 +82,14 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.FloatingToolbarDefaults
-import androidx.compose.material3.HorizontalFloatingToolbar
+import com.android.purebilibili.core.ui.components.AppMaterial3Toolbar
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.TextButton
 import com.android.purebilibili.core.ui.components.AppText
+import com.android.purebilibili.core.ui.components.appTabularNumberTextStyle
+import com.android.purebilibili.core.ui.appTextStyleWithLineHeightStyle
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -188,7 +189,6 @@ import com.android.purebilibili.core.store.LiquidGlassMode
 import androidx.compose.animation.core.EaseOut
 import kotlin.math.sign
 import top.yukonga.miuix.kmp.blur.Backdrop as MiuixBackdrop
-import top.yukonga.miuix.kmp.blur.LayerBackdrop as MiuixLayerBackdrop
 import top.yukonga.miuix.kmp.blur.blur as miuixBlur
 import top.yukonga.miuix.kmp.blur.drawBackdrop as miuixDrawBackdrop
 import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
@@ -199,8 +199,6 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop as miuixLayerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop as rememberMiuixLayerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Search
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import androidx.compose.material3.LocalTextStyle as MaterialLocalTextStyle
 import top.yukonga.miuix.kmp.basic.NavigationBarDefaults as MiuixNavigationBarDefaults
 private val iosIndicatorSpecular: MiuixHighlight = MiuixHighlight(
     width = AppSpacingTokens.Micro / 2,
@@ -1410,13 +1408,17 @@ internal fun shouldShowBottomBarIcon(labelMode: Int): Boolean {
     }
 }
 
+/** 红点模式的哨兵值：调用方把真实计数映射成它，格式化层负责换成圆点文本。 */
+internal const val BOTTOM_BAR_DYNAMIC_BADGE_DOT = -1
+
 internal fun shouldShowBottomBarDynamicReminderBadge(
     item: BottomNavItem?,
     unreadCount: Int
-): Boolean = item == BottomNavItem.DYNAMIC && unreadCount > 0
+): Boolean = item == BottomNavItem.DYNAMIC && unreadCount != 0
 
 internal fun formatBottomBarDynamicReminderBadge(unreadCount: Int): String? {
     return when {
+        unreadCount == BOTTOM_BAR_DYNAMIC_BADGE_DOT -> "•"
         unreadCount <= 0 -> null
         unreadCount > 999 -> "999+"
         else -> unreadCount.toString()
@@ -2206,7 +2208,7 @@ fun FrostedBottomBar(
     itemLabels: Map<String, String> = emptyMap(),
     dynamicUnreadCount: Int = 0,
     onToggleSidebar: (() -> Unit)? = null,
-    miuixBackdrop: MiuixLayerBackdrop? = null,
+    miuixBackdrop: MiuixBackdrop? = null,
     motionTier: MotionTier = MotionTier.Normal,
     isTransitionRunning: Boolean = false,
     forceLowBlurBudget: Boolean = false,
@@ -2361,7 +2363,7 @@ private fun MaterialBottomBar(
     labelMode: Int,
     blurEnabled: Boolean,
     hazeState: HazeState?,
-    miuixBackdrop: MiuixLayerBackdrop?,
+    miuixBackdrop: MiuixBackdrop?,
     homeSettings: com.android.purebilibili.core.store.HomeSettings,
     onSearchClick: () -> Unit,
     onSearchKeywordSubmit: (String) -> Unit,
@@ -2384,7 +2386,7 @@ private fun MaterialBottomBar(
     isTopLevelDestination: Boolean = true,
     animateNowPlayingPresence: Boolean = true,
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     val normalizedLabelMode = normalizeBottomBarLabelMode(labelMode)
     val showIcon = shouldShowBottomBarIcon(normalizedLabelMode)
     val showText = shouldShowBottomBarText(normalizedLabelMode)
@@ -2767,17 +2769,15 @@ private fun OfficialMd3FloatingToolbarContent(
     modifier: Modifier = Modifier,
     blurEnabled: Boolean = false,
     hazeState: HazeState? = null,
-    backdrop: MiuixLayerBackdrop? = null,
+    backdrop: MiuixBackdrop? = null,
     containerColor: Color = Color.Unspecified,
     motionTier: MotionTier = MotionTier.Normal,
     isTransitionRunning: Boolean = false,
     forceLowBlurBudget: Boolean = false,
 ) {
     val useBlur = blurEnabled && (hazeState != null || backdrop != null)
-    val toolbarShape = FloatingToolbarDefaults.ContainerShape
-    val toolbarColors = FloatingToolbarDefaults.standardFloatingToolbarColors(
-        toolbarContainerColor = if (useBlur) Color.Transparent else Color.Unspecified,
-    )
+    val toolbarShape = MaterialTheme.shapes.extraLarge
+    val toolbarContainerColor = if (useBlur) Color.Transparent else MaterialTheme.colorScheme.surfaceContainer
     val toolbarModifier = if (useBlur) {
         Modifier.biliPaiFloatingDockShell(
             backdrop = backdrop,
@@ -2822,18 +2822,17 @@ private fun OfficialMd3FloatingToolbarContent(
                 showIcon && showText && selected -> FilledTonalButton(
                     onClick = onClick,
                     contentPadding = PaddingValues(horizontal = 16.dp),
-                    modifier = Modifier.appElasticPress(),
                 ) {
                     icon()
                     Spacer(Modifier.width(8.dp))
                     AppText(text = label, maxLines = 1)
                 }
-                showIcon && selected -> FilledTonalIconButton(onClick = onClick, modifier = Modifier.appElasticPress()) { icon() }
-                showIcon -> IconButton(onClick = onClick, modifier = Modifier.appElasticPress()) { icon() }
-                selected -> FilledTonalButton(onClick = onClick, modifier = Modifier.appElasticPress()) {
+                showIcon && selected -> FilledTonalIconButton(onClick = onClick) { icon() }
+                showIcon -> IconButton(onClick = onClick) { icon() }
+                selected -> FilledTonalButton(onClick = onClick) {
                     AppText(text = label, maxLines = 1)
                 }
-                else -> TextButton(onClick = onClick, modifier = Modifier.appElasticPress()) {
+                else -> TextButton(onClick = onClick) {
                     AppText(text = label, maxLines = 1)
                 }
             }
@@ -2844,7 +2843,6 @@ private fun OfficialMd3FloatingToolbarContent(
                 onClick = {
                     performMaterialBottomBarTap(haptic = haptic, onClick = onToggleSidebar)
                 },
-                modifier = Modifier.appElasticPress(),
             ) {
                 AppIcon(
                     imageVector = Icons.AutoMirrored.Outlined.MenuOpen,
@@ -2858,10 +2856,9 @@ private fun OfficialMd3FloatingToolbarContent(
         modifier = modifier,
         contentAlignment = Alignment.Center,
     ) {
-        HorizontalFloatingToolbar(
-            expanded = true,
+        AppMaterial3Toolbar(
             modifier = toolbarModifier,
-            colors = toolbarColors,
+            containerColor = toolbarContainerColor,
             shape = toolbarShape,
             content = toolbarContent,
         )
@@ -2884,7 +2881,7 @@ private fun OfficialMd3FloatingBottomBar(
     haptic: (HapticType) -> Unit,
     blurEnabled: Boolean = false,
     hazeState: HazeState? = null,
-    backdrop: MiuixLayerBackdrop? = null,
+    backdrop: MiuixBackdrop? = null,
     containerColor: Color = Color.Unspecified,
     motionTier: MotionTier = MotionTier.Normal,
     isTransitionRunning: Boolean = false,
@@ -2894,9 +2891,9 @@ private fun OfficialMd3FloatingBottomBar(
         modifier = modifier
             .fillMaxWidth()
             .padding(
-                start = FloatingToolbarDefaults.ScreenOffset,
-                end = FloatingToolbarDefaults.ScreenOffset,
-                bottom = FloatingToolbarDefaults.ScreenOffset +
+                start = AppSpacingTokens.Large,
+                end = AppSpacingTokens.Large,
+                bottom = AppSpacingTokens.Large +
                     WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
             ),
         contentAlignment = Alignment.BottomCenter,
@@ -2960,7 +2957,7 @@ private fun MiuixBottomBar(
     labelMode: Int,
     blurEnabled: Boolean,
     hazeState: HazeState?,
-    miuixBackdrop: MiuixLayerBackdrop?,
+    miuixBackdrop: MiuixBackdrop?,
     homeSettings: com.android.purebilibili.core.store.HomeSettings,
     onSearchClick: () -> Unit,
     onSearchKeywordSubmit: (String) -> Unit,
@@ -2983,7 +2980,7 @@ private fun MiuixBottomBar(
     isTopLevelDestination: Boolean = true,
     animateNowPlayingPresence: Boolean = true,
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     val normalizedLabelMode = normalizeBottomBarLabelMode(labelMode)
     val showIcon = shouldShowBottomBarIcon(normalizedLabelMode)
     val showText = shouldShowBottomBarText(normalizedLabelMode)
@@ -3192,7 +3189,11 @@ private fun MiuixBottomBar(
                         badge = reminderBadgeText?.let { badgeText ->
                             {
                                 AppPlatformNavigationBadge {
-                                    AppText(text = badgeText)
+                                    // 等宽数字：未读数进位时徽标宽度只按位数增长。
+                                    AppText(
+                                        text = badgeText,
+                                        style = appTabularNumberTextStyle(),
+                                    )
                                 }
                             }
                         }
@@ -3328,6 +3329,7 @@ internal fun IllustratedSkinBottomBar(
                             AppText(
                                 text = label,
                                 color = contentColor,
+                                style = appTextStyleWithLineHeightStyle(DockLabelLineHeightStyle),
                                 fontSize = resolveBottomBarSkinDockLabelFontSize(LocalDensity.current.fontScale),
                                 lineHeight = resolveBottomBarSkinDockLabelLineHeight(LocalDensity.current.fontScale),
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
@@ -3737,7 +3739,10 @@ private fun BiliPaiFloatingBottomBarChrome(
     val isValidSelection = currentItem in visibleItems
     val themedMiuixSelection = LocalAppUiStyle.current == AppUiStyle.MIUIX &&
         !effectiveGlassEnabled && uiSkinDecoration == null
-    val baseSelectedColor = AppContentColors.selectionAccent(effectiveGlassEnabled)
+    val themedMd3Selection = LocalAppUiStyle.current == AppUiStyle.MATERIAL3 &&
+        !effectiveGlassEnabled && uiSkinDecoration == null
+    val baseSelectedColor = if (themedMd3Selection) AppSurfaceTokens.onSecondaryContainer()
+        else AppContentColors.selectionAccent(effectiveGlassEnabled)
     val baseUnselectedColor = if (!effectiveGlassEnabled && (themedMiuixSelection || iconStyle == SharedFloatingBottomBarIconStyle.MATERIAL)) {
         AppContentColors.secondaryText()
     } else {
@@ -3848,10 +3853,10 @@ private fun BiliPaiFloatingBottomBarChrome(
         )
     }
     // Share the theme-tinted selection fill with opaque top tabs and category rails.
-    val themedIndicatorContainerColor = if (themedMiuixSelection) {
-        AppSurfaceTokens.selectionContainer()
-    } else {
-        null
+    val themedIndicatorContainerColor = when {
+        themedMiuixSelection -> AppSurfaceTokens.selectionContainer()
+        themedMd3Selection -> AppSurfaceTokens.secondaryContainer()
+        else -> null
     }
     val floatingColors = FloatingBottomBarColors(
         containerColor = floatingContainerColor,
@@ -4390,11 +4395,7 @@ private fun ColumnScope.FloatingBottomBarTabVisual(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
-            style = (if (LocalAppUiStyle.current == AppUiStyle.MIUIX) {
-                MiuixTheme.textStyles.main
-            } else {
-                MaterialLocalTextStyle.current
-            }).let { baseStyle ->
+            style = appTextStyleWithLineHeightStyle(DockLabelLineHeightStyle).let { baseStyle ->
                 if (hasSkinArtwork) baseStyle.copy(
                     shadow = androidx.compose.ui.graphics.Shadow(
                         color = OpticalContrastPalette.Shadow.copy(alpha = 0.9f),
@@ -4800,6 +4801,7 @@ private fun BiliPaiBottomBarSearchCapsule(
             fieldAlpha = { fieldAlpha.value },
             interactive = true,
             iconStyle = iconStyle,
+            glassSearchVisuals = glassEnabled,
             pendingUserImeRequest = pendingUserImeRequest,
             onUserImeRequestConsumed = { pendingUserImeRequest = false }
         )
@@ -4818,9 +4820,16 @@ internal fun BiliPaiBottomBarSearchVisualContent(
     fieldAlpha: () -> Float,
     interactive: Boolean,
     iconStyle: SharedFloatingBottomBarIconStyle,
+    // 仅玻璃搜索收紧框内留白；图标字形、尺寸和关闭玻璃后的原生间距不变。
+    glassSearchVisuals: Boolean = false,
     pendingUserImeRequest: Boolean = false,
     onUserImeRequestConsumed: () -> Unit = {}
 ) {
+    val searchHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
+    val submitWithFeedback: () -> Unit = {
+        searchHaptic(HapticType.LIGHT)
+        onSubmit()
+    }
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -4842,7 +4851,8 @@ internal fun BiliPaiBottomBarSearchVisualContent(
     Row(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = if (expanded) AppSpacingTokens.Large else AppSpacingTokens.None),
+            .padding(horizontal = if (!expanded) AppSpacingTokens.None
+                else if (glassSearchVisuals) 16.dp else AppSpacingTokens.Large),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center
     ) {
@@ -4855,7 +4865,7 @@ internal fun BiliPaiBottomBarSearchVisualContent(
                         Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                            onClick = onSubmit
+                            onClick = submitWithFeedback
                         )
                     } else {
                         Modifier
@@ -4881,7 +4891,7 @@ internal fun BiliPaiBottomBarSearchVisualContent(
             )
         }
         if (expanded) {
-            Spacer(modifier = Modifier.width(AppSpacingTokens.Small + AppSpacingTokens.Micro))
+            Spacer(modifier = Modifier.width(if (glassSearchVisuals) 4.dp else AppSpacingTokens.Small + AppSpacingTokens.Micro))
             if (interactive) {
                 BasicTextField(
                     value = query,
@@ -4890,7 +4900,7 @@ internal fun BiliPaiBottomBarSearchVisualContent(
                     textStyle = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
                     cursorBrush = SolidColor(accentColor),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+                    keyboardActions = KeyboardActions(onSearch = { submitWithFeedback() }),
                     modifier = Modifier
                         .focusRequester(focusRequester)
                         .weight(1f)
@@ -5054,6 +5064,7 @@ private fun RowScope.AndroidNativeBottomBarItem(
                 AppText(
                     text = label,
                     color = contentColor,
+                    style = appTextStyleWithLineHeightStyle(DockLabelLineHeightStyle),
                     fontSize = resolveBottomBarSkinDockLabelFontSize(
                         fontScale = LocalDensity.current.fontScale
                     ),
@@ -5138,6 +5149,7 @@ private fun RowScope.AndroidNativeBottomBarItem(
                 AppText(
                     text = label,
                     color = contentColor,
+                    style = appTextStyleWithLineHeightStyle(DockLabelLineHeightStyle),
                     fontSize = if (shouldUseSkinItemLayout) {
                         resolveBottomBarSkinDockLabelFontSize(
                             fontScale = LocalDensity.current.fontScale
@@ -5354,6 +5366,8 @@ private fun BottomBarReminderBadgeAnchor(
                 AppText(
                     text = badgeText,
                     color = OpticalContrastPalette.Highlight,
+                    // 等宽数字：未读数进位时徽标宽度只按位数增长，不随数字内容抖动。
+                    style = appTabularNumberTextStyle(),
                     fontSize = MaterialTheme.typography.labelSmall.fontSize,
                     lineHeight = MaterialTheme.typography.labelSmall.lineHeight,
                     fontWeight = FontWeight.SemiBold,

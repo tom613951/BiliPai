@@ -40,6 +40,7 @@ fun MessageCenterScreen(
         InboxScreen(
             onBack = onBack,
             onTopItemClick = onTopItemClick,
+            onOpenLink = onOpenBilibiliLink,
             onSessionClick = onOpenSessionFullScreen,
         )
         return
@@ -69,6 +70,7 @@ fun MessageCenterScreen(
             InboxScreen(
                 onBack = onBack,
                 onTopItemClick = onTopItemClick,
+                onOpenLink = onOpenBilibiliLink,
                 onSessionClick = { talkerId, sessionType, userName ->
                     activeTalkerId = talkerId
                     activeSessionType = sessionType

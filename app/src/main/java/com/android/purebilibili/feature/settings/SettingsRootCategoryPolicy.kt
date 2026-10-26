@@ -137,6 +137,7 @@ internal fun resolveSettingsRootCategoryForSearchTarget(
     SettingsSearchTarget.CLEAR_CACHE -> SettingsRootCategory.STORAGE_BACKUP
 
     SettingsSearchTarget.PLUGINS -> SettingsRootCategory.PLUGINS_EXTENSIONS
+    SettingsSearchTarget.NEARBY_HANDOFF -> SettingsRootCategory.PLAYBACK_QUALITY
 
     SettingsSearchTarget.DIAGNOSTICS,
     SettingsSearchTarget.EXPORT_LOGS,

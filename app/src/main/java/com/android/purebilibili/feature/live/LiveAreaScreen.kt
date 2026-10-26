@@ -12,12 +12,14 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,6 +52,7 @@ import com.android.purebilibili.data.model.response.LiveAreaParent
 import com.android.purebilibili.data.model.response.LiveFavoriteTagEntry
 import com.android.purebilibili.data.repository.LiveRepository
 import com.android.purebilibili.navigation.animatePagerSelection
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -62,20 +65,29 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
     var favorites by remember { mutableStateOf<List<LiveFavoriteTagEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var favoritesError by remember { mutableStateOf<String?>(null) }
     var editing by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
+    var saveJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var reload by remember { mutableIntStateOf(0) }
-    val canSync = !TokenManager.accessTokenCache.isNullOrBlank()
+    val accountIdentity by TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val canSync = (accountIdentity.mid ?: 0L) > 0L && !TokenManager.accessTokenCache.isNullOrBlank()
     val pager = rememberPagerState(pageCount = { areas.size.coerceAtLeast(1) })
-    LaunchedEffect(reload, canSync) {
+    val pagerDragHeld by pager.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(reload, accountIdentity) {
+        val owner = accountIdentity
+        saveJob?.cancel()
+        editing = false
+        saving = false
         loading = true
         error = null
-        favorites = SettingsManager.getLiveFavoriteTags(context).first()
+        favoritesError = null
+        favorites = SettingsManager.getLiveFavoriteTags(context, owner.mid).first()
         if (canSync) {
             LiveRepository.getLiveFavoriteTags().onSuccess {
                 favorites = it
-                SettingsManager.setLiveFavoriteTags(context, it)
-            }.onFailure { Toast.makeText(context, it.message ?: "常用标签同步失败", Toast.LENGTH_SHORT).show() }
+                SettingsManager.setLiveFavoriteTags(context, it, owner.mid)
+            }.onFailure { favoritesError = it.message ?: "常用标签同步失败" }
         }
         LiveRepository.getLiveAreaIndex().onSuccess { areas = it }.onFailure { error = it.message ?: "加载标签失败" }
         loading = false
@@ -84,15 +96,17 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
         if (saving) return
         saving = true
         val snapshot = favorites
-        scope.launch {
+        val owner = accountIdentity
+        saveJob = scope.launch {
             try {
                 val result = if (canSync) LiveRepository.setLiveFavoriteTags(snapshot) else Result.success(Unit)
+                if (owner != TokenManager.accountIdentity.value) return@launch
                 result.onSuccess {
-                    SettingsManager.setLiveFavoriteTags(context, snapshot)
+                    SettingsManager.setLiveFavoriteTags(context, snapshot, owner.mid)
                     editing = false
                     Toast.makeText(context, "设置成功", Toast.LENGTH_SHORT).show()
                 }.onFailure { Toast.makeText(context, it.message ?: "保存失败，请重试", Toast.LENGTH_SHORT).show() }
-            } finally { saving = false }
+            } finally { if (owner == TokenManager.accountIdentity.value) saving = false }
         }
     }
     AppScaffold(
@@ -103,27 +117,41 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
                 title = "全部标签",
                 navigationIcon = { AppIconButton(onClick = onBack) { AppIcon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } },
                 actions = {
-                    AppTextButton(enabled = !loading && !saving, onClick = { if (editing) finishEditing() else editing = true }) {
+                    AppTextButton(enabled = !loading && !saving && favoritesError == null, onClick = { if (editing) finishEditing() else editing = true }) {
                         AppText(if (saving) "保存中…" else if (editing) "完成" else "编辑")
                     }
                 },
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        AdaptivePullToRefreshBox(
+            isRefreshing = loading,
+            onRefresh = { if (!saving && !editing) reload++ },
+            modifier = Modifier.fillMaxSize().padding(padding),
+        ) {
+        Column(Modifier.fillMaxSize()) {
             if (!loading && error == null) {
+                if (favoritesError != null) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AppText(favoritesError.orEmpty(), modifier = Modifier.weight(1f), color = AppContentColors.secondaryText())
+                        AppTextButton(onClick = { reload++ }) { AppText("重试常用标签") }
+                    }
+                }
+                key(accountIdentity) {
                 LiveFavoriteTagsPanel(
                     favoriteTags = favorites,
                     isEditing = editing,
-                    enabled = !saving,
-                    onStartEditing = { editing = true },
+                    enabled = !saving && favoritesError == null,
+                    onStartEditing = { if (favoritesError == null) editing = true },
                     onTagClick = { onAreaClick(it.parentAreaId, it.areaId, it.title) },
                     onRemove = { tag -> favorites = favorites.filterNot { it.areaId == tag.areaId && it.parentAreaId == tag.parentAreaId } },
                     onMove = { from, to -> favorites = favorites.toMutableList().apply { add(to, removeAt(from)) } },
                 )
+                }
                 AppThemeAdaptiveTabRow(
-                    // Glass indicator fills the measured slot; native geometry keeps its defaults.
-                    liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+                    // 玻璃随标签长短调整胶囊；原生分支保留自身尺寸和间距。
+                    liquidGlassAdaptIndicatorToLabel = true,
+                    liquidGlassAnimateLabelWidthChanges = true,
                     role = AppTabRowRole.SECONDARY,
                     options = areas.mapIndexed { index, parent -> AppSegmentOption(index, parent.name) },
                     selectedValue = pager.currentPage,
@@ -132,6 +160,8 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
                     centerContent = false,
                     indicatorPositionProvider = { pager.currentPage + pager.currentPageOffsetFraction },
                     isScrollInProgressProvider = { pager.isScrollInProgress },
+                    isPagerDraggingProvider = { pagerDragHeld },
+                    pagerTargetPositionProvider = { pager.targetPage.toFloat() },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -144,8 +174,8 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
                 else -> AppHorizontalPager(state = pager, modifier = Modifier.weight(1f)) { page ->
                     areas.getOrNull(page)?.let { parent ->
                         LazyVerticalGrid(
-                            columns = GridCells.Adaptive(100.dp),
-                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = maxOf(LocalBottomBarContentPadding.current, 24.dp)),
+                            columns = LiveRoomGridCells(100.dp),
+                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = maxOf(LocalBottomBarContentPadding.current, 100.dp)),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxSize(),
@@ -169,6 +199,7 @@ fun LiveAreaScreen(onBack: () -> Unit, onAreaClick: (Int, Int, String) -> Unit) 
             }
         }
     }
+}
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -229,11 +260,12 @@ private fun LiveFavoriteTagsPanel(
                         AppSurface(
                             onClick = { if (isEditing) onRemove(tag) else onTagClick(tag) },
                             enabled = enabled,
-                            shape = AppShapes.container(ContainerLevel.Pill),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            color = MaterialTheme.colorScheme.surface,
                             modifier = Modifier.graphicsLayer(translationX = offset.x, translationY = offset.y),
                         ) {
-                            AppText(tag.title + if (isEditing) " −" else "", modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                            AppText(tag.title + if (isEditing) " −" else "", modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
                         }
                     }
                 }
@@ -284,7 +316,7 @@ private fun LiveAreaGridItem(
     val colorScheme = MaterialTheme.colorScheme
     Box(
         modifier = Modifier
-            .height(AppSpacingTokens.TripleExtraLarge + AppSpacingTokens.DoubleExtraLarge)
+            .height(80.dp)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -292,7 +324,7 @@ private fun LiveAreaGridItem(
             LiveAreaIcon(
                 imageUrl = child.pic,
                 title = child.name,
-                modifier = Modifier.size(AppSpacingTokens.TripleExtraLarge)
+                modifier = Modifier.size(45.dp)
             )
             Spacer(Modifier.height(AppSpacingTokens.ExtraSmall))
             AppText(
@@ -310,11 +342,11 @@ private fun LiveAreaGridItem(
                 color = if (isFavorite) colorScheme.surfaceVariant else colorScheme.surfaceContainerHighest,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(end = AppSpacingTokens.Large)
-                    .size(AppSpacingTokens.Large)
+                    .padding(end = 16.dp)
+                    .size(17.dp)
             ) {
                 AppIcon(
-                    imageVector = if (isFavorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                    imageVector = if (isFavorite) Icons.Outlined.Check else Icons.Outlined.Add,
                     contentDescription = if (isFavorite) "取消收藏" else "收藏标签",
                     tint = if (isFavorite) colorScheme.onSurfaceVariant else colorScheme.onSurface,
                     modifier = Modifier.padding(AppSpacingTokens.Micro)

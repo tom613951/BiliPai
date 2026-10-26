@@ -3,6 +3,10 @@ package com.android.purebilibili.feature.video.ui.components.glass
 
 import com.android.purebilibili.feature.video.ui.components.*
 
+import com.android.purebilibili.core.ui.components.AppSegmentOption
+import com.android.purebilibili.feature.settings.SettingsSingleChoicePreference
+import com.android.purebilibili.core.store.ChapterDisplayMode
+import com.android.purebilibili.feature.settings.playbackSettingTitle
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.feature.video.screen.AudioModeSleepTimerDialog
 import com.android.purebilibili.core.ui.components.AppTextButton
@@ -67,11 +71,11 @@ import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.components.AppSwitchPreference
 import com.android.purebilibili.core.ui.components.formatPlaybackSpeed
 import com.android.purebilibili.data.model.response.AiAudioInfo
-import com.android.purebilibili.feature.plugin.CdnLineDiagnostic
+import com.android.purebilibili.plugin.sdk.CdnLineDiagnostic
 import com.android.purebilibili.feature.anime4k.Anime4KBypassReason
-import com.android.purebilibili.feature.anime4k.Anime4KPreset
-import com.android.purebilibili.feature.anime4k.DEFAULT_FSR_SHARPNESS
-import com.android.purebilibili.feature.anime4k.VideoEnhancementAlgorithm
+import com.android.purebilibili.plugin.sdk.Anime4KPreset
+import com.android.purebilibili.plugin.sdk.DEFAULT_FSR_SHARPNESS
+import com.android.purebilibili.plugin.sdk.VideoEnhancementAlgorithm
 import com.android.purebilibili.feature.video.playback.audio.AudioQualityOption
 import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.ui.AppSpacingTokens
@@ -236,7 +240,7 @@ private fun VideoSettingsPanelHost(
             onDismiss = onDismissRequest,
             modifier = modifier,
             useGlassSurface = true,
-        ) {
+        ) { requestDismiss ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -246,7 +250,7 @@ private fun VideoSettingsPanelHost(
             ) {
                 AppText("更多操作", fontSize = 16.sp)
                 Spacer(Modifier.weight(1f))
-                PanelAction(Icons.Default.Close, "关闭", onDismissRequest)
+                PanelAction(Icons.Default.Close, "关闭", requestDismiss)
             }
             content()
         }
@@ -336,6 +340,8 @@ fun VideoSettingsPanel(
     onCaptureScreenshot: () -> Unit = {},
     onDownloadAudio: () -> Unit = {},
 
+    chapterDisplayMode: ChapterDisplayMode = ChapterDisplayMode.WITH_CONTROLS,
+    onChapterDisplayModeChange: ((ChapterDisplayMode) -> Unit)? = null,
     // 关闭面板
     onDismiss: () -> Unit
 ) {
@@ -458,6 +464,19 @@ fun VideoSettingsPanel(
             )
         ) {
             val groups = VideoControlCenterGroups(this, controlCenterMotion)
+
+            if (onChapterDisplayModeChange != null) {
+                groups.item {
+                    SettingsSingleChoicePreference(
+                        title = playbackSettingTitle("playback.chapter_display_mode"),
+                        subtitle = chapterDisplayMode.description,
+                        options = ChapterDisplayMode.entries.map { AppSegmentOption(it, it.label) },
+                        selectedValue = chapterDisplayMode,
+                        onSelectionChange = onChapterDisplayModeChange,
+                    )
+                    SettingsDivider()
+                }
+            }
 
             //  定时关闭 - 垂直布局，选项在下一行
             groups.item {

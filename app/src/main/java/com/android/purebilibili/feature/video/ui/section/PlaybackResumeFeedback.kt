@@ -28,6 +28,7 @@ internal fun BoxScope.PlaybackResumeFeedback(
     mediaKey: String?,
     ready: Boolean,
     fullscreen: Boolean,
+    controlsVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val state = LocalPlaybackResumeFeedback.current ?: return
@@ -53,8 +54,14 @@ internal fun BoxScope.PlaybackResumeFeedback(
             contentColor = Color.White,
             shape = RoundedCornerShape(12.dp),
             modifier = modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = if (fullscreen) 112.dp else 64.dp)
+                .align(Alignment.BottomStart)
+                .padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 8.dp,
+                    // 控制栏隐藏时靠近画面底边；显示时才预留控制栏空间。
+                    bottom = if (!controlsVisible) 12.dp else if (fullscreen) 112.dp else 64.dp,
+                )
                 .widthIn(max = 320.dp)
                 .zIndex(20f),
         ) {

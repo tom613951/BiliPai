@@ -107,6 +107,7 @@ import com.android.purebilibili.feature.home.resolveHomeHeroCarouselItemKey
 import com.android.purebilibili.feature.home.resolveHomeHeroCarouselItemOrNull
 import com.android.purebilibili.feature.home.resolveHomeHeroCarouselLayout
 import com.android.purebilibili.feature.home.resolveHomeHeroCarouselPreviewAlpha
+import com.android.purebilibili.feature.home.homeHeroBannerEntranceSpec
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -205,10 +206,7 @@ internal fun HomeHeroCarousel(
             // 新横幅淡入：被消散移除后，下一条在原位轻柔浮现，避免硬切跳变。
             val entranceAlpha = remember(video.bvid) { androidx.compose.animation.core.Animatable(0f) }
             LaunchedEffect(video.bvid) {
-                entranceAlpha.animateTo(
-                    1f,
-                    androidx.compose.animation.core.tween(durationMillis = 260),
-                )
+                entranceAlpha.animateTo(1f, homeHeroBannerEntranceSpec())
             }
             Column(modifier = Modifier.graphicsLayer { alpha = entranceAlpha.value }) {
                 HomeHeroCarouselCard(
@@ -394,6 +392,9 @@ private fun HomeHeroCarouselCard(
     val cardCornerDp = AppShapes.containerCornerDp(ContainerLevel.Card)
     val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(video.bvid)
     val normalizedCoverUrl = remember(video.pic) { FormatUtils.fixImageUrl(video.pic) }
+    var measuredCoverSize by remember(normalizedCoverUrl) {
+        mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
+    }
     val stationaryCoverRequest = remember(normalizedCoverUrl) {
         ImageRequest.Builder(context)
             .data(normalizedCoverUrl)
@@ -407,13 +408,15 @@ private fun HomeHeroCarouselCard(
     // video cards so a detail return can settle into the hero without a
     // second decode or a one-frame placeholder.
     val coverRegistrationAllowed = LocalPageImageLoadingAllowed.current
-    LaunchedEffect(video.bvid, normalizedCoverUrl, coverRegistrationAllowed) {
+    LaunchedEffect(video.bvid, normalizedCoverUrl, coverRegistrationAllowed, measuredCoverSize) {
         if (!coverRegistrationAllowed) return@LaunchedEffect
         HomeCoverReturnPrefetchRegistry.onCardVisible(
             HomeCoverReturnPrefetchEntry(
                 bvid = video.bvid.trim(),
                 url = normalizedCoverUrl,
                 cacheKey = normalizedCoverUrl,
+                decodeWidthPx = measuredCoverSize.width,
+                decodeHeightPx = measuredCoverSize.height,
             )
         )
     }
@@ -446,6 +449,8 @@ private fun HomeHeroCarouselCard(
                         ),
                     coverUrl = normalizedCoverUrl,
                     coverCacheKey = normalizedCoverUrl,
+                    coverDecodeWidthPx = measuredCoverSize.width,
+                    coverDecodeHeightPx = measuredCoverSize.height,
                 ),
                 sourceInstanceId = sharedSourceInstanceId,
             )
@@ -465,7 +470,7 @@ private fun HomeHeroCarouselCard(
         label = "hero_card_press",
     )
     // 长按复用网格卡片的预览弹窗（立即播放/稍后再看/保存封面/分享/屏蔽/不感兴趣）。
-    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticFeedback = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     val longPressAction: (() -> Unit)? = onLongPress?.let { callback ->
         {
             hapticFeedback.performHapticFeedback(
@@ -517,6 +522,7 @@ private fun HomeHeroCarouselCard(
             .clip(cardShape)
             .onGloballyPositioned { coordinates ->
                 cardCoordsRef.value = coordinates
+                measuredCoverSize = coordinates.size
             }
             .combinedClickable(
                 interactionSource = interactionSource,

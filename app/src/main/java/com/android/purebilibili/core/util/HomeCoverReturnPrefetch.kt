@@ -27,6 +27,15 @@ internal data class HomeCoverReturnPrefetchEntry(
     val decodeHeightPx: Int = 0,
 )
 
+internal const val HOME_COVER_RETURN_PREFETCH_MAX_BYTES = 16L * 1024 * 1024
+
+/** 按 ARGB 上限估算；未测量的封面不得触发原图预热。 */
+internal fun HomeCoverReturnPrefetchEntry.estimatedDecodeBytes(): Long? {
+    if (decodeWidthPx <= 0 || decodeHeightPx <= 0) return null
+    val pixels = decodeWidthPx.toLong() * decodeHeightPx
+    return if (pixels > Long.MAX_VALUE / 4L) null else pixels * 4L
+}
+
 internal object HomeCoverReturnPrefetchRegistry {
 
     private const val MAX_REGISTERED_ENTRIES = 64
@@ -38,6 +47,7 @@ internal object HomeCoverReturnPrefetchRegistry {
     /** 首页卡片可见时上报。幂等：同 cacheKey 重复上报只刷新顺序，不产生重复项。 */
     fun onCardVisible(entry: HomeCoverReturnPrefetchEntry) {
         if (entry.url.isBlank() || entry.cacheKey.isBlank()) return
+        if (entry.estimatedDecodeBytes() == null) return
         // Maintain oldest-first order in O(1); reverse only when a return requests a snapshot.
         entries.remove(entry.cacheKey)
         entries[entry.cacheKey] = entry
@@ -56,28 +66,37 @@ internal object HomeCoverReturnPrefetchRegistry {
 }
 
 /**
- * 返回预热候选决策：源卡封面优先，其余按最近可见序，去重并按 [maxCount] 截断。
+ * 返回预热候选决策：源卡优先，其余按最近可见序，按数量和解码字节预算截断。
  * 纯函数，便于单测锁定。
  */
 internal fun resolveHomeCoverReturnPrefetchCandidates(
     visibleEntries: List<HomeCoverReturnPrefetchEntry>,
     sourceBvid: String?,
     maxCount: Int = 24,
+    maxDecodeBytes: Long = HOME_COVER_RETURN_PREFETCH_MAX_BYTES,
 ): List<HomeCoverReturnPrefetchEntry> {
-    if (maxCount <= 0) return emptyList()
+    if (maxCount <= 0 || maxDecodeBytes <= 0L) return emptyList()
     val normalizedSourceBvid = sourceBvid?.trim()?.takeIf { it.isNotEmpty() }
     val result = LinkedHashMap<String, HomeCoverReturnPrefetchEntry>()
+    var remainingBytes = maxDecodeBytes
+    fun addWithinBudget(entry: HomeCoverReturnPrefetchEntry) {
+        if (entry.url.isBlank() || entry.cacheKey.isBlank() || result.containsKey(entry.cacheKey)) return
+        val bytes = entry.estimatedDecodeBytes() ?: return
+        if (bytes > remainingBytes) return
+        result[entry.cacheKey] = entry
+        remainingBytes -= bytes
+    }
     val sourceEntry = visibleEntries.firstOrNull {
-        it.bvid == normalizedSourceBvid && it.url.isNotBlank() && it.cacheKey.isNotBlank()
+        it.bvid == normalizedSourceBvid && it.url.isNotBlank() && it.cacheKey.isNotBlank() &&
+            it.estimatedDecodeBytes()?.let { bytes -> bytes <= maxDecodeBytes } == true
     }
     if (sourceEntry != null) {
-        result[sourceEntry.cacheKey] = sourceEntry
+        addWithinBudget(sourceEntry)
     }
     for (entry in visibleEntries) {
         if (entry.url.isBlank() || entry.cacheKey.isBlank()) continue
         if (result.size >= maxCount) break
-        if (result.containsKey(entry.cacheKey)) continue
-        result[entry.cacheKey] = entry
+        addWithinBudget(entry)
     }
     return result.values.toList()
 }
@@ -92,15 +111,13 @@ internal suspend fun prefetchHomeCoverImages(
 ) {
     if (entries.isEmpty()) return
     val imageLoader = SingletonImageLoader.get(context)
-    prefetchHomeCoversWithBudget(entries) { entry ->
+    // 入口再次校验，避免直接调用绕过尺寸和批次预算。
+    val boundedEntries = resolveHomeCoverReturnPrefetchCandidates(entries, sourceBvid = null)
+    prefetchHomeCoversWithBudget(boundedEntries) { entry ->
         imageLoader.execute(
             ImageRequest.Builder(context.applicationContext)
                 .data(entry.url)
-                .apply {
-                    if (entry.decodeWidthPx > 0 && entry.decodeHeightPx > 0) {
-                        size(entry.decodeWidthPx, entry.decodeHeightPx)
-                    }
-                }
+                .size(entry.decodeWidthPx, entry.decodeHeightPx)
                 .memoryCacheKey(entry.cacheKey)
                 .diskCacheKey(entry.cacheKey)
                 .build()

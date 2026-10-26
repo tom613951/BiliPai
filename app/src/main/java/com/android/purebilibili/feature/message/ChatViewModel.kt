@@ -14,6 +14,8 @@ import com.android.purebilibili.data.model.response.EmoteInfo
 import com.android.purebilibili.data.model.response.PrivateMessageItem
 import com.android.purebilibili.data.model.response.ViewInfo
 import com.android.purebilibili.data.repository.MessageSessionControlInfo
+import com.android.purebilibili.data.repository.MessageManagementRepository
+import com.android.purebilibili.data.model.response.EmotePackage
 import com.android.purebilibili.data.repository.MessageRepository
 import com.android.purebilibili.data.repository.VideoRepository
 import kotlinx.coroutines.CancellationException
@@ -62,6 +64,14 @@ data class ChatUiState(
     val loadMoreError: String? = null,
     val sendError: String? = null,
     val sentText: String? = null,
+    val notice: String? = null,
+    val emotePackages: List<EmotePackage> = emptyList(),
+    val isEmoteLoading: Boolean = false,
+    val emoteError: String? = null,
+    val userInfo: UserBasicInfo? = null,
+    val isReporting: Boolean = false,
+    val reportError: String? = null,
+    val reportSuccessVersion: Long = 0,
     val sessionControlInfo: MessageSessionControlInfo = MessageSessionControlInfo(),
     val isSessionControlLoading: Boolean = false,
     val isSessionControlUpdating: Boolean = false,
@@ -431,6 +441,42 @@ class ChatViewModel(
         }
     }
 
+    fun loadEmotes() {
+        if (_uiState.value.isEmoteLoading || _uiState.value.emotePackages.isNotEmpty()) return
+        _uiState.update { it.copy(isEmoteLoading = true, emoteError = null) }
+        accountRequests.launch {
+            MessageManagementRepository.emotes().fold(
+                onSuccess = { packages -> _uiState.update { it.copy(isEmoteLoading = false, emotePackages = packages) } },
+                onFailure = { error -> _uiState.update { it.copy(isEmoteLoading = false, emoteError = error.message ?: "加载表情失败") } },
+            )
+        }
+    }
+    fun loadChatUser() {
+        accountRequests.launch {
+            val user = MessageUserInfoLoader.fetch(talkerId)
+            _uiState.update { it.copy(userInfo = user) }
+        }
+    }
+    fun togglePinned() {
+        val pinned = _uiState.value.sessionControlInfo.isPinned ?: return
+        updateSessionControl { MessageRepository.setSessionTop(talkerId, sessionType, !pinned) }
+    }
+    fun toggleBlocked() {
+        val blocked = _uiState.value.sessionControlInfo.followStatus == 128
+        updateSessionControl { MessageManagementRepository.block(talkerId, !blocked) }
+    }
+    fun clearReportError() { _uiState.update { it.copy(reportError = null) } }
+    fun report(messageKey: Long?, reason: Int, description: String, accusedUid: Long = talkerId) {
+        if (_uiState.value.isReporting) return
+        _uiState.update { it.copy(isReporting = true, reportError = null) }
+        accountRequests.launch {
+            MessageManagementRepository.report(accusedUid, messageKey, reason, description).fold(
+                onSuccess = { _uiState.update { it.copy(isReporting = false, reportSuccessVersion = it.reportSuccessVersion + 1, notice = "举报已提交") } },
+                onFailure = { error -> _uiState.update { it.copy(isReporting = false, reportError = error.message ?: "举报失败") } },
+            )
+        }
+    }
+
     fun toggleDnd() {
         val current = _uiState.value.sessionControlInfo.isDnd == true
         updateSessionControl {
@@ -474,7 +520,7 @@ class ChatViewModel(
     }
 
     fun withdrawMessage(message: PrivateMessageItem) {
-        if (message.msg_key <= 0L || message.msg_status == 1) return
+        if (message.msg_key <= 0L || message.msg_status == 1 || _uiState.value.withdrawingMessageKey != null) return
 
         accountRequests.launch {
             _uiState.value = _uiState.value.copy(
@@ -522,7 +568,7 @@ class ChatViewModel(
      * 清除发送错误
      */
     fun clearSendError() {
-        _uiState.value = _uiState.value.copy(sendError = null)
+        _uiState.value = _uiState.value.copy(sendError = null, notice = null)
     }
 
     private fun queryDisplayName(context: Context, uri: Uri): String? {

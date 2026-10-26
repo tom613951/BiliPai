@@ -52,16 +52,22 @@ fun WebViewScreen(
     url: String,
     title: String? = null,
     onBack: () -> Unit,
+    /** 强制移动端 UA，用于官方 H5 页面（如赛事主页）避免被按桌面版渲染。 */
+    mobileUserAgent: Boolean = false,
     // [新增] 链接拦截回调
     onVideoClick: ((bvid: String) -> Unit)? = null,
     onSpaceClick: ((mid: Long) -> Unit)? = null,
     onLiveClick: ((roomId: Long) -> Unit)? = null,
     onDynamicClick: ((dynamicId: String) -> Unit)? = null,
     onBangumiClick: ((seasonId: Long, epId: Long, mediaId: Long) -> Unit)? = null,
-    onMusicClick: ((musicId: String) -> Unit)? = null
+    onMusicClick: ((musicId: String) -> Unit)? = null,
+    onMatchClick: ((contestId: Long) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
+    // 组合期读取明暗主题，factory 里不能再调用 @Composable。
+    val webViewBackground =
+        if (androidx.compose.foundation.isSystemInDarkTheme()) 0xFF101010.toInt() else 0xFFFFFFFF.toInt()
     val openInitialUrlExternally = remember(url) { shouldOpenWebUrlExternally(url) }
     if (openInitialUrlExternally) {
         val currentOnBack by rememberUpdatedState(onBack)
@@ -95,6 +101,8 @@ fun WebViewScreen(
     })
 
     AppScaffold(
+        // 仅玻璃开启时避开网页背景录制；关闭后保留 MD3、Miuix 原有顶栏行为。
+        contentBackdropEnabled = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         topBar = {
             AppTopBar(
                 title = title ?: "浏览器",
@@ -130,13 +138,18 @@ fun WebViewScreen(
                 key(url) {
                     AndroidView(
                         factory = { context ->
+                            syncBilibiliLoginCookies()
                             BrowserWebView(context).apply {
                                 layoutParams = ViewGroup.LayoutParams(
                                     ViewGroup.LayoutParams.MATCH_PARENT,
                                     ViewGroup.LayoutParams.MATCH_PARENT
                                 )
+                                setBackgroundColor(webViewBackground)
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = true
+                                if (mobileUserAgent) {
+                                    settings.userAgentString = MOBILE_USER_AGENT
+                                }
 
                                 // [核心] 自定义 WebViewClient 拦截 Bilibili 链接
                                 webViewClient = object : WebViewClient() {
@@ -230,6 +243,11 @@ fun WebViewScreen(
                                                         onDynamicClick != null
                                                     }
 
+                                                    is BilibiliNavigationTarget.Match -> {
+                                                        onMatchClick?.invoke(target.contestId)
+                                                        onMatchClick != null
+                                                    }
+
                                                     is BilibiliNavigationTarget.Search -> false
                                                     is BilibiliNavigationTarget.Article -> false
                                                     is BilibiliNavigationTarget.PopularFeed -> false
@@ -292,6 +310,10 @@ fun WebViewScreen(
         }
     }
 }
+
+private const val MOBILE_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Version/4.0 Chrome/124.0.0.0 Mobile Safari/537.36"
 
 private class BrowserWebView(context: Context) : WebView(context) {
     private var requestedUrl: String? = null

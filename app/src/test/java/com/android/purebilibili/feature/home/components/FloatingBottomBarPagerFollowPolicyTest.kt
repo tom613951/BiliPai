@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.home.components
 
+import com.android.purebilibili.core.ui.animation.canStartLiquidIndicatorRecoil
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -289,4 +290,31 @@ class FloatingBottomBarPagerFollowPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `released pager can recoil before scroll settles in either direction`() {
+        val held = resolveFloatingDockWobbleManualInteraction(
+            indicatorDragging = false, pagerDragging = true, pagerScrolling = true,
+            tapMotionActive = false, indicatorOwnsTarget = false,
+        )
+        val released = resolveFloatingDockWobbleManualInteraction(
+            indicatorDragging = false, pagerDragging = false, pagerScrolling = true,
+            tapMotionActive = false, indicatorOwnsTarget = false,
+        )
+        // A held gesture must not wobble, even when it is near either endpoint.
+        for ((position, target) in listOf(0.98f to 1f, 0.02f to 0f)) {
+            assertFalse(canStartLiquidIndicatorRecoil(position, target, 1f, interactionActive = held))
+            assertTrue(canStartLiquidIndicatorRecoil(position, target, 1f, interactionActive = released))
+        }
+        assertFalse(canStartLiquidIndicatorRecoil(0.5f, 1f, 1f, interactionActive = released))
+    }
+
+    @Test
+    fun `callers without explicit pointer state retain scrolling fallback`() {
+        assertTrue(resolveFloatingDockWobbleManualInteraction(
+            indicatorDragging = false, pagerDragging = null, pagerScrolling = true,
+            tapMotionActive = false, indicatorOwnsTarget = false,
+        ))
+    }
+
 }

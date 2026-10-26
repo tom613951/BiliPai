@@ -1,25 +1,45 @@
 // 私信收件箱页面
 package com.android.purebilibili.feature.message
 
+import com.android.purebilibili.core.ui.components.appActionClickable
+import com.android.purebilibili.core.ui.components.appActionWithFeedback
+
 import com.android.purebilibili.core.ui.AppContentColors
-import com.android.purebilibili.core.ui.animation.jiggleOnDissolve
+import com.android.purebilibili.core.ui.UserAvatarCornerMarkBadge
+import com.android.purebilibili.core.ui.resolveUserAvatarCornerMark
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.activity.compose.BackHandler
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import com.android.purebilibili.core.store.MessageCenterPreferences
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SmartDisplay
+import androidx.compose.material.icons.outlined.Contacts
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.AlternateEmail
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
@@ -35,15 +55,10 @@ import com.android.purebilibili.core.ui.AppTopBar
 import com.android.purebilibili.core.ui.rememberAppSemanticVisualPolicy
 import coil3.compose.AsyncImage
 import com.android.purebilibili.core.ui.AdaptivePullToRefreshBox
-import com.android.purebilibili.core.theme.AppUiStyle
-import com.android.purebilibili.core.theme.LocalAppUiStyle
 import com.android.purebilibili.core.ui.components.AppButton
 import com.android.purebilibili.core.ui.components.AppDropdownMenu
 import com.android.purebilibili.core.ui.components.AppDropdownMenuItem
-import com.android.purebilibili.core.ui.components.AppSegmentOption
-import com.android.purebilibili.core.ui.components.AppThemeAdaptiveTabRow
 import com.android.purebilibili.core.ui.components.AppIconButton
-import com.android.purebilibili.core.ui.components.AppOutlinedButton
 import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.components.AppSnackbar
 import com.android.purebilibili.core.ui.components.AppTextButton
@@ -78,17 +93,56 @@ fun InboxScreen(
     onBack: () -> Unit,
     onTopItemClick: (MessageCenterDestination) -> Unit,
     onSessionClick: (talkerId: Long, sessionType: Int, userName: String) -> Unit,
+    onOpenLink: (String) -> Unit = {},
     viewModel: InboxViewModel = viewModel()
 ) {
     val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val outsideActionLimit = if (LocalConfiguration.current.screenWidthDp < 360) 0 else 2
+    val webThemeQuery = if (AppSurfaceTokens.surface().luminance() < 0.5f) "native.theme=2&night=1" else "native.theme=1&night=0"
+    val disabledLikesFlow = remember(context) { MessageCenterPreferences.disabledLikes(context) }
+    val disabledLikes by disabledLikesFlow.collectAsStateWithLifecycle(initialValue = false)
+    var hasResumed by remember(accountIdentity) { mutableStateOf(false) }
+    LifecycleResumeEffect(accountIdentity) {
+        if (hasResumed) viewModel.refresh() else hasResumed = true
+        onPauseOrDispose {}
+    }
     val rawUiState by viewModel.uiState.collectAsStateWithLifecycle()
     val uiState = rawUiState.takeIf { it.accountIdentity == accountIdentity }
         ?: InboxUiState(accountIdentity = accountIdentity)
+    var auxiliaryPages by rememberSaveable(accountIdentity) { mutableStateOf<List<String>>(emptyList()) }
+    var pendingBatch by remember(accountIdentity) { mutableStateOf<Int?>(null) }
+    val goBack = { if (!viewModel.back()) onBack() }
+    BackHandler(enabled = uiState.pageType != 1, onBack = { goBack() })
+    if (auxiliaryPages.isNotEmpty()) {
+        MessageAuxiliaryPage(
+            page = auxiliaryPages.last(),
+            onBack = { auxiliaryPages = auxiliaryPages.dropLast(1); if (auxiliaryPages.isEmpty()) viewModel.refresh() },
+            onPage = { next -> auxiliaryPages = if (next.startsWith("contacts:") && auxiliaryPages.last().startsWith("contacts:")) auxiliaryPages.dropLast(1) + next else auxiliaryPages + next },
+            onOpenLink = onOpenLink,
+            modifier = Modifier.fillMaxSize(),
+        )
+        return
+    }
+    val openMenuItem: (com.android.purebilibili.data.repository.ImMenuItem) -> Unit = { item ->
+        when (item.type) {
+            1, 9 -> pendingBatch = item.type
+            2 -> auxiliaryPages = listOf("settings:0")
+            8 -> auxiliaryPages = listOf("contacts:following")
+            4 -> {
+                val id = Regex("""/(\d{3,})""").find(item.url)?.groupValues?.get(1)?.toLongOrNull()
+                if (id != null) onSessionClick(id, 1, item.title) else if (item.url.isNotBlank()) onOpenLink(item.url)
+            }
+            else -> if (item.url.isNotBlank()) onOpenLink(item.url) else android.widget.Toast.makeText(context, "当前入口暂不可用", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    if (pendingBatch != null) MessageConfirmDialog(
+        title = if (pendingBatch == 1) "一键已读" else "清空列表",
+        content = if (pendingBatch == 1) "是否清除当前列表全部新消息提醒？" else "确定清空当前会话列表？此操作无法撤销。",
+        onDismiss = { pendingBatch = null },
+    ) { if (pendingBatch == 1) viewModel.markAllRead() else viewModel.clearSessions(); pendingBatch = null }
     var lastAutoLoadEndTs by remember(accountIdentity) { mutableLongStateOf(0L) }
     var pendingRemoveSession by remember(accountIdentity) { mutableStateOf<SessionItem?>(null) }
-    var dissolvingSessionKeys by remember(accountIdentity) { mutableStateOf(setOf<String>()) }
-    var pendingInterceptSession by remember(accountIdentity) { mutableStateOf<SessionItem?>(null) }
-    var showClearDustbinConfirm by remember(accountIdentity) { mutableStateOf(false) }
 
     LaunchedEffect(uiState.sessions.firstOrNull()?.talker_id, uiState.isRefreshing, uiState.isLoading) {
         if (uiState.isRefreshing || uiState.isLoading) {
@@ -100,13 +154,41 @@ fun InboxScreen(
         blurContentReady = !uiState.isLoading,
         topBar = {
             AppTopBar(
-                title = "消息",
-                subtitle = uiState.unreadData?.let { unread ->
-                    totalPrivateUnreadCount(unread).takeIf { it > 0 }?.let { "私信 $it 条未读" }
-                },
+                title = uiState.title,
                 navigationIcon = {
-                    AppIconButton(onClick = onBack) {
+                    AppIconButton(onClick = goBack) {
                         AppIcon(rememberAppBackIcon(), contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (uiState.pageType == 1) {
+                            AppIconButton(onClick = { onOpenLink("https://www.bilibili.com/h5/follow/newFans?navhide=1&$webThemeQuery") }) { AppIcon(Icons.Outlined.PersonAdd, "新增粉丝") }
+                        }
+                        val visibleOutside = uiState.outside.filter { it.type in setOf(1, 2, 4, 8, 9) }.take(outsideActionLimit)
+                        visibleOutside.forEach { item ->
+                            val icon = when (item.type) {
+                                1 -> Icons.Outlined.DoneAll
+                                2 -> Icons.Outlined.Settings
+                                4 -> Icons.Outlined.SmartDisplay
+                                8 -> Icons.Outlined.Contacts
+                                else -> Icons.Outlined.DeleteSweep
+                            }
+                            AppIconButton(onClick = { openMenuItem(item) }, enabled = !uiState.isBatchOperating) { AppIcon(icon, item.title) }
+                        }
+                        val overflow = uiState.menu + uiState.outside.filter { it !in visibleOutside }
+                        var expanded by remember { mutableStateOf(false) }
+                        if (overflow.isNotEmpty()) {
+                            com.android.purebilibili.core.ui.components.AppGlassMenuAnchor(onOpen = { expanded = true }) {
+                                AppIconButton(onClick = { expanded = true }, enabled = !uiState.isBatchOperating) { AppIcon(Icons.Default.MoreVert, "更多") }
+                                AppDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                    overflow.forEach { item -> AppDropdownMenuItem(text = { AppText(item.title) }, onClick = { expanded = false; openMenuItem(item) }) }
+                                }
+                            }
+                        }
                     }
                 }
             )
@@ -117,9 +199,7 @@ fun InboxScreen(
                 .fillMaxSize()
                 .responsiveContentWidth(maxWidth = resolveSingleColumnFeedMaxWidth())
         ) {
-            // 骨架与真实内容共用同一个 LazyColumn：加载期只把会话行换成骨架，
-            // 「消息分类」「私信会话」两个头部始终是真实组件（标题固定，不依赖数据），
-            // 因此数据到达时不会出现「整块头部凭空出现」造成的整页下移。
+            // 首页快捷入口在加载期间保留，仅替换会话行；分类子页使用独立列表。
             AdaptivePullToRefreshBox(
                 isRefreshing = uiState.isRefreshing,
                 onRefresh = { viewModel.refresh() },
@@ -129,27 +209,14 @@ fun InboxScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = paddingValues.calculateTopPadding() + 8.dp, bottom = paddingValues.calculateBottomPadding() + 8.dp)
                 ) {
-                    item(key = "message_center_shortcut_row") {
-                        MessageCenterTopShortcutRow(
-                            items = buildMessageCenterTopItems(uiState.feedUnreadData),
-                            onItemClick = onTopItemClick
-                        )
-                    }
-
-                    item(key = "message_session_category_row") {
-                        MessageSessionCategoryRow(
-                            items = buildMessageSessionCategoryItems(uiState.unreadData),
-                            selectedCategory = uiState.selectedCategory,
-                            onCategoryClick = { viewModel.selectCategory(it) }
-                        )
-                    }
-
-                    if (uiState.selectedCategory == MessageSessionCategory.Dustbin) {
-                        item(key = "message_dustbin_action_row") {
-                            DustbinActionRow(
-                                isOperating = uiState.isBatchOperating,
-                                onMarkRead = { viewModel.markDustbinRead() },
-                                onClear = { showClearDustbinConfirm = true }
+                    if (uiState.pageType == 1) {
+                        item(key = "message_center_shortcut_row") {
+                            MessageCenterTopShortcutRow(
+                                items = buildMessageCenterTopItems(uiState.feedUnreadData).map { if (disabledLikes && it.destination == MessageCenterDestination.LikeMe) it.copy(unreadCount = 0) else it },
+                                onItemClick = { destination ->
+                                    if (disabledLikes && destination == MessageCenterDestination.LikeMe) android.widget.Toast.makeText(context, "已禁用", android.widget.Toast.LENGTH_SHORT).show()
+                                    else { viewModel.clearFeedBadge(destination); onTopItemClick(destination) }
+                                }
                             )
                         }
                     }
@@ -235,45 +302,38 @@ fun InboxScreen(
                                     }
                                 }
                                 val userInfo = uiState.userInfoMap[session.talker_id]
-                                val sessionKey = InboxSessionPaginationPolicy.resolveSessionKey(session)
-                                val isSessionDissolving = sessionKey in dissolvingSessionKeys
-                                com.android.purebilibili.core.ui.animation.MaybeDissolvableVideoCard(
-                                    isDissolving = isSessionDissolving,
-                                    onDissolveComplete = {
-                                        dissolvingSessionKeys = dissolvingSessionKeys - sessionKey
-                                        viewModel.removeSession(session)
-                                    },
-                                    cardId = sessionKey,
-                                    preset = com.android.purebilibili.core.ui.animation.DissolveAnimationPreset.TELEGRAM_FAST,
-                                    modifier = Modifier
-                                        .jiggleOnDissolve(
-                                            cardId = sessionKey,
-                                            isCurrentCardDissolving = isSessionDissolving,
+                                val imEntry = viewModel.entry(session)
+                                SessionListItem(
+                                    session = session,
+                                    userInfo = userInfo,
+                                    onClick = {
+                                        val userName = InboxUserInfoResolver.resolveDisplayName(
+                                            cached = userInfo,
+                                            session = session
                                         )
-                                        .animateItem(),
-                                ) {
-                                    SessionListItem(
-                                        session = session,
-                                        userInfo = userInfo,
-                                        onClick = {
-                                            val userName = InboxUserInfoResolver.resolveDisplayName(
-                                                cached = userInfo,
-                                                session = session
-                                            )
-                                            onSessionClick(session.talker_id, session.session_type, userName)
-                                        },
-                                        onRemove = { pendingRemoveSession = session },
-                                        onToggleTop = { viewModel.toggleTop(session) },
-                                        onToggleDnd = { viewModel.toggleDnd(session) },
-                                        onToggleIntercept = {
-                                            if (session.is_intercept == 1) {
-                                                viewModel.toggleIntercept(session)
-                                            } else {
-                                                pendingInterceptSession = session
+                                        val entry = viewModel.entry(session)
+                                        if (!viewModel.openFolder(session)) {
+                                            when {
+                                                entry?.systemNotice == true -> { viewModel.clearFeedBadge(MessageCenterDestination.SystemNotice); onTopItemClick(MessageCenterDestination.SystemNotice) }
+                                                entry?.isPrivate == true -> { viewModel.onOpenSession(session); onSessionClick(session.talker_id, 1, userName) }
+                                                !entry?.chatUrl.isNullOrBlank() -> onOpenLink(entry!!.chatUrl)
+                                                session.talker_id > 0 -> onSessionClick(session.talker_id, session.session_type, userName)
                                             }
                                         }
-                                    )
-                                }
+                                    },
+                                    onAvatarClick = viewModel.entry(session)?.profileMid?.takeIf { it > 0L }?.let { mid -> { onOpenLink("bilibili://space/$mid") } },
+                                    onRemove = { pendingRemoveSession = session },
+                                    onMarkRead = { viewModel.markRead(session) },
+                                    isPrivate = imEntry?.isPrivate == true,
+                                    unreadDot = imEntry?.unreadDot == true,
+                                    unreadLabel = imEntry?.unreadLabel.orEmpty(),
+                                    pendantUrl = imEntry?.pendantUrl.orEmpty(),
+                                    officialType = imEntry?.officialType,
+                                    vipColor = imEntry?.vipColor == true,
+                                    userLabel = imEntry?.userLabel.orEmpty(),
+                                    onToggleTop = { viewModel.toggleTop(session) },
+                                    onToggleDnd = { viewModel.toggleDnd(session) },
+                                )
                             }
                         }
                     }
@@ -327,9 +387,7 @@ fun InboxScreen(
             confirmButton = {
                 AppTextButton(
                     onClick = {
-                        // Dissolve first; actual removal happens onDissolveComplete.
-                        dissolvingSessionKeys =
-                            dissolvingSessionKeys + InboxSessionPaginationPolicy.resolveSessionKey(session)
+                        viewModel.removeSession(session)
                         pendingRemoveSession = null
                     }
                 ) {
@@ -344,51 +402,8 @@ fun InboxScreen(
         )
     }
 
-    pendingInterceptSession?.let { session ->
-        AppAlertDialog(
-            onDismissRequest = { pendingInterceptSession = null },
-            title = { AppText("移入拦截") },
-            text = { AppText("后续这类会话会进入拦截分类，仍可在拦截列表中查看和恢复。") },
-            confirmButton = {
-                AppTextButton(
-                    onClick = {
-                        viewModel.toggleIntercept(session)
-                        pendingInterceptSession = null
-                    }
-                ) {
-                    AppText("移入")
-                }
-            },
-            dismissButton = {
-                AppTextButton(onClick = { pendingInterceptSession = null }) {
-                    AppText("取消")
-                }
-            }
-        )
-    }
 
-    if (showClearDustbinConfirm) {
-        AppAlertDialog(
-            onDismissRequest = { showClearDustbinConfirm = false },
-            title = { AppText("清空拦截会话") },
-            text = { AppText("所有拦截会话会从列表中移除，聊天记录仍由服务端保留。") },
-            confirmButton = {
-                AppTextButton(
-                    onClick = {
-                        viewModel.clearDustbinSessions()
-                        showClearDustbinConfirm = false
-                    }
-                ) {
-                    AppText("清空")
-                }
-            },
-            dismissButton = {
-                AppTextButton(onClick = { showClearDustbinConfirm = false }) {
-                    AppText("取消")
-                }
-            }
-        )
-    }
+
 }
 
 @Composable
@@ -401,16 +416,9 @@ private fun MessageCenterTopShortcutRow(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        val columns = if (maxWidth >= 820.dp) 4 else 2
+        val columns = 4
 
         Column {
-            AppText(
-                text = "消息分类",
-                style = MaterialTheme.typography.labelLarge,
-                color = AppContentColors.secondaryText(),
-                modifier = Modifier.padding(bottom = 10.dp)
-            )
-
             items.chunked(columns).forEachIndexed { rowIndex, rowItems ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -443,156 +451,42 @@ private fun MessageCenterShortcutCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    val useGroupedListCards = rememberAppSemanticVisualPolicy().prefersGroupedListCards
-    AppSurface(
-        modifier = modifier
-            .height(if (useGroupedListCards) 88.dp else 96.dp)
-            .clickable(onClick = onClick),
-        shape = AppShapes.container(ContainerLevel.Card),
-        color = if (useGroupedListCards) AppSurfaceTokens.surfaceContainer() else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        border = if (useGroupedListCards) {
-            androidx.compose.foundation.BorderStroke(
-                0.8.dp,
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f)
-            )
-        } else {
-            null
-        }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 12.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AppText(
-                    text = item.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Start
-                )
-
-                if (item.unreadCount > 0) {
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .background(
-                                color = AppContentColors.accent(),
-                                shape = AppShapes.container(ContainerLevel.Pill)
-                            )
-                            .padding(horizontal = 7.dp, vertical = 2.dp)
-                    ) {
-                        AppText(
-                            text = if (item.unreadCount > 99) "99+" else item.unreadCount.toString(),
-                            color = AppContentColors.onAccent(),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
+    val icon = when (item.destination) {
+        MessageCenterDestination.ReplyMe -> androidx.compose.material.icons.Icons.Outlined.ChatBubbleOutline
+        MessageCenterDestination.AtMe -> androidx.compose.material.icons.Icons.Outlined.AlternateEmail
+        MessageCenterDestination.LikeMe -> androidx.compose.material.icons.Icons.Outlined.FavoriteBorder
+        MessageCenterDestination.SystemNotice -> androidx.compose.material.icons.Icons.Outlined.NotificationsNone
+    }
+    Column(modifier.appActionClickable(onClick = onClick).padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box {
+            AppSurface(modifier = Modifier.size(44.dp), shape = CircleShape, color = AppSurfaceTokens.surfaceContainer()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AppIcon(icon, item.title, tint = AppContentColors.accent(), modifier = Modifier.size(20.dp)) }
             }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            AppText(
-                text = if (item.unreadCount > 0) "${item.unreadCount} 条" else "查看",
-                style = MaterialTheme.typography.labelMedium,
-                color = AppContentColors.secondaryText(),
-                textAlign = TextAlign.Start
+            if (item.unreadCount > 0) MessageUnreadBadge(
+                text = if (item.unreadCount > 99) "99+" else item.unreadCount.toString(),
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-4).dp),
             )
         }
-    }
-}
-
-@Composable
-private fun MessageSessionCategoryRow(
-    items: List<MessageSessionCategoryItem>,
-    selectedCategory: MessageSessionCategory,
-    onCategoryClick: (MessageSessionCategory) -> Unit
-) {
-    val uiStyle = LocalAppUiStyle.current
-    val rowHorizontalPadding = if (uiStyle == AppUiStyle.MATERIAL3) 0.dp else 16.dp
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        AppText(
-            text = "私信会话",
-            style = MaterialTheme.typography.labelLarge,
-            color = AppContentColors.secondaryText(),
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
-        )
-
-        val options = remember(items) {
-            items.map { item ->
-                AppSegmentOption(
-                    value = item.category,
-                    label = if (item.unreadCount > 0) {
-                        "${item.category.title} ${if (item.unreadCount > 99) "99+" else item.unreadCount}"
-                    } else {
-                        item.category.title
-                    },
-                )
-            }
-        }
-        AppThemeAdaptiveTabRow(
-            // Glass indicator fills the measured slot; native geometry keeps its defaults.
-            liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
-            role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
-            options = options,
-            selectedValue = selectedCategory,
-            onSelectionChange = onCategoryClick,
-            scrollable = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = rowHorizontalPadding),
-        )
-    }
-}
-
-@Composable
-private fun DustbinActionRow(
-    isOperating: Boolean,
-    onMarkRead: () -> Unit,
-    onClear: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AppOutlinedButton(
-            onClick = onMarkRead,
-            enabled = !isOperating,
-            modifier = Modifier.weight(1f)
-        ) {
-            AppText("全部已读")
-        }
-
-        AppOutlinedButton(
-            onClick = onClear,
-            enabled = !isOperating,
-            modifier = Modifier.weight(1f)
-        ) {
-            AppText("清空拦截")
-        }
+        Spacer(Modifier.height(6.dp))
+        AppText(item.title, style = MaterialTheme.typography.labelMedium, maxLines = 1)
     }
 }
 
 @Composable
 private fun MessageUnreadBadge(
     text: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isDot: Boolean = false
 ) {
+    if (isDot) {
+        // 纯未读点：8dp 实心圆，骑在头像右上边缘，不走计数胶囊的尺寸与内边距。
+        Box(
+            modifier = modifier
+                .size(8.dp)
+                .background(color = AppContentColors.accent(), shape = CircleShape)
+        )
+        return
+    }
     Box(
         modifier = modifier
             .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp)
@@ -705,7 +599,15 @@ fun SessionListItem(
     onRemove: () -> Unit,
     onToggleTop: () -> Unit,
     onToggleDnd: () -> Unit,
-    onToggleIntercept: () -> Unit
+    onMarkRead: () -> Unit = {},
+    isPrivate: Boolean = true,
+    unreadDot: Boolean = false,
+    unreadLabel: String = "",
+    pendantUrl: String = "",
+    officialType: Int? = null,
+    vipColor: Boolean = false,
+    userLabel: String = "",
+    onAvatarClick: (() -> Unit)? = null,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val useGroupedListCards = rememberAppSemanticVisualPolicy().prefersGroupedListCards
@@ -722,7 +624,8 @@ fun SessionListItem(
     AppSurface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = appActionWithFeedback(onClick), onLongClick = { showMenu = true })
+            .messageSecondaryClick { showMenu = true }
             .padding(horizontal = if (useGroupedListCards) 12.dp else 0.dp, vertical = if (useGroupedListCards) 3.dp else 0.dp),
         shape = if (useGroupedListCards) {
             AppShapes.container(ContainerLevel.Card)
@@ -743,18 +646,37 @@ fun SessionListItem(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box {
-            AsyncImage(
-                model = displayAvatar,
-                contentDescription = "头像",
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentScale = ContentScale.Crop
-            )
+            Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                val hasPendant = pendantUrl.isNotBlank()
+                AsyncImage(
+                    model = displayAvatar,
+                    contentDescription = "头像",
+                    modifier = Modifier
+                        .fillMaxSize(if (hasPendant) 0.72f else 1f)
+                        .clip(CircleShape)
+                        .then(if (onAvatarClick != null) Modifier.appActionClickable(onClick = onAvatarClick) else Modifier)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentScale = ContentScale.Crop
+                )
+                if (hasPendant) {
+                    AsyncImage(
+                        model = pendantUrl,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+                UserAvatarCornerMarkBadge(
+                    mark = resolveUserAvatarCornerMark(officialType, if (vipColor) 1 else 0, session.live_status == 1),
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                    badgeSize = 14.dp,
+                )
+            }
 
-            if (session.unread_count > 0) {
+            if (session.is_dnd != 1 && (session.unread_count > 0 || unreadDot || unreadLabel.isNotBlank())) {
                 val badgeText = when {
+                    unreadLabel.isNotBlank() -> unreadLabel
+                    unreadDot -> "•"
                     session.unread_count > 99 -> "99+"
                     else -> session.unread_count.toString()
                 }
@@ -762,7 +684,11 @@ fun SessionListItem(
                     text = badgeText,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 2.dp, y = (-2).dp)
+                        .offset(
+                            x = if (badgeText == "•") 4.dp else 2.dp,
+                            y = if (badgeText == "•") (-4).dp else (-2).dp
+                        ),
+                    isDot = badgeText == "•"
                 )
             }
         }
@@ -775,10 +701,27 @@ fun SessionListItem(
                     text = displayName,
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
+                    color = if (vipColor) com.android.purebilibili.core.ui.components.userVipPink() else Color.Unspecified,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+
+                if (userLabel.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(AppSpacingTokens.ExtraSmall))
+                    AppText(
+                        text = userLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppContentColors.secondaryText(),
+                        maxLines = 1,
+                        modifier = Modifier
+                            .background(
+                                AppContentColors.secondaryText().copy(alpha = 0.08f),
+                                AppShapes.container(ContainerLevel.Tag)
+                            )
+                            .padding(horizontal = AppSpacingTokens.ExtraSmall, vertical = 1.dp)
+                    )
+                }
 
                 if (session.top_ts > 0) {
                     Spacer(modifier = Modifier.width(AppSpacingTokens.ExtraSmall))
@@ -795,6 +738,10 @@ fun SessionListItem(
                     )
                 }
 
+                if (session.live_status == 1) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    MessageSmallFlag(text = "直播中")
+                }
                 if (session.is_dnd == 1) {
                     Spacer(modifier = Modifier.width(4.dp))
                     MessageSmallFlag(text = "免打扰")
@@ -829,58 +776,22 @@ fun SessionListItem(
                 color = AppContentColors.secondaryText()
             )
 
-            Box {
-                AppIconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    AppIcon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "更多",
-                        modifier = Modifier.size(16.dp),
-                        tint = AppContentColors.secondaryText()
-                    )
-                }
 
-                AppDropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    AppDropdownMenuItem(
-                        text = { AppText(if (session.top_ts > 0) "取消置顶" else "置顶") },
-                        onClick = {
-                            showMenu = false
-                            onToggleTop()
-                        }
-                    )
-                    AppDropdownMenuItem(
-                        text = { AppText(if (session.is_dnd == 1) "关闭免打扰" else "开启免打扰") },
-                        onClick = {
-                            showMenu = false
-                            onToggleDnd()
-                        }
-                    )
-                    if (session.session_type == 1) {
-                        AppDropdownMenuItem(
-                            text = { AppText(if (session.is_intercept == 1) "移出拦截" else "移入拦截") },
-                            onClick = {
-                                showMenu = false
-                                onToggleIntercept()
-                            }
-                        )
-                    }
-                    AppDropdownMenuItem(
-                        text = { AppText("删除会话") },
-                        onClick = {
-                            showMenu = false
-                            onRemove()
-                        }
-                    )
-                }
-            }
         }
     }
     }
+    if (showMenu) MessageActionDialog(
+        actions = buildList {
+            add(MessageAction(if (session.top_ts > 0) "移除置顶" else "置顶", onToggleTop))
+            if (isPrivate) {
+                if (session.unread_count > 0 || unreadDot || unreadLabel.isNotBlank()) add(MessageAction("标为已读", onMarkRead))
+                add(MessageAction(if (session.is_dnd == 1) "关闭免打扰" else "开启免打扰", onToggleDnd))
+                add(MessageAction("删除", onRemove))
+            }
+        },
+        onDismiss = { showMenu = false },
+    )
+
 }
 
 @Composable
@@ -906,7 +817,7 @@ private val inboxClockFormatter = SimpleDateFormat("HH:mm", Locale.getDefault())
 private val inboxTimeCalendar = Calendar.getInstance()
 
 /**
- * 会话列表相对时间，与 PiliPlus `DateFormatUtils.dateFormat` 对齐：
+ * 会话列表按时间距离显示：
  * 刚刚 / N分钟前 / N小时前 / 昨天 HH:mm / N天前 / 同年 MM-dd / 跨年 yyyy-MM-dd。
  */
 private fun formatTime(timestamp: Long): String {

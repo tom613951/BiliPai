@@ -125,6 +125,8 @@ internal fun OverlayChapterListPanel(
     onSeek: (Long) -> Unit,
     onDismiss: () -> Unit,
     isFullscreen: Boolean = false,
+    showViewPoints: Boolean = true,
+    onShowViewPointsChange: ((Boolean) -> Unit)? = null,
 ) {
     // 横屏全屏共用可拖动侧栏，仅材质由玻璃入口显式选择。
     val windowSize = androidx.compose.ui.platform.LocalWindowInfo.current.containerSize
@@ -136,6 +138,8 @@ internal fun OverlayChapterListPanel(
             onDismiss = onDismiss,
             isFullscreen = true,
             useGlassSurface = true,
+            showViewPoints = showViewPoints,
+            onShowViewPointsChange = onShowViewPointsChange,
         )
         return
     }

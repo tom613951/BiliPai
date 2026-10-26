@@ -47,21 +47,29 @@ internal fun rememberVideoDetailFirstFrameReveal(
 /**
  * Call inside the success-content identity. Decide once on mounting: early/cached content
  * continues to use the root morph; only content arriving after landing gets this fade.
+ * [contentVisible] gates the animation start: content mounted while the entry transition
+ * is still running (Loading skeleton already swapped out) holds at 0 and only fades in
+ * once the gate opens, so the skeleton underlay bridges the whole wait without a black gap.
  * Refreshes and return-preview cancellation must not restart the reveal.
  */
 @Composable
-internal fun rememberVideoDetailLateContentReveal(animateOnMount: Boolean): State<Float> {
+internal fun rememberVideoDetailLateContentReveal(
+    animateOnMount: Boolean,
+    contentVisible: Boolean = true,
+): State<Float> {
     val reduceMotion = rememberSystemReduceMotion()
-    val reveal = remember { Animatable(if (animateOnMount) 0f else 1f) }
-    LaunchedEffect(reveal, reduceMotion) {
-        reveal.animateTo(
-            1f,
-            tween(
-                durationMillis = if (reduceMotion) VIDEO_DETAIL_REDUCED_REVEAL_DURATION_MS
-                else VIDEO_DETAIL_ENTRY_REVEAL_DURATION_MS,
-                easing = AppMotionEasing.Md3StandardDecelerate,
-            ),
-        )
+    val reveal = remember { Animatable(if (!animateOnMount && contentVisible) 1f else 0f) }
+    LaunchedEffect(reveal, reduceMotion, contentVisible) {
+        if (contentVisible && reveal.value < 1f) {
+            reveal.animateTo(
+                1f,
+                tween(
+                    durationMillis = if (reduceMotion) VIDEO_DETAIL_REDUCED_REVEAL_DURATION_MS
+                    else VIDEO_DETAIL_ENTRY_REVEAL_DURATION_MS,
+                    easing = AppMotionEasing.Md3StandardDecelerate,
+                ),
+            )
+        }
     }
     return reveal.asState()
 }

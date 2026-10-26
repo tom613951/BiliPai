@@ -173,6 +173,12 @@ fun BottomBarSettingsContent(
     val iconFamily = rememberAppSemanticVisualPolicy().effectiveIconFamily
     val windowSizeClass = LocalWindowSizeClass.current
     val displayContext = LocalAppWindowAdaptiveInfo.current.displayContext
+    val isMiuix = LocalAppUiStyle.current == AppUiStyle.MIUIX
+    val standaloneHorizontalPadding = if (isMiuix) 16.dp else 0.dp
+    val bottomInset = maxOf(
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+        com.android.purebilibili.core.ui.LocalBottomBarContentPadding.current,
+    )
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val focusRequest by SettingsSearchFocusController.request.collectAsStateWithLifecycle()
@@ -326,12 +332,15 @@ fun BottomBarSettingsContent(
         state = listState,
         modifier = modifier
             .fillMaxSize(),
-        contentPadding = settingsScrollContentPadding(extraHorizontal = 16.dp, extraVertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        contentPadding = settingsScrollContentPadding(
+            extraHorizontal = if (isMiuix) 0.dp else 16.dp,
+            extraVertical = 16.dp,
+            extraBottom = bottomInset,
+        ),
     ) {
             // 说明文字
             item(key = "navigation_intro") {
-                Box(modifier = Modifier.entrance()) {
+                Box(modifier = Modifier.entrance().padding(horizontal = standaloneHorizontalPadding)) {
                     AppText(
                         text = "集中管理底部导航、首页顶部标签、搜索分类栏和平板侧边栏。底栏项目最少 2 个，最多 5 个。",
                         style = MaterialTheme.typography.bodySmall,
@@ -486,6 +495,7 @@ fun BottomBarSettingsContent(
                                 AppSegmentOption(2, "仅文字"),
                             ),
                             selectedValue = bottomBarLabelMode,
+                            optionLeading = { value -> SettingsOptionPreviewThumb(SettingsOptionPreview.Labels(value)) },
                             onSelectionChange = { mode ->
                                 scope.launch { SettingsManager.setBottomBarLabelMode(context, mode) }
                             },
@@ -528,6 +538,7 @@ fun BottomBarSettingsContent(
                                     AppSegmentOption(SettingsManager.TopTabLabelMode.TEXT_ONLY, "仅文字"),
                                 ),
                                 selectedValue = topTabLabelMode,
+                                optionLeading = { value -> SettingsOptionPreviewThumb(SettingsOptionPreview.Labels(value, atTop = true)) },
                                 onSelectionChange = { mode ->
                                     scope.launch { SettingsManager.setTopTabLabelMode(context, mode) }
                                 },
@@ -560,6 +571,9 @@ fun BottomBarSettingsContent(
                                     AppSegmentOption(order, order.label)
                                 },
                                 selectedValue = homeTopLayoutOrder,
+                                optionLeading = { value -> SettingsOptionPreviewThumb(SettingsOptionPreview.HeaderOrder(
+                                    searchFirst = value == HomeTopLayoutOrder.SEARCH_THEN_TABS,
+                                )) },
                                 onSelectionChange = { order ->
                                     scope.launch { SettingsManager.setHomeTopLayoutOrder(context, order) }
                                 },
@@ -576,6 +590,9 @@ fun BottomBarSettingsContent(
                                     HomeHeaderCollapseMode.BOTH -> "首页离开顶部后收起搜索与标签栏，回顶后恢复；其他列表页由列表页顶栏折叠设置控制"
                                     HomeHeaderCollapseMode.TABS_ONLY -> "下滑时仅收起标签页，搜索框保持显示"
                                 },
+                                optionLeading = { value -> SettingsOptionPreviewThumb(SettingsOptionPreview.HeaderCollapse(
+                                    searchVisible = !value.collapseSearch, tabsVisible = !value.collapseTabs,
+                                )) },
                                 options = listOf(
                                     AppSegmentOption(HomeHeaderCollapseMode.OFF, "始终显示"),
                                     AppSegmentOption(HomeHeaderCollapseMode.SEARCH_ONLY, "仅收起搜索"),
@@ -840,7 +857,7 @@ fun BottomBarSettingsContent(
             }
 
             item(key = "navigation_current") {
-                Box(modifier = Modifier.entrance()) {
+                Box(modifier = Modifier.entrance().padding(horizontal = standaloneHorizontalPadding)) {
                     BottomBarPreview(
                         tabs = localOrder.filter { it in localVisibleTabs }
                             .mapNotNull { id -> allBottomBarTabs.find { it.id == id } }
@@ -855,10 +872,7 @@ fun BottomBarSettingsContent(
             // 可用项目列表
             item(key = "navigation_available_title") {
                 Box(modifier = Modifier.entrance()) {
-                    Column {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        AppPreferenceSectionTitle("可用项目")
-                    }
+                    AppPreferenceSectionTitle("可用项目")
                 }
             }
 
@@ -909,7 +923,10 @@ fun BottomBarSettingsContent(
 
             // 顺序调整说明
             item(key = "navigation_restore") {
-                Box(modifier = Modifier.entrance()) {
+                Box(
+                    modifier = Modifier.entrance()
+                        .padding(horizontal = standaloneHorizontalPadding),
+                ) {
                     Column {
                         Spacer(modifier = Modifier.height(8.dp))
                         AppText(
@@ -923,7 +940,10 @@ fun BottomBarSettingsContent(
 
             // 重置按钮
             item(key = "navigation_hint") {
-                Box(modifier = Modifier.entrance()) {
+                Box(
+                    modifier = Modifier.entrance()
+                        .padding(horizontal = standaloneHorizontalPadding),
+                ) {
                     Column {
                         Spacer(modifier = Modifier.height(16.dp))
                         AppOutlinedButton(
@@ -970,7 +990,7 @@ private fun BottomBarPreview(
     onDragEnd: () -> Unit
 ) {
     // 触感反馈
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.ADJUSTMENT)
 
     // 拖拽状态
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }

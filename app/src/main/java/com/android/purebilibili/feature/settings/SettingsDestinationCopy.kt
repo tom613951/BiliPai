@@ -156,4 +156,8 @@ internal fun settingsDestinationCopy(target: SettingsSearchTarget): SettingsDest
         title = "发布渠道声明",
         summary = "GitHub · Telegram 频道与群组",
     )
+    SettingsSearchTarget.NEARBY_HANDOFF -> SettingsDestinationCopy(
+        title = com.android.purebilibili.feature.nearby.NEARBY_TITLE,
+        summary = "局域网配对、加密接力与已信任设备",
+    )
 }

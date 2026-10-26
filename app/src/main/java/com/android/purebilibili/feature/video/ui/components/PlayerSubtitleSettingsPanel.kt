@@ -6,12 +6,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.launch
+import com.android.purebilibili.feature.video.subtitle.importSubtitleFont
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+
+const val SUBTITLE_APPEARANCE_TITLE = "字幕样式"
 
 data class PlayerSubtitleAppearance(
     val inlineFontScale: Float = 1f,
@@ -21,6 +30,10 @@ data class PlayerSubtitleAppearance(
     val horizontalPadding: Int = 24,
     val bottomPadding: Int = 24,
     val backgroundOpacity: Float = 0.67f,
+    val textColor: Int = android.graphics.Color.WHITE,
+    val strokeColor: Int = android.graphics.Color.BLACK,
+    val fontFileName: String = "",
+    val fontDisplayName: String = "",
 )
 
 /** Changes are controlled by the caller and must update both the renderer and its persisted store. */
@@ -32,13 +45,53 @@ fun PlayerSubtitleSettingsPanel(
     isFullscreen: Boolean = false,
     onTimingSettings: (() -> Unit)? = null,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val latestAppearance by rememberUpdatedState(appearance)
+    val latestOnChange by rememberUpdatedState(onAppearanceChange)
+    var fontImporting by remember { mutableStateOf(false) }
+    var fontError by remember { mutableStateOf<String?>(null) }
+    val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            fontImporting = true
+            try {
+                val imported = importSubtitleFont(context, uri)
+                latestOnChange(latestAppearance.copy(fontFileName = imported.first, fontDisplayName = imported.second))
+                fontError = null
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                fontError = error.message ?: "无法导入字体"
+            } finally {
+                fontImporting = false
+            }
+        }
+    }
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     val bottomPaddingDp = if (isFullscreen && configuration.screenHeightDp > configuration.screenWidthDp) 70 else 0
     PlayerNativeSettingsHost(onDismiss, bottomPaddingDp = bottomPaddingDp) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
             Box(Modifier.fillMaxWidth().height(45.dp), contentAlignment = Alignment.Center) {
-                Text("字幕设置", fontSize = 14.sp)
+                Text(SUBTITLE_APPEARANCE_TITLE, fontSize = 14.sp)
             }
+            com.android.purebilibili.feature.video.subtitle.PiliStyledSubtitleText(
+                text = "字幕样式预览 Aa 123", baseFontSizeSp = 18,
+                appearance = appearance, isFullscreen = isFullscreen,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            )
+            PlayerSettingsRow(
+                if (fontImporting) "正在导入字体…" else "字幕字体：${appearance.fontDisplayName.ifBlank { "默认字体" }}",
+                onClick = { if (!fontImporting) fontPicker.launch(arrayOf("*/*")) },
+            )
+            if (appearance.fontFileName.isNotBlank()) {
+                TextButton(onClick = { onAppearanceChange(appearance.copy(fontFileName = "", fontDisplayName = "")) }) {
+                    Text("恢复默认字体")
+                }
+            }
+            Text("支持 TTF、OTF、TTC，最大 32 MB，仅用于字幕", style = MaterialTheme.typography.bodySmall)
+            fontError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            SubtitleColorPreference("文字颜色", appearance.textColor) { onAppearanceChange(appearance.copy(textColor = it)) }
+            SubtitleColorPreference("描边颜色", appearance.strokeColor) { onAppearanceChange(appearance.copy(strokeColor = it)) }
             SubtitleAppearanceSlider("字体大小", appearance.inlineFontScale, 0.5f..2.5f, 1f, { "${(it * 100).roundToInt()}%" }) {
                 onAppearanceChange(appearance.copy(inlineFontScale = it))
             }
@@ -87,4 +140,36 @@ private fun SubtitleAppearanceSlider(
         }
         Slider(value.coerceIn(range), onChange, valueRange = range, steps = steps, modifier = Modifier.padding(vertical = 16.dp))
     }
+}
+
+@Composable
+private fun SubtitleColorPreference(label: String, value: Int, onChange: (Int) -> Unit) {
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var hex by rememberSaveable(value) { mutableStateOf("#%06X".format(value and 0xFFFFFF)) }
+    val parsed = hex.removePrefix("#").takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }
+        ?.toLongOrNull(16)?.toInt()?.or(0xFF000000.toInt())
+    PlayerSettingsRow("$label：#%06X".format(value and 0xFFFFFF), onClick = { editing = true })
+    if (editing) AlertDialog(
+        onDismissRequest = { editing = false }, title = { Text(label) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = hex, onValueChange = { hex = it }, label = { Text("十六进制颜色 #RRGGBB") },
+                    singleLine = true, isError = parsed == null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row {
+                    listOf("白" to 0xFFFFFFFF.toInt(), "黑" to 0xFF000000.toInt(),
+                        "黄" to 0xFFFFEB3B.toInt(), "青" to 0xFF80DEEA.toInt()).forEach { (name, preset) ->
+                        TextButton(onClick = { hex = "#%06X".format(preset and 0xFFFFFF) }, modifier = Modifier.weight(1f)) {
+                            Text(name)
+                        }
+                    }
+                }
+                Text("预览文字", color = parsed?.let { Color(it) } ?: Color(value))
+            }
+        },
+        confirmButton = { TextButton(enabled = parsed != null, onClick = { parsed?.let(onChange); editing = false }) { Text("保存") } },
+        dismissButton = { TextButton(onClick = { editing = false }) { Text("取消") } },
+    )
 }

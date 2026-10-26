@@ -77,7 +77,8 @@ data class SessionItem(
     val is_intercept: Int = 0,
     val live_status: Int = 0,          // 是否正在直播
     val account_info: SessionAccountInfo? = null,  // 用户信息
-    val biz: Int = 0
+    val biz: Int = 0,
+    @kotlinx.serialization.Transient val identity_key: String = "",
 )
 
 @Serializable

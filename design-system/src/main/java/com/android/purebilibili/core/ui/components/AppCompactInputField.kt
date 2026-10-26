@@ -100,3 +100,79 @@ fun AppCompactInputField(
         },
     )
 }
+
+/** 保留原生输入框的布局与配色，同时允许调用方持有光标和选区。 */
+@Composable
+fun AppCompactInputField(
+    value: androidx.compose.ui.text.input.TextFieldValue,
+    onValueChange: (androidx.compose.ui.text.input.TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    height: Dp = 40.dp,
+    containerColor: Color = AppSurfaceTokens.searchContainer(),
+    shape: Shape = if (LocalAppUiStyle.current == AppUiStyle.MIUIX) RoundedCornerShape(12.dp) else CircleShape,
+    readOnly: Boolean = false,
+    singleLine: Boolean = true,
+    maxLines: Int = if (singleLine) 1 else 4,
+    focusRequester: FocusRequester? = null,
+    autoFocusEnabled: Boolean = false,
+    interactionSource: androidx.compose.foundation.interaction.MutableInteractionSource? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+    leadingIcon: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+) {
+    val requester = focusRequester ?: remember { FocusRequester() }
+    LaunchedEffect(requester, autoFocusEnabled) {
+        if (autoFocusEnabled) requester.requestFocus()
+    }
+    val textColor = AppContentColors.primaryText()
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier
+            .heightIn(min = height)
+            .clip(shape)
+            .background(containerColor)
+            .focusRequester(requester),
+        readOnly = readOnly,
+        singleLine = singleLine,
+        maxLines = maxLines,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(color = textColor),
+        cursorBrush = SolidColor(AppContentColors.accent()),
+        interactionSource = interactionSource,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = height)
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (leadingIcon != null) {
+                    Box(Modifier.size(height), contentAlignment = Alignment.Center) { leadingIcon() }
+                }
+                Box(
+                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    if (value.text.isEmpty()) {
+                        AppText(
+                            placeholder,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AppContentColors.secondaryText(),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    innerTextField()
+                }
+                if (trailingIcon != null) {
+                    Box(Modifier.size(height), contentAlignment = Alignment.Center) { trailingIcon() }
+                }
+            }
+        },
+    )
+}

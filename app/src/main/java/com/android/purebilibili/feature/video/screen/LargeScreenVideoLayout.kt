@@ -114,6 +114,8 @@ internal fun LargeScreenVideoLayout(
     videoNoteEnabled: Boolean = true,
     videoNoteDefaultCollapsed: Boolean = true,
     playerContent: (@Composable (Modifier) -> Unit)? = null,
+    externalQueueTitle: String = "播放列表",
+    externalQueueContent: (@Composable () -> Unit)? = null,
     transitionChromeAlphaProvider: () -> Float = { 1f },
 ) {
     val pageColor = AppSurfaceTokens.chromeBackground()
@@ -193,6 +195,7 @@ internal fun LargeScreenVideoLayout(
         val intro: @Composable (Modifier) -> Unit = { modifier ->
             if (success != null) {
                 TabletVideoInfoPane(
+                    currentPositionMsProvider = { playerState.player.currentPosition },
                     success = success,
                     engagementState = engagementState,
                     downloadProgress = downloadProgress,
@@ -241,6 +244,8 @@ internal fun LargeScreenVideoLayout(
                         showUpBadge = showUpBadge,
                         showIdentityDecorations = commentMemberDecorationsEnabled,
                         onOpenBilibiliLink = onOpenBilibiliLink,
+                        externalQueueTitle = externalQueueTitle,
+                        externalQueueContent = externalQueueContent,
                         requestedTabName = null,
                         onRequestedTabConsumed = {},
                         danmakuEnabled = danmakuChrome.enabled,
@@ -596,6 +601,8 @@ private fun LargeScreenPlayerHost(
                     onToggleFavorite = { engagementActions.onFavoriteAction(false) },
                     onTriple = engagementActions.doTripleAction,
                     onReloadVideo = playbackActions.reloadVideo,
+                    onJumpToLastPlayedPart = playbackActions.jumpToLastPlayedPart,
+                    onDismissPartResumeNotice = playbackActions.dismissPartResumeNotice,
                     onSwitchCdn = playbackActions.switchCdn,
                     onSwitchCdnTo = playbackActions.switchCdnTo,
                     onProbeCdnCandidates = playbackActions.probeCdnCandidates,

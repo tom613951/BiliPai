@@ -350,7 +350,9 @@ fun PortraitSubtitleHost(
         onControlsChange(controlState, controlCallbacks)
     }
 
-    val glassLayout = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    // 未自定义字幕时保留玻璃原有排版；自定义样式与原生路径共用渲染器。
+    val glassLayout = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled &&
+        subtitleAppearance == PlayerSubtitleAppearance()
     Box(modifier = modifier.fillMaxSize()) {
         if (keepMounted && subtitleSession.selectedTrackKey == null) {
             Column(
@@ -457,7 +459,7 @@ fun PortraitSubtitleHost(
                         baseFontSizeSp = if (secondaryAsPrimary) textSizeSpec.primarySp else textSizeSpec.secondarySp,
                         appearance = subtitleAppearance,
                         isFullscreen = false,
-                        color = Color.White.copy(alpha = 0.88f),
+                        color = Color(subtitleAppearance.textColor).copy(alpha = 0.88f),
                     )
                     if (showPrimary) PiliStyledSubtitleText(
                         text = primaryText.orEmpty(),

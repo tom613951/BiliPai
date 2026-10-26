@@ -60,7 +60,10 @@ fun LiveContributionRankSheet(
     val pager = androidx.compose.foundation.pager.rememberPagerState(pageCount = { rankTypes.size })
     val pageStates = remember(roomInfo.roomId) { rankTypes.associateWith { LiveRankPageState() } }
     val listStates = remember(roomInfo.roomId) { rankTypes.map { androidx.compose.foundation.lazy.LazyListState() } }
-    val panelHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.65f).dp
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val panelHeight = (configuration.screenHeightDp * if (
+        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    ) 1f else 0.7f).dp
     AppModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().height(panelHeight)) {
             AppText("高能榜", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(12.dp))

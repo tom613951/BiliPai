@@ -42,6 +42,7 @@ import coil3.request.SuccessResult
 import coil3.size.Scale
 import coil3.transform.RoundedCornersTransformation
 import com.android.purebilibili.R
+import com.android.purebilibili.core.lifecycle.AbandonableResource
 import com.android.purebilibili.core.network.NetworkModule
 import com.android.purebilibili.core.player.HiResCompatibleRenderersFactory
 import com.android.purebilibili.core.player.PlaybackMediaCache
@@ -108,6 +109,18 @@ internal fun resolvePlayerBufferPolicy(isOnWifi: Boolean): PlayerBufferPolicy {
     }
 }
 
+/** 前段限流必须覆盖按倍速折算后的起播及恢复门槛，并留出测量余量。 */
+internal fun resolveEarlyPlaybackBufferLimitUs(
+    earlyPlaybackMaxBufferMs: Int,
+    bufferForPlaybackMs: Int,
+    bufferForPlaybackAfterRebufferMs: Int,
+    playbackSpeed: Float,
+): Long {
+    val speed = playbackSpeed.takeIf { it.isFinite() && it > 0f } ?: 1f
+    val requiredUs = (maxOf(bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs) * 1_000.0 * speed).toLong()
+    return maxOf(earlyPlaybackMaxBufferMs * 1_000L, requiredUs + 250_000L)
+}
+
 /**
  * Avoid downloading far ahead until the viewer has committed to the first quarter of a VOD.
  *
@@ -142,7 +155,9 @@ internal fun shouldLimitEarlyPlaybackBufferForPeriod(
  */
 private class FirstQuarterAwareLoadControl(
     private val delegate: LoadControl,
-    private val earlyPlaybackMaxBufferMs: Int
+    private val earlyPlaybackMaxBufferMs: Int,
+    private val bufferForPlaybackMs: Int,
+    private val bufferForPlaybackAfterRebufferMs: Int,
 ) : LoadControl by delegate {
     private val period = androidx.media3.common.Timeline.Period()
 
@@ -192,7 +207,12 @@ private class FirstQuarterAwareLoadControl(
             mediaPeriodDurationUs = periodDurationUs
         )
         return if (limitEarlyBuffer) {
-            parameters.bufferedDurationUs < earlyPlaybackMaxBufferMs * 1_000L
+            parameters.bufferedDurationUs < resolveEarlyPlaybackBufferLimitUs(
+                earlyPlaybackMaxBufferMs = earlyPlaybackMaxBufferMs,
+                bufferForPlaybackMs = bufferForPlaybackMs,
+                bufferForPlaybackAfterRebufferMs = bufferForPlaybackAfterRebufferMs,
+                playbackSpeed = parameters.playbackSpeed,
+            )
         } else {
             delegate.shouldContinueLoading(parameters)
         }
@@ -868,8 +888,6 @@ class VideoPlayerState(
     }
     
     init {
-        player.addListener(playerListener) // 使用统一的 listener
-        player.addAnalyticsListener(analyticsListener)
         // 初始检查
         val size = player.videoSize
         if (size.width > 0 && size.height > 0) {
@@ -940,6 +958,11 @@ class VideoPlayerState(
         // 不重置 _isPortraitFullscreen，保持竖屏全屏状态
     }
     
+    fun attachPlayerListeners() {
+        player.addListener(playerListener)
+        player.addAnalyticsListener(analyticsListener)
+    }
+
     fun release() {
         player.removeListener(playerListener)
         player.removeAnalyticsListener(analyticsListener)
@@ -1013,13 +1036,14 @@ fun rememberVideoPlayerState(
     
     val player = remember(context, bvid, playerCreationKey) {
         // 如果小窗有这个视频的 player，直接复用
-        if (reuseFromMiniPlayerAtEntry) {
+        val reusedPlayer = if (reuseFromMiniPlayerAtEntry) {
             miniPlayerManager.player?.also {
                 com.android.purebilibili.core.util.Logger.d("VideoPlayerState", " 复用小窗 player: bvid=$bvid")
             }
         } else {
             null
-        } ?: run {
+        }
+        val rememberedPlayer = reusedPlayer ?: run {
             // 创建新的 player
             com.android.purebilibili.core.util.Logger.d("VideoPlayerState", " 创建新 player: bvid=$bvid")
             val headers = mapOf(
@@ -1079,7 +1103,9 @@ fun rememberVideoPlayerState(
                             )
                             .setPrioritizeTimeOverSizeThresholds(true)
                             .build(),
-                        earlyPlaybackMaxBufferMs = bufferPolicy.earlyPlaybackMaxBufferMs
+                        earlyPlaybackMaxBufferMs = bufferPolicy.earlyPlaybackMaxBufferMs,
+                        bufferForPlaybackMs = bufferPolicy.bufferForPlaybackMs,
+                        bufferForPlaybackAfterRebufferMs = bufferPolicy.bufferForPlaybackAfterRebufferMs,
                     )
                 )
                 //  [性能优化] 快速 Seek：跳转到最近的关键帧而非精确位置
@@ -1119,7 +1145,11 @@ fun rememberVideoPlayerState(
                         SettingsManager.getClickToPlaySync(context)
                 }
         }
-    }
+        AbandonableResource(rememberedPlayer) {
+            // 复用实例仍由小窗或其他页面持有，只有本次新建的实例需要兜底释放。
+            if (reusedPlayer == null) it.release()
+        }
+    }.value
     val playbackCompletionBehavior by SettingsManager
         .getPlaybackCompletionBehavior(context)
         .collectAsStateWithLifecycle(initialValue = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC
@@ -1156,8 +1186,9 @@ fun rememberVideoPlayerState(
         }
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, holder) {
         miniPlayerManager.retainPlayerForPage(player)
+        holder.attachPlayerListeners()
         onDispose {
             viewModel.flushPlaybackHeartbeatSnapshot(reason = "dispose")
             //  [新增] 保存播放进度到 ViewModel 缓存
@@ -1504,7 +1535,7 @@ fun rememberVideoPlayerState(
         isLeavingByNavigation = miniPlayerManager.isLeavingByNavigation,
         isAudioNowPlayingActive = audioNowPlayingActive,
     )
-    LaunchedEffect(playbackSessionActive, player, ownedByPlaybackHandoff) {
+    LaunchedEffect(playbackSessionActive, player, ownedByPlaybackHandoff, entryTransitionFinished) {
         if (
             shouldSuspendLocalPlaybackWhenSessionInactive(
                 playbackSessionActive = playbackSessionActive,
@@ -1515,8 +1546,10 @@ fun rememberVideoPlayerState(
                 player.playWhenReady ||
                 player.mediaItemCount > 0
             if (likelyActive) {
-                wasPlayingBeforeSessionSuspend =
-                    player.isPlaying || player.playWhenReady
+                // 重复的非活跃通知不能覆盖第一次挂起时保存的播放意图。
+                if (!suspendedByInactiveSession) {
+                    wasPlayingBeforeSessionSuspend = player.isPlaying || player.playWhenReady
+                }
                 player.volume = 0f
                 player.playWhenReady = false
                 if (player.isPlaying) {
@@ -1536,10 +1569,10 @@ fun rememberVideoPlayerState(
             PlayerVolumeController.applyPreferredVolume(player)
             holder.recordDiagnosticEvent("playbackHandoffOwnsSession -> restoreVolume")
         }
-        if (suspendedByInactiveSession && playbackSessionActive) {
+        if (suspendedByInactiveSession && playbackSessionActive && entryTransitionFinished) {
             com.android.purebilibili.core.player.PlayerVolumeController
                 .applyPreferredVolume(player)
-            if (wasPlayingBeforeSessionSuspend && entryTransitionFinished) {
+            if (wasPlayingBeforeSessionSuspend) {
                 player.playWhenReady = true
                 player.play()
                 holder.recordDiagnosticEvent("sessionActive -> resumeAfterSuspend")

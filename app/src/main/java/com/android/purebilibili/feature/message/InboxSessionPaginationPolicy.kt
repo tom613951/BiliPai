@@ -13,6 +13,7 @@ internal data class InboxSessionPageMergeResult(
 internal object InboxSessionPaginationPolicy {
 
     fun resolveSessionKey(session: SessionItem): String {
+        if (session.identity_key.isNotBlank()) return session.identity_key
         if (session.talker_id > 0L) {
             return "${session.talker_id}_${session.session_type}"
         }

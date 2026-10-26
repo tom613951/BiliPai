@@ -53,6 +53,7 @@ import com.android.purebilibili.core.store.LONG_PRESS_SPEED_HINT_STEP
 import com.android.purebilibili.core.store.player.PlayerSettingsStore
 import com.android.purebilibili.core.store.player.DEFAULT_AUDIO_QUALITY_FOLLOW_LAST
 import com.android.purebilibili.core.ui.adaptive.resolveDeviceUiProfile
+import com.android.purebilibili.core.store.ChapterDisplayMode
 import com.android.purebilibili.core.store.BottomProgressBehavior
 import com.android.purebilibili.core.store.FullscreenAspectRatio
 import com.android.purebilibili.core.store.PlaybackCompletionBehavior
@@ -1205,9 +1206,9 @@ SettingsItemAnchor("playback.data_saver_mode") {
                                     icon = rememberSettingsSemanticIcon(SettingsIconRole.DATA_SAVER_COVER_QUALITY),
                                 title = playbackSettingTitle("playback.home_settings.low_quality_home_cover_in_data_saver"),
                                 subtitle = if (homeSettings.lowQualityHomeCoverInDataSaver) {
-                                    "省流量模式生效时，首页加载较低清晰度封面"
+                                    "省流量时进一步降低首页封面分辨率"
                                 } else {
-                                    "默认始终加载高清首页封面"
+                                    "保留高清尺寸，图片压缩质量仍遵循省流量模式"
                                 },
                                 checked = homeSettings.lowQualityHomeCoverInDataSaver,
                                 onCheckedChange = { enabled ->
@@ -1291,6 +1292,20 @@ private fun PlaybackInteractionSettingsSection(
         .collectAsStateWithLifecycle(initialValue = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC)
     val subtitleFeatureEnabled = isSubtitleFeatureEnabledForUser()
     val subtitleAutoPreference = playerConfiguration.subtitleAutoPreference
+    var showSubtitleAppearance by remember { mutableStateOf(false) }
+    val subtitleAppearance by remember(context) {
+        com.android.purebilibili.feature.video.subtitle.SubtitleToolsStore.appearance(context)
+    }.collectAsStateWithLifecycle(initialValue = com.android.purebilibili.feature.video.ui.components.PlayerSubtitleAppearance())
+    if (showSubtitleAppearance) {
+        com.android.purebilibili.feature.video.ui.components.PlayerSubtitleSettingsPanel(
+            appearance = subtitleAppearance,
+            onAppearanceChange = { value -> scope.launch {
+                com.android.purebilibili.feature.video.subtitle.SubtitleToolsStore.setAppearance(context, value)
+            } },
+            onDismiss = { showSubtitleAppearance = false },
+        )
+    }
+
     val videoAiSummaryEntryEnabled by remember(context) { com.android.purebilibili.core.store.SettingsManager.getVideoAiSummaryEntryEnabled(context) }
         .collectAsStateWithLifecycle(initialValue = true)
     val videoNoteEnabled by remember(context) { com.android.purebilibili.core.store.SettingsManager.getVideoNoteEnabled(context) }
@@ -1374,6 +1389,32 @@ private fun PlaybackInteractionSettingsSection(
                 iconTint = AppContentColors.secondaryText()
             )
             }
+        AppPreferenceDivider()
+        val showContinuePartNotice = com.android.purebilibili.core.store.SettingsManager
+            .getShowContinuePartNotice(context)
+            .collectAsStateWithLifecycle(
+                initialValue = com.android.purebilibili.core.store.SettingsManager
+                    .getShowContinuePartNoticeSync(context)
+            ).value
+        SettingsItemAnchor("playback.show_continue_part_notice") {
+            AppSwitchPreference(
+                icon = rememberSettingsSemanticIcon(SettingsIconRole.CONTINUE_PART_NOTICE),
+                title = playbackSettingTitle("playback.show_continue_part_notice"),
+                subtitle = if (showContinuePartNotice) {
+                    "显示“上次看到第 N P”，点击跳转；仅在上次观看的是其他分P时出现"
+                } else {
+                    "关闭后不再展示分P继续播放提示"
+                },
+                checked = showContinuePartNotice,
+                onCheckedChange = {
+                    scope.launch {
+                        com.android.purebilibili.core.store.SettingsManager
+                            .setShowContinuePartNotice(context, it)
+                    }
+                },
+                iconTint = AppContentColors.secondaryText()
+            )
+        }
         AppPreferenceDivider()
         SettingsItemAnchor("playback.space_played_video_locate_prompt_enabled") {
             AppSwitchPreference(
@@ -1463,6 +1504,14 @@ SettingsItemAnchor("playback.playback_completion_behavior") {
         )
 }
         if (subtitleFeatureEnabled) {
+            AppPreferenceDivider()
+            SettingsItemAnchor("playback.subtitle_appearance") {
+                com.android.purebilibili.core.ui.components.AppPreference(
+                    title = settingItemTitle("playback.subtitle_appearance"),
+                    subtitle = "字号、颜色、描边与独立字体导入",
+                    onClick = { showSubtitleAppearance = true },
+                )
+            }
             AppPreferenceDivider()
 SettingsItemAnchor("playback.subtitle_auto_preference") {
             SettingsSingleChoicePreference(
@@ -2126,11 +2175,9 @@ SettingsItemAnchor("playback.portrait_player_collapse_mode") {
                 icon = rememberSettingsSemanticIcon(SettingsIconRole.HOME_HEADER_COLLAPSE),
                 title = playbackSettingTitle("playback.video_detail_chrome_scroll_hide_enabled"),
                 subtitle = if (videoDetailChromeScrollHideEnabled) {
-                    "浏览下方评论时收起顶栏，回到顶部恢复"
-                } else if (com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
-                    "顶栏始终显示，玻璃评论栏仍随滚动收起"
+                    "收起最热／最新排序与搜索入口，回到列表顶部恢复；最热评论标题始终随下滑收起"
                 } else {
-                    "顶栏和评论排序始终显示"
+                    "排序与搜索入口始终显示；最热评论标题仍随下滑收起、回顶出现"
                 },
                 checked = videoDetailChromeScrollHideEnabled,
                 onCheckedChange = { enabled ->
@@ -2447,6 +2494,8 @@ SettingsItemAnchor("playback.fullscreen_swipe_seek_seconds") {
         val showFullscreenTime by remember(context) { com.android.purebilibili.core.store.SettingsManager.getShowFullscreenTime(context) }.collectAsStateWithLifecycle(initialValue = true)
         val showFullscreenActionItems by remember(context) { com.android.purebilibili.core.store.SettingsManager.getShowFullscreenActionItems(context) }.collectAsStateWithLifecycle(initialValue = true)
         val showOnlineCount by remember(context) { com.android.purebilibili.core.store.SettingsManager.getShowOnlineCount(context) }.collectAsStateWithLifecycle(initialValue = false)
+        val chapterDisplayMode by remember(context) { SettingsManager.getChapterDisplayMode(context) }
+            .collectAsStateWithLifecycle(initialValue = ChapterDisplayMode.WITH_CONTROLS)
         val bottomProgressBehavior by remember(context) { com.android.purebilibili.core.store.SettingsManager.getBottomProgressBehavior(context) }
             .collectAsStateWithLifecycle(initialValue = BottomProgressBehavior.ALWAYS_HIDE)
         val progressPeakDanmakuEnabled by remember(context) { SettingsManager.getProgressPeakDanmakuEnabled(context) }
@@ -2953,6 +3002,18 @@ SettingsItemAnchor("playback.app_screenshot_capture_mode") {
             }
         AppPreferenceDivider()
 
+        SettingsItemAnchor("playback.chapter_display_mode") {
+            SettingsSingleChoicePreference(
+                title = playbackSettingTitle("playback.chapter_display_mode"),
+                subtitle = chapterDisplayMode.description,
+                options = ChapterDisplayMode.entries.map { AppSegmentOption(it, it.label) },
+                selectedValue = chapterDisplayMode,
+                onSelectionChange = { mode ->
+                    scope.launch { SettingsManager.setChapterDisplayMode(context, mode) }
+                },
+            )
+        }
+        AppPreferenceDivider()
 SettingsItemAnchor("playback.bottom_progress_behavior") {
         SettingsSingleChoicePreference(
             title = settingItemTitle("playback.bottom_progress_behavior"),

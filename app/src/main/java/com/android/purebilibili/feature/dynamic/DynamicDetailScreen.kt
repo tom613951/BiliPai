@@ -132,6 +132,7 @@ fun DynamicDetailScreen(
     onCourseClick: ((String, String) -> Unit)? = null,
     onOpenLink: ((String) -> Unit)? = null,
     onDynamicDetailClick: (String) -> Unit = {},
+    onMatchClick: ((Long) -> Unit)? = null,
     onShareToMessageClick: ((DynamicItem) -> Unit)? = null,
     contentTransitionReady: Boolean = true,
 ) {
@@ -147,6 +148,10 @@ fun DynamicDetailScreen(
     }
 
     val uiState = if (contentTransitionReady) loadedUiState else DynamicDetailUiState.Loading
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.android.purebilibili.feature.share.LocalReplyShareContext provides
+            com.android.purebilibili.feature.share.ReplyShareContext("https://t.bilibili.com/$dynamicId", title = "动态"),
+    ) {
     val contentRevealAlpha = com.android.purebilibili.core.ui.transition.rememberSharedCardDetailRevealAlpha(
         entryKey = dynamicId,
         contentTransitionReady = contentTransitionReady,
@@ -370,6 +375,7 @@ fun DynamicDetailScreen(
                                     onCourseClick = onCourseClick,
                                     onOpenLink = onOpenLink,
                                     onDynamicDetailClick = onDynamicDetailClick,
+                                    onMatchClick = onMatchClick,
                                 ),
                                 interaction = DynamicCardInteractionActions(
                                     onCommentClick = {
@@ -783,9 +789,10 @@ fun DynamicDetailScreen(
 
                 showRepostDialog?.let { repostDynamicId ->
                     RepostDialog(
+                        contentKey = repostDynamicId,
                         onDismiss = { showRepostDialog = null },
-                        onRepost = { content: String, alsoComment: Boolean, onComplete: (Boolean) -> Unit ->
-                            interactionViewModel.repostDynamic(repostDynamicId, content, alsoComment) { success, msg ->
+                        onRepost = { content, alsoComment, richContents, topic, onComplete ->
+                            interactionViewModel.repostDynamic(repostDynamicId, content, alsoComment, richContents, topic) { success, msg ->
                                 android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 if (success) {
                                     forwardCountDelta++
@@ -884,5 +891,6 @@ fun DynamicDetailScreen(
                 }
             }
         }
+    }
     }
 }

@@ -11,7 +11,6 @@ import com.android.purebilibili.core.ui.components.AppSearchEntry
 import com.android.purebilibili.core.ui.AppSpacingTokens
 import com.android.purebilibili.core.ui.AppTopChromePolicy
 import com.android.purebilibili.core.ui.blur.TopSolidProgressiveFadeOverlay
-import com.android.purebilibili.core.ui.globalWallpaperAwareChromeColor
 import com.android.purebilibili.core.ui.AppTopTabPresentation
 import com.android.purebilibili.core.theme.AppUiStyle
 import com.android.purebilibili.core.theme.LocalAppUiStyle
@@ -30,7 +29,7 @@ import com.android.purebilibili.feature.home.resolveHomeTopSearchRowMetrics
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import com.android.purebilibili.core.ui.components.appActionClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -230,11 +229,15 @@ internal fun shouldUseLegacyHomeTopTabs(
     bottomBarFloating: Boolean,
 ): Boolean = !liquidGlassEnabled && !bottomBarFloating
 
+/** 与底栏红点共用哨兵值：-1 表示"有未读但不显示数字"。 */
+internal const val HOME_TOP_RIGHT_BADGE_DOT = -1
+
 internal fun formatHomeTopRightUnreadBadge(
     action: HomeTopRightAction,
     unreadCount: Int
 ): String? {
-    if (action != HomeTopRightAction.INBOX || unreadCount <= 0) return null
+    if (action != HomeTopRightAction.INBOX || unreadCount == 0) return null
+    if (unreadCount == HOME_TOP_RIGHT_BADGE_DOT) return "•"
     return if (unreadCount > 99) "99+" else unreadCount.toString()
 }
 
@@ -270,6 +273,8 @@ internal fun resolveHomeTopRightActionContentDescription(
     action: HomeTopRightAction,
     unreadCount: Int
 ): String {
+    if (action != HomeTopRightAction.INBOX || unreadCount == 0) return action.label
+    if (unreadCount == HOME_TOP_RIGHT_BADGE_DOT) return "${action.label}，有未读消息"
     val badgeText = formatHomeTopRightUnreadBadge(action, unreadCount) ?: return action.label
     return "${action.label}，$badgeText 条未读"
 }
@@ -1547,7 +1552,7 @@ fun HomeHeader(
     val contentCardSurfaceSpec = rememberContentCardSurfaceSpec()
     val usesNativeContainerTreatment = semanticVisualPolicy.prefersNativeChrome
     val usesTonalContainerTreatment = contentCardSurfaceSpec.usesTonalContainerTreatment
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
     val density = LocalDensity.current
     val topChromeLiquidGlassEnabled = resolveHomeTopChromeLiquidGlassEnabled(
         homeSettings = homeSettings,
@@ -2143,17 +2148,19 @@ fun HomeHeader(
         hasBackdrop = miuixBackdrop != null,
     ) && !forceLowBlurBudget
     val isProgressiveFadeActive = progressiveTopFadeEnabled && !isHeaderBlurEnabled
-    val wallpaperTopReadability = if (!hasIllustratedHeader) {
-        currentWallpaperChromeReadability(MaterialTheme.colorScheme.background)?.top
+    val topChromeWallpaperPalette = if (!hasIllustratedHeader) {
+        currentTopChromeWallpaperPalette(MaterialTheme.colorScheme.background)
     } else null
+    val wallpaperTopReadability = topChromeWallpaperPalette?.readability?.top
     val wallpaperProtectionActive = isProgressiveBlurActive && wallpaperTopReadability != null
-    val topFadeSurfaceColor = wallpaperTopReadability?.let {
-        MaterialTheme.colorScheme.background.copy(alpha =
-            com.android.purebilibili.core.ui.wallpaper.resolveWallpaperProtectionAlpha(
-                it, MaterialTheme.colorScheme.background, MaterialTheme.colorScheme.onSurface,
-                blurred = isProgressiveBlurActive,
-            ))
-    } ?: globalWallpaperAwareChromeColor(MaterialTheme.colorScheme.background)
+    // 仅调整渐进模糊/纯色渐隐的保护层，关闭特效后的原生容器保持原有材质。
+    val topFadeSurfaceColor = resolveTopChromeFadeColor(
+        surfaceColor = MaterialTheme.colorScheme.background,
+        foregroundColor = topForegroundColor,
+        blurred = isProgressiveBlurActive,
+        backgroundColor = topChromeWallpaperPalette?.topColor,
+        readabilityBand = wallpaperTopReadability,
+    )
 
     val pinnedChromeLayout = resolveHomeTopPinnedChromeLayout(
         statusBarHeight = statusBarHeight,
@@ -2327,7 +2334,7 @@ fun HomeHeader(
                     modifier = Modifier
                         .size(48.dp)
                         .appElasticPress(visualSize = resolveHomeTopAvatarInnerSize())
-                        .clickable { performHomeTopBarTap(haptic = haptic, onClick = onAvatarClick) }
+                        .appActionClickable { performHomeTopBarTap(haptic = haptic, onClick = onAvatarClick) }
                         .semantics { contentDescription = "个人中心" },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2352,7 +2359,7 @@ fun HomeHeader(
                             state = topActionElasticState,
                             transformInBackdrop = topActionGlassActive,
                         )
-                        .clickable(
+                        .appActionClickable(
                             interactionSource = null,
                             indication = null,
                             role = Role.Button,
@@ -2643,7 +2650,7 @@ fun HomeHeader(
                                 modifier = Modifier
                                     .size(resolveHomeTopAvatarOuterSize())
                                     .appElasticPress(visualSize = resolveHomeTopAvatarInnerSize())
-                                    .clickable {
+                                    .appActionClickable {
                                         performHomeTopBarTap(haptic = haptic, onClick = onAvatarClick)
                                     },
                                 contentAlignment = Alignment.Center
@@ -2798,7 +2805,7 @@ fun HomeHeader(
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .clickable(
+                                                .appActionClickable(
                                                     interactionSource = searchPillInteractionSource,
                                                     role = Role.Button,
                                                 ) {
@@ -2860,7 +2867,7 @@ fun HomeHeader(
                                             transformInBackdrop = topActionGlassActive,
                                         )
                                         .then(topActionSurfaceModifier)
-                                        .clickable(
+                                        .appActionClickable(
                                             interactionSource = null,
                                             indication = null,
                                             role = Role.Button,

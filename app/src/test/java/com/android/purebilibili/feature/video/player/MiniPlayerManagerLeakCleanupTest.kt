@@ -18,6 +18,9 @@ import io.mockk.verify
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class MiniPlayerManagerLeakCleanupTest {
 
@@ -25,6 +28,52 @@ class MiniPlayerManagerLeakCleanupTest {
     fun tearDown() {
         unmockkAll()
     }
+
+    @Test
+    fun clearingExternalPlayerReleasesItsSessionWrapper() {
+        mockkStatic(ContextCompat::class)
+        every { ContextCompat.registerReceiver(any(), any(), any(), any()) } returns null
+        val manager = newMiniPlayerManager(mockContext())
+        val player = mockk<ExoPlayer>(relaxed = true)
+        val session = mockk<MediaSession>(relaxed = true)
+        every { session.player } returns player
+        externalPlayerState(manager).value = player
+        manager.mediaSession = session
+        try {
+            assertTrue(manager.clearExternalPlayerIfMatches(player))
+
+            verify(exactly = 1) { session.release() }
+            assertNull(manager.mediaSession)
+        } finally {
+            manager.release()
+        }
+    }
+
+    @Test
+    fun clearingOldPlayerDoesNotReleaseSessionAlreadyBoundToAnotherPlayer() {
+        mockkStatic(ContextCompat::class)
+        every { ContextCompat.registerReceiver(any(), any(), any(), any()) } returns null
+        val manager = newMiniPlayerManager(mockContext())
+        val oldPlayer = mockk<ExoPlayer>(relaxed = true)
+        val newPlayer = mockk<ExoPlayer>(relaxed = true)
+        val session = mockk<MediaSession>(relaxed = true)
+        every { session.player } returns newPlayer
+        externalPlayerState(manager).value = oldPlayer
+        manager.mediaSession = session
+        try {
+            assertTrue(manager.clearExternalPlayerIfMatches(oldPlayer))
+
+            verify(exactly = 0) { session.release() }
+            assertSame(session, manager.mediaSession)
+        } finally {
+            manager.release()
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun externalPlayerState(manager: MiniPlayerManager): MutableState<ExoPlayer?> =
+        MiniPlayerManager::class.java.getDeclaredField("_externalPlayer\$delegate")
+            .apply { isAccessible = true }.get(manager) as MutableState<ExoPlayer?>
 
     @Test
     fun `dismiss releases media session when playback is closed`() {

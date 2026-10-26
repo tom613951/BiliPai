@@ -1,15 +1,18 @@
 package com.android.purebilibili.core.ui.components
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.util.LocalWindowSizeClass
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -21,6 +24,7 @@ import androidx.compose.ui.unit.isSpecified
 import com.android.purebilibili.core.ui.AppChromeSizeTokens
 import com.android.purebilibili.core.ui.components.AppTabRowIndicatorPresentation
 import com.android.purebilibili.core.ui.AppSpacingTokens
+import com.android.purebilibili.feature.home.components.resolveHomeTopDockMinimumSlotWidth
 import com.android.purebilibili.feature.home.components.resolveFloatingDockCaptureInsets
 import com.android.purebilibili.feature.home.components.FloatingBottomBarGeometryMode
 import com.android.purebilibili.feature.home.components.BottomBarLiquidSegmentedControl
@@ -65,6 +69,8 @@ fun <T> AppThemeAdaptiveTabRow(
     role: AppTabRowRole,
     indicatorPositionProvider: (() -> Float)? = null,
     isScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
     liquidGlassAnimateLabelWidthChanges: Boolean = false,
     // Explicit fixed slots; callers can disable rail scrolling without losing indicator gestures.
     forceEqualWidth: Boolean = false,
@@ -91,6 +97,8 @@ fun <T> AppThemeAdaptiveTabRow(
         role = role,
         indicatorPositionProvider = indicatorPositionProvider,
         isScrollInProgressProvider = isScrollInProgressProvider,
+        isPagerDraggingProvider = isPagerDraggingProvider,
+        pagerTargetPositionProvider = pagerTargetPositionProvider,
         liquidGlassAnimateLabelWidthChanges = liquidGlassAnimateLabelWidthChanges,
         forceEqualWidth = forceEqualWidth,
     )
@@ -125,6 +133,8 @@ fun <T> AppLiquidAwareTabRow(
     role: AppTabRowRole,
     indicatorPositionProvider: (() -> Float)? = null,
     isScrollInProgressProvider: () -> Boolean = { false },
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
     liquidGlassAnimateLabelWidthChanges: Boolean = false,
     // Fixed slots apply to all renderers only when explicitly requested by a page.
     forceEqualWidth: Boolean = false,
@@ -153,6 +163,30 @@ fun <T> AppLiquidAwareTabRow(
         )
         return
     }
+    // MD3 可滚动胶囊按每项文字独立测量，避免最长分类撑宽所有短标签。
+    // 仅修正原生内容宽度策略；玻璃槽位、Miuix 以及显式等宽导航保留原有几何。
+    if (
+        !liquidGlassEnabled &&
+        com.android.purebilibili.core.theme.LocalAppUiStyle.current == com.android.purebilibili.core.theme.AppUiStyle.MATERIAL3 &&
+        scrollable && !forceEqualWidth && role != AppTabRowRole.SECONDARY
+    ) {
+        AppNativeTabRow(
+            options = options,
+            selectedValue = selectedValue,
+            onSelectionChange = onSelectionChange,
+            modifier = modifier,
+            enabled = enabled,
+            centerContent = centerContent,
+            scrollable = true,
+            minTabWidth = resolveAppAdaptiveTabMinWidth(minTabWidth),
+            height = height,
+            labelFontSize = com.android.purebilibili.core.ui.appTabLabelFontSize(labelFontSize),
+            forceMaterial3 = true,
+            indicatorPresentation = AppTabRowIndicatorPresentation.TONAL_PILL,
+            indicatorPositionProvider = indicatorPositionProvider,
+        )
+        return
+    }
     val labels = remember(options) { options.map { it.label } }
     val measurementLabels = if (liquidGlassEnabled) options.map { it.measurementLabel ?: it.label } else labels
     val resolvedMinTabWidth = resolveAppAdaptiveTabMinWidth(minTabWidth)
@@ -160,7 +194,12 @@ fun <T> AppLiquidAwareTabRow(
     // Measure once before choosing the material. Glass and native renderers own
     // the same slots, including font scaling and long labels.
     val measuredTabWidth = rememberMeasuredTabMinWidth(
-        requestedMinWidth = resolvedMinTabWidth,
+        // 动态胶囊的槽位也须预留最小宽高比，避免短标签被槽宽上限压回圆形。
+        requestedMinWidth = resolveHomeTopDockMinimumSlotWidth(
+            shellHeight = height,
+            contentMinWidth = resolvedMinTabWidth,
+            liquidGlassEnabled = liquidGlassEnabled && liquidGlassAdaptIndicatorToLabel,
+        ),
         labels = measurementLabels,
         textStyle = MaterialTheme.typography.labelLarge.copy(
             fontSize = resolvedLabelFontSize,
@@ -182,7 +221,7 @@ fun <T> AppLiquidAwareTabRow(
     val readableTabWidth = if (animateLabelWidths) {
         animateDpAsState(
             targetValue = measuredTabWidth,
-            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            animationSpec = tween(180, easing = AppMotionEasing.M1Standard),
             label = "glassAsyncAdaptiveTabWidth",
         ).value
     } else measuredTabWidth
@@ -224,6 +263,10 @@ fun <T> AppLiquidAwareTabRow(
                 val dragFollowEdgePaddingPx = with(density) { AppSpacingTokens.Medium.toPx() }
                 val pagerPositionProvider = indicatorPositionProvider
                 val pagerMotionActiveProvider = isScrollInProgressProvider
+                // 拖动指示器时，边缘跟随必须让位给 dock 自己的贴边滚动循环：
+                // 两个所有者的边缘宽度不同，且跟随只滚轨道不补偿拖拽位置，
+                // 叠加会让指示器脱手、松手定位到错误分 Tab（无 Pager 的可滚动栏最明显）。
+                var railIndicatorDragging by remember { mutableStateOf(false) }
                 KeepScrollableTabSelectionVisible(
                     scrollState = scrollState,
                     selectedIndex = selectedIndex,
@@ -260,6 +303,7 @@ fun <T> AppLiquidAwareTabRow(
                     liquidGlassEffectsEnabled = true,
                     dragSelectionEnabled = resolvedDragSelectionEnabled,
                     tapPressRefractionEnabled = tapPressRefractionEnabled,
+                    onIndicatorDragStateChanged = { railIndicatorDragging = it },
                     miuixBackdrop = miuixBackdrop,
                     preferInlineContentStyle = preferInlineContentStyle,
                     compactMiuixWhenTwoOptions = compactMiuixWhenTwoOptions,
@@ -270,6 +314,7 @@ fun <T> AppLiquidAwareTabRow(
                         // with the continuous indicator position. Keep edge-follow for idle
                         // indicator nudges so two scroll owners never compete.
                         if (!scrollState.isScrollInProgress &&
+                            !railIndicatorDragging &&
                             (pagerPositionProvider == null || !pagerMotionActiveProvider())
                         ) {
                             scrollState.dispatchRawDelta(
@@ -287,6 +332,8 @@ fun <T> AppLiquidAwareTabRow(
                         }
                     },
                     isScrollInProgressProvider = isScrollInProgressProvider,
+                    isPagerDraggingProvider = isPagerDraggingProvider,
+                    pagerTargetPositionProvider = pagerTargetPositionProvider,
                     externalPagerMotionEffectsEnabled = indicatorPositionProvider != null,
                 )
             }
@@ -341,6 +388,8 @@ fun <T> AppLiquidAwareTabRow(
                 nativeIndicatorPresentation = nativePresentation,
                 indicatorPositionProvider = indicatorPositionProvider,
                 isScrollInProgressProvider = isScrollInProgressProvider,
+                isPagerDraggingProvider = isPagerDraggingProvider,
+                pagerTargetPositionProvider = pagerTargetPositionProvider,
                 externalPagerMotionEffectsEnabled = indicatorPositionProvider != null,
             )
         }

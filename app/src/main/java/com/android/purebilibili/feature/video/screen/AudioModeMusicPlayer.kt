@@ -48,7 +48,7 @@ import com.android.purebilibili.feature.video.playback.audio.resolveAudioQuality
 import com.android.purebilibili.feature.video.share.VideoShareSheet
 import com.android.purebilibili.feature.video.share.buildVideoSharePayload
 import com.android.purebilibili.feature.video.ui.components.CollectionSheet
-import com.android.purebilibili.feature.video.ui.components.PagesSelector
+import com.android.purebilibili.feature.video.ui.components.PlayerEpisodeMenu
 import com.android.purebilibili.feature.video.ui.components.PlaybackSpeed
 import com.android.purebilibili.feature.video.ui.components.SpeedSelectionMenuDialog
 import com.android.purebilibili.feature.video.ui.components.VideoCommentSheetHost
@@ -546,25 +546,22 @@ internal fun AudioModeMusicPlayer(
     )
 
     if (showPageSelector && info.pages.size > 1) {
-        AppModalBottomSheet(onDismissRequest = { showPageSelector = false }) {
-            PagesSelector(
-                pages = info.pages,
-                coverUrl = info.pic,
-                currentPageIndex = info.pages.indexOfFirst { it.cid == info.cid }.coerceAtLeast(0),
-                forceGridMode = true,
-                onDismissRequest = { showPageSelector = false },
-                onPageSelect = { index ->
-                    info.pages.getOrNull(index)?.let { page ->
-                        showPageSelector = false
-                        viewModel.loadVideo(
-                            bvid = info.bvid,
-                            cid = page.cid,
-                            autoPlay = resolveAudioModePageSwitchAutoPlay()
-                        )
-                    }
+        PlayerEpisodeMenu(
+            pages = info.pages,
+            cover = info.pic,
+            currentPageIndex = info.pages.indexOfFirst { it.cid == info.cid }.coerceAtLeast(0),
+            onDismiss = { showPageSelector = false },
+            onPageSelect = { index ->
+                info.pages.getOrNull(index)?.let { page ->
+                    showPageSelector = false
+                    viewModel.loadVideo(
+                        bvid = info.bvid,
+                        cid = page.cid,
+                        autoPlay = resolveAudioModePageSwitchAutoPlay()
+                    )
                 }
-            )
-        }
+            }
+        )
     }
 
     info.ugc_season?.let { season ->
@@ -628,6 +625,9 @@ internal fun AudioModeMusicPlayer(
                     displayTitle = displayTitle,
                 ),
                 bvid = info.bvid,
+                page = info.pages.indexOfFirst { it.cid == info.cid }.coerceAtLeast(0) + 1,
+                positionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L,
+                authorId = info.owner.mid,
                 coverUrl = coverUrl,
                 upName = info.owner.name,
                 playCountText = com.android.purebilibili.core.util.FormatUtils.formatStat(

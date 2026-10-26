@@ -211,6 +211,8 @@ internal fun resolveSettingsSceneDetailFocus(
     SettingsSearchTarget.IMAGE_SAVE_PATH,
     SettingsSearchTarget.CLEAR_CACHE,
     SettingsSearchTarget.PLUGINS,
+    // 设备接力未开发完成：入口隐藏后与其他隐藏目标一样映射空焦点，恢复开关时随组生效。
+    SettingsSearchTarget.NEARBY_HANDOFF,
     SettingsSearchTarget.EXPORT_LOGS,
     SettingsSearchTarget.OPEN_SOURCE_LICENSES,
     SettingsSearchTarget.OPEN_SOURCE_HOME,

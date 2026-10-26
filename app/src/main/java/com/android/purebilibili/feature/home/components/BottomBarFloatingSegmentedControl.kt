@@ -1,8 +1,8 @@
 package com.android.purebilibili.feature.home.components
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 
 import androidx.compose.foundation.background
@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.layout.layout
+import kotlin.math.roundToInt
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -41,6 +43,7 @@ import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible
 import com.android.purebilibili.core.ui.wallpaper.LocalGlobalWallpaperBackdropSource
 import com.android.purebilibili.core.ui.components.AppText
+import com.android.purebilibili.core.ui.components.clipLiquidDockScrollContent
 import com.android.purebilibili.feature.home.components.miuix.DampedDragTrackingMode
 import top.yukonga.miuix.kmp.blur.Backdrop
 import top.yukonga.miuix.kmp.blur.layerBackdrop
@@ -190,7 +193,7 @@ internal fun BottomBarFloatingSegmentedControl(
                 (textMeasurer.measure(AnnotatedString(label), labelStyle, maxLines = 1,
                     softWrap = false).size.width.toDp() +
                     labelHorizontalPadding * 2)
-                    .coerceAtLeast(effectiveIndicatorHeight)
+                    .coerceAtLeast(effectiveIndicatorHeight * FLOATING_DOCK_MIN_INDICATOR_ASPECT)
             }
         }
     }
@@ -201,7 +204,7 @@ internal fun BottomBarFloatingSegmentedControl(
         measuredIndicatorContentWidths?.map { width ->
             animateDpAsState(
                 targetValue = width,
-                animationSpec = tween(180, easing = FastOutSlowInEasing),
+                animationSpec = tween(180, easing = AppMotionEasing.M1Standard),
                 label = "glassAsyncBadgeIndicatorWidth",
             ).value
         }
@@ -289,6 +292,21 @@ internal fun BottomBarFloatingSegmentedControl(
                     .align(Alignment.Center)
                     .fillMaxWidth()
                     .height(effectiveHeight)
+                    .layout { measurable, constraints ->
+                        // 可滚动外壳与内容自适应胶囊共用首尾边界，原生路径不裁减槽位。
+                        val slotWidthPx = with(density) { fittedSegmentedIndicatorWidth.toPx() }
+                        fun inset(width: Dp?, distancePx: Int): Int = if (!contentAdaptiveIndicatorEnabled || width == null) 0 else
+                            resolveFloatingDockScrollableShellInsetPx(
+                                slotWidthPx, with(density) { width.toPx() }, distancePx.toFloat(),
+                            ).roundToInt()
+                        val leading = inset(indicatorContentWidths?.firstOrNull(), scrollState.value)
+                        val trailing = inset(indicatorContentWidths?.lastOrNull(), scrollState.maxValue - scrollState.value)
+                        val shellWidth = (constraints.maxWidth - leading - trailing).coerceAtLeast(0)
+                        val placeable = measurable.measure(constraints.copy(minWidth = shellWidth, maxWidth = shellWidth))
+                        layout(constraints.maxWidth, placeable.height) {
+                            placeable.placeRelative(leading, 0)
+                        }
+                    }
                     // The viewport shell is outside the scrolling labels, but shares
                     // their actual dock gesture spring rather than a refresh offset.
                     .graphicsLayer { translationY = dockTranslationProvider.value() },
@@ -298,9 +316,31 @@ internal fun BottomBarFloatingSegmentedControl(
         }
         val floatingModifier = if (scrollState != null && contentWidth != null) {
             Modifier
-                // Expand the scroll clip in both axes, then inset its content by
-                // the same amount. Slots and scroll range retain their resting geometry,
-                // while the first/last indicator can bloom outside the dock ends.
+                .then(
+                    if (liquidGlassEnabled) Modifier.clipLiquidDockScrollContent(
+                        leadingInsetPx = {
+                            if (!contentAdaptiveIndicatorEnabled) 0f else indicatorContentWidths?.firstOrNull()?.let {
+                                resolveFloatingDockScrollableShellInsetPx(
+                                    with(density) { fittedSegmentedIndicatorWidth.toPx() },
+                                    with(density) { it.toPx() }, scrollState.value.toFloat(),
+                                ).roundToInt().toFloat()
+                            } ?: 0f
+                        },
+                        trailingInsetPx = {
+                            if (!contentAdaptiveIndicatorEnabled) 0f else indicatorContentWidths?.lastOrNull()?.let {
+                                resolveFloatingDockScrollableShellInsetPx(
+                                    with(density) { fittedSegmentedIndicatorWidth.toPx() },
+                                    with(density) { it.toPx() },
+                                    (scrollState.maxValue - scrollState.value).toFloat(),
+                                ).roundToInt().toFloat()
+                            } ?: 0f
+                        },
+                        translationYPx = { dockTranslationProvider.value() },
+                        verticalOverflowPx = with(density) { captureInsets.verticalDp.dp.toPx() },
+                    ) else Modifier
+                )
+                // 左右按外壳收口，上下与采样层共享形变余量，避免放大指示器被静态行高截断。
+                // 不改变槽位尺寸、滚动范围或原生路径。
                 .bottomBarMatchedCaptureOverflow(
                     horizontalInset = captureInsets.horizontalDp.dp,
                     verticalInset = captureInsets.verticalDp.dp,
@@ -318,6 +358,7 @@ internal fun BottomBarFloatingSegmentedControl(
                 .height(effectiveHeight)
         }
         FloatingBottomBar(
+            enabled = enabled,
             selectedIndex = { selectedIndexState.value },
             onSelected = { index ->
                 if (enabledState.value && index in items.indices) onSelectedState.value(index)
@@ -375,6 +416,7 @@ internal fun BottomBarFloatingSegmentedControl(
             items.forEachIndexed { index, label ->
                 val selected = index == safeSelectedIndex
                 FloatingBottomBarItem(
+                    enabled = enabled,
                     onClick = {
                         if (enabled) onSelected(index)
                     },

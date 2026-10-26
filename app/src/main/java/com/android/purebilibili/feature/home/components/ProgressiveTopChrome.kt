@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
@@ -92,19 +93,20 @@ internal fun Modifier.biliPaiProgressiveTopBlur(
     val source = requireNotNull(backdrop)
     return composed {
         if (isLowBlurBudgetForced()) return@composed this
+        val continuousSource = com.android.purebilibili.core.ui.blur.rememberContinuousBackdrop(source)
         // The non-composable factory creates new shape/effect callbacks on each call.
         // Keep their identity while the material is unchanged, so an unrelated header
         // recomposition does not rebuild the progressive stack and its sharp-end effect.
         // Geometry changes and source redraws are still handled by Miuix's draw node.
-        val effect = remember(source, shape, blurRadiusDp, gradient, colors, progressiveCompositeEnabled) {
+        val effect = remember(continuousSource, shape, blurRadiusDp, gradient, colors, progressiveCompositeEnabled) {
             if (progressiveCompositeEnabled) Modifier.progressiveTextureBlur(
-                backdrop = source,
+                backdrop = continuousSource,
                 shape = shape,
                 blurRadius = blurRadiusDp,
                 gradient = gradient,
                 colors = colors,
             ) else Modifier.drawBackdrop(
-                backdrop = source,
+                backdrop = continuousSource,
                 shape = { shape },
                 effects = {
                     // Omitting progressiveGradient avoids the downscaled multi-level composite.
@@ -145,15 +147,15 @@ internal fun Modifier.biliPaiProgressiveTopBlur(
     )
 }
 
-/** Scope protection to actual wallpaper chrome, preserving independent profile hero artwork. */
+/** 仅在壁纸实际属于当前顶栏背景时取色，避免个人头图被全局壁纸染色。 */
 @androidx.compose.runtime.Composable
-internal fun currentWallpaperChromeReadability(surfaceColor: Color): com.android.purebilibili.core.ui.wallpaper.WallpaperReadabilityProfile? {
+internal fun currentTopChromeWallpaperPalette(surfaceColor: Color): com.android.purebilibili.feature.home.components.cards.WallpaperPalette? {
     if (surfaceColor.alpha <= 0f) return null
     val route = com.android.purebilibili.core.ui.transition.LocalVideoCardSharedElementSourceRoute.current
         ?.substringBefore('?')?.substringBefore('/')
     val visible = com.android.purebilibili.core.ui.LocalGlobalWallpaperBackdropVisible.current || route == "home"
     if (!visible || route == "profile") return null
-    return com.android.purebilibili.feature.home.components.cards.LocalWallpaperPalette.current?.readability
+    return com.android.purebilibili.feature.home.components.cards.LocalWallpaperPalette.current
 }
 
 /**
@@ -176,21 +178,23 @@ internal fun BiliPaiImmersiveTopBar(
     extendBelowBounds: Boolean = false,
     opaqueBackgroundFallback: Boolean = true,
     progressiveCompositeEnabled: Boolean = true,
+    iconSurfaceColor: Color = Color.Transparent,
     content: @androidx.compose.runtime.Composable () -> Unit,
 ) {
     val themeConfig = com.android.purebilibili.core.ui.LocalAppThemeConfig.current
     val active = shouldUseBiliPaiProgressiveTopBlur(enabled, backdrop != null) &&
         !isLowBlurBudgetForced()
     val solidFadeActive = (fadeEnabled ?: themeConfig.progressiveTopFadeEnabled) && !headerBlurActive
-    val readability = currentWallpaperChromeReadability(surfaceColor)
-    val fadeColor = readability?.top?.let {
-        surfaceColor.copy(alpha = com.android.purebilibili.core.ui.wallpaper.resolveWallpaperProtectionAlpha(
-            band = it,
-            surfaceColor = surfaceColor,
-            foregroundColor = MaterialTheme.colorScheme.onSurface,
-            blurred = active,
-        ))
-    } ?: surfaceColor
+    val wallpaperPalette = currentTopChromeWallpaperPalette(surfaceColor)
+    val readability = wallpaperPalette?.readability
+    // 渐隐取色属于顶部特效，玻璃和原生路径共用；特效关闭后的背景不参与。
+    val fadeColor = resolveTopChromeFadeColor(
+        surfaceColor = surfaceColor,
+        foregroundColor = MaterialTheme.colorScheme.onSurface,
+        blurred = active,
+        backgroundColor = wallpaperPalette?.topColor,
+        readabilityBand = readability?.top,
+    )
     // Local protection is part of the enabled progressive material. With both effects off,
     // preserve the user's plain chrome choice; Haze continues to own its existing scrim.
     val drawProtectionFade = solidFadeActive || (active && !headerBlurActive && readability != null)
@@ -260,7 +264,11 @@ internal fun BiliPaiImmersiveTopBar(
                     ),
             )
         }
+        val iconBackground = if (opaqueBackground) {
+            iconSurfaceColor.compositeOver(MaterialTheme.colorScheme.background)
+        } else iconSurfaceColor
         androidx.compose.runtime.CompositionLocalProvider(
+            com.android.purebilibili.core.ui.components.LocalAppTopBarSurfaceColor provides iconBackground,
             com.android.purebilibili.core.ui.LocalImmersiveTopChromeActive provides
                 ((active || headerBlurActive) || solidFadeActive),
             content = content,

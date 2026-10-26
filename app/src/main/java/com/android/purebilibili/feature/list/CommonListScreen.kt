@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.list
 
+import com.android.purebilibili.core.ui.components.appActionWithFeedback
+
 import com.android.purebilibili.core.ui.components.wallpaperMediaCardSurface
 import com.android.purebilibili.core.ui.AppContentColors
 
@@ -77,7 +79,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import com.android.purebilibili.core.ui.components.appActionClickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
@@ -790,7 +792,7 @@ fun CommonListScreen(
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
 
     // 双指缩放列数：换档震动 + HUD 胶囊提示
-    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticFeedback = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.REFRESH)
     var pinchPillVisible by remember { mutableStateOf(false) }
     var pinchPillDismissJob by remember { androidx.compose.runtime.mutableStateOf<Job?>(null) }
     val onPinchColumnsChange: (Int) -> Unit = { newColumns ->
@@ -1564,8 +1566,11 @@ fun CommonListScreen(
                             onCollectionClick = onCollectionClick,
                             onRetry = { viewModel.loadData() },
                             loadMoreError = state.loadMoreError,
-                            onRetryLoadMore = seasonSeriesDetailViewModel?.let { detailVm ->
-                                { detailVm.retryLoadMore() }
+                            onRetryLoadMore = when {
+                                favoriteViewModel != null -> ({ favoriteViewModel.retrySelectedFolder() })
+                                likedVideosViewModel != null -> ({ likedVideosViewModel.loadMore(retry = true) })
+                                seasonSeriesDetailViewModel != null -> ({ seasonSeriesDetailViewModel.retryLoadMore() })
+                                else -> null
                             },
                             onLoadMore = {
                                 when (loadMoreOwner) {
@@ -1797,6 +1802,9 @@ fun CommonListScreen(
                 enabled = useProgressiveHeaderBlur,
                 headerBlurActive = headerBlurActive,
                 surfaceColor = headerBackgroundColor,
+                iconSurfaceColor = if (useProgressiveHeaderBlur ||
+                    (isProgressiveTopFadeEnabled && !isHeaderBlurEnabled) || historyUsesFloatingLiquidDocks
+                ) Color.Transparent else headerBackgroundColor,
                 fadeEnabled = isProgressiveTopFadeEnabled && !isHeaderBlurEnabled,
                 extendBelowBounds = false,
                 modifier = Modifier
@@ -1813,6 +1821,10 @@ fun CommonListScreen(
                         }
                     }
             ) {
+                val visibleHeaderBackdrop = com.android.purebilibili.core.ui.blur.rememberSurfaceOverlayBackdrop(
+                    commonListChromeBackdrop,
+                    com.android.purebilibili.core.ui.components.LocalAppTopBarSurfaceColor.current,
+                )
                 Layout(
                     modifier = if (supportsCollapsibleCommonListHeader) {
                         Modifier
@@ -2037,7 +2049,7 @@ fun CommonListScreen(
                             ListScopedSearchActiveBar(
                                 searchQuery = searchQuery,
                                 onClear = { searchQuery = "" },
-                                backdrop = commonListChromeBackdrop,
+                                backdrop = visibleHeaderBackdrop,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .onGloballyPositioned { coordinates ->
@@ -2086,7 +2098,7 @@ fun CommonListScreen(
                                     androidx.compose.ui.unit.Dp.Unspecified
                                 },
                                 placeholder = searchPlaceholder,
-                                backdrop = commonListChromeBackdrop,
+                                backdrop = visibleHeaderBackdrop,
                                 isScrollInProgressProvider = {
                                     primaryGridState.isScrollInProgress
                                 },
@@ -2129,7 +2141,7 @@ fun CommonListScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = AppSpacingTokens.Medium),
-                                miuixBackdrop = commonListChromeBackdrop,
+                                miuixBackdrop = visibleHeaderBackdrop,
                             )
                         }
                         Spacer(modifier = Modifier.height(AppSpacingTokens.Small))
@@ -2222,7 +2234,7 @@ fun CommonListScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = historyFilterChrome.horizontalPaddingDp.dp),
-                                miuixBackdrop = commonListChromeBackdrop,
+                                miuixBackdrop = visibleHeaderBackdrop,
                                 indicatorPositionProvider = {
                                     historyPagerState.currentPage + historyPagerState.currentPageOffsetFraction
                                 },
@@ -2827,7 +2839,7 @@ internal fun CommonListContent(
     val showInitialSkeleton = isLoading && items.isEmpty()
     val historySkeletonBlockColor = if (showInitialSkeleton && isPersonalList) {
         com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonBlockColor(
-            com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulse()
+            com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState()
         )
     } else {
         null
@@ -3337,7 +3349,7 @@ private fun HistoryArticleCard(
                 cardBoundsRef.value = coordinates.boundsInRoot()
             }
             .combinedClickable(
-                onClick = triggerArticleClick,
+                onClick = appActionWithFeedback(triggerArticleClick),
                 onLongClick = onLongClick
             ),
         shape = AppCardShape.Semantic(ContainerLevel.Sheet),
@@ -3548,7 +3560,7 @@ private fun FavoriteSubscribedFolderRow(
                 transitionEnabled = transitionEnabled
             )
             .then(cardSurface.modifier)
-            .clickable(onClick = onClick),
+            .appActionClickable(onClick = onClick),
         color = cardSurface.containerColor,
         shape = AppShapes.container(ContainerLevel.Card)
     ) {
@@ -3690,7 +3702,7 @@ private fun FavoriteCollectionRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(cardSurface.modifier)
-            .clickable(onClick = onClick),
+            .appActionClickable(onClick = onClick),
         color = cardSurface.containerColor,
         shape = AppShapes.container(ContainerLevel.Card)
     ) {

@@ -75,7 +75,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.unit.Density
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -114,6 +113,7 @@ import com.android.purebilibili.feature.settings.AppLanguage
 import com.android.purebilibili.feature.settings.applyAppLanguage
 import com.android.purebilibili.core.theme.resolveEffectiveDynamicColorEnabled
 import com.android.purebilibili.core.theme.buildDisplayMetricsSnapshot
+import com.android.purebilibili.core.theme.withDensityScale
 import com.android.purebilibili.core.ui.AppAlertDialog
 import com.android.purebilibili.core.ui.AppDialogAction
 import com.android.purebilibili.core.ui.AppThemeConfig
@@ -414,6 +414,10 @@ internal fun resolveMainActivityLinkNavigation(
 
         is BilibiliNavigationTarget.Article -> MainActivityLinkNavigation(
             pendingNavigationRoute = ScreenRoutes.ArticleDetail.createRoute(target.articleId)
+        )
+
+        is BilibiliNavigationTarget.Match -> MainActivityLinkNavigation(
+            pendingNavigationRoute = ScreenRoutes.MatchInfo.createRoute(target.contestId)
         )
 
         is BilibiliNavigationTarget.PopularFeed -> if (target.subCategoryKey == "weekly") {
@@ -1391,6 +1395,8 @@ open class MainActivity : AppCompatActivity() {
                 .collectAsStateWithLifecycle(initialValue = true)
             val progressiveTopFadeEnabled by SettingsManager.getProgressiveTopFadeEnabled(context)
                 .collectAsStateWithLifecycle(initialValue = true)
+            val hapticSettings by remember(context) { SettingsManager.getHapticSettings(context) }
+                .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.core.ui.AppHapticSettings())
             val hapticFeedbackEnabled by SettingsManager.getHapticFeedbackEnabled(context)
                 .collectAsStateWithLifecycle(initialValue = true)
             val globalTextTapCopyEnabled by SettingsManager
@@ -1399,6 +1405,9 @@ open class MainActivity : AppCompatActivity() {
             val detailedCommentTimeEnabled by remember(context) {
                 SettingsManager.getDetailedCommentTimeEnabled(context)
             }.collectAsStateWithLifecycle(initialValue = false)
+            val commentReplyPreviewVisible by remember(context) {
+                SettingsManager.getCommentReplyPreviewVisible(context)
+            }.collectAsStateWithLifecycle(initialValue = true)
             val globalDragFeedbackEnabled by SettingsManager
                 .getGlobalDragFeedbackEnabled(context)
                 .collectAsStateWithLifecycle(initialValue = true)
@@ -1424,6 +1433,7 @@ open class MainActivity : AppCompatActivity() {
                 progressiveTopBlurEnabled,
                 progressiveTopFadeEnabled,
                 hapticFeedbackEnabled,
+                hapticSettings,
                 globalTextTapCopyEnabled,
                 uiEntranceAnimationEnabled,
                 globalDragFeedbackEnabled,
@@ -1439,6 +1449,7 @@ open class MainActivity : AppCompatActivity() {
                     progressiveTopBlurEnabled = progressiveTopBlurEnabled,
                     progressiveTopFadeEnabled = progressiveTopFadeEnabled,
                     hapticFeedbackEnabled = hapticFeedbackEnabled,
+                    hapticSettings = hapticSettings,
                     globalTextTapCopyEnabled = globalTextTapCopyEnabled,
                     uiEntranceAnimationEnabled = uiEntranceAnimationEnabled,
                     globalDragFeedbackEnabled = globalDragFeedbackEnabled,
@@ -1522,11 +1533,9 @@ open class MainActivity : AppCompatActivity() {
                     dpiOverridePercent = appDpiOverridePercent.takeIf { it > 0 }
                 )
             }
+            // 仅叠加 UI 缩放系数；sp↔px 换算委托系统 Density，保留大字号下的非线性字体缩放曲线。
             val effectiveDensity = remember(systemDensity, displayMetricsSnapshot.effectiveDensityMultiplier) {
-                Density(
-                    density = systemDensity.density * displayMetricsSnapshot.effectiveDensityMultiplier,
-                    fontScale = systemDensity.fontScale
-                )
+                systemDensity.withDensityScale(displayMetricsSnapshot.effectiveDensityMultiplier)
             }
 
             //  📐 [平板适配] 计算窗口尺寸类
@@ -1576,8 +1585,11 @@ open class MainActivity : AppCompatActivity() {
                     //  📐 [平板适配] 提供全局 WindowSizeClass
                     CompositionLocalProvider(
                         com.android.purebilibili.feature.settings.LocalSettingsThemeConfiguration provides appThemeSettings,
+                        com.android.purebilibili.core.ui.LocalAdaptiveScaffoldHazeFactory provides
+                            { userEnabled -> com.android.purebilibili.core.ui.blur.rememberAppScaffoldHazeHandle(userEnabled) },
                         LocalDensity provides effectiveDensity,
                         LocalDetailedCommentTimeEnabled provides detailedCommentTimeEnabled,
+                        com.android.purebilibili.core.ui.LocalCommentReplyPreviewVisible provides commentReplyPreviewVisible,
                         LocalWindowSizeClass provides windowSizeClass,
                         LocalAppWindowAdaptiveInfo provides appWindowAdaptiveInfo,
                         com.android.purebilibili.core.ui.LocalHingeSafeOverlayRegions provides
@@ -1705,6 +1717,16 @@ open class MainActivity : AppCompatActivity() {
                             }
                             //  首次启动必须同意用户协议与隐私政策后才能使用应用
                             com.android.purebilibili.feature.agreement.UserAgreementGate {
+                                com.android.purebilibili.feature.nearby.NearbyHandoffHost(
+                                    miniPlayer = miniPlayerManager,
+                                    onOpenVideo = { video ->
+                                        pendingNavigationRoute = PlaybackHandoffCodec.toRoute(
+                                            com.android.purebilibili.feature.video.handoff.PlaybackHandoffPayload.V1.Video(
+                                                bvid = video.bvid, cid = video.cid, resumePositionMs = video.positionMs,
+                                            )
+                                        )
+                                    },
+                                ) {
                                 AppNavigation(
                                 miniPlayerManager = miniPlayerManager,
                                 isInPipMode = isPipRenderingActive,
@@ -1758,6 +1780,7 @@ open class MainActivity : AppCompatActivity() {
                                 mainHazeState = mainHazeState, //  传递全局 Haze 状态
                                 onBrandFeedbackBottomInsetChanged = { brandFeedbackBottomInset = it }
                                 )
+                                }
                             }
                             
                             //  OnboardingBottomSheet 等其他 overlay 组件
@@ -1807,6 +1830,7 @@ open class MainActivity : AppCompatActivity() {
                             val useTextureSurface = com.android.purebilibili.feature.video.ui.components.rememberCompatibleVideoTextureSurface(
                                 pipPlayer, miniPlayerManager.cachedUiState?.currentQuality ?: 0,
                             )
+                            Box(Modifier.fillMaxSize()) {
                             key(pipPlayer, useTextureSurface) {
                             AndroidView(
                                 factory = { viewContext ->
@@ -1814,7 +1838,7 @@ open class MainActivity : AppCompatActivity() {
                                         player = pipPlayer
                                         useController = false
                                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                                        setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                                     }
                                 },
                                 update = { playerView -> playerView.player = pipPlayer },
@@ -1822,6 +1846,10 @@ open class MainActivity : AppCompatActivity() {
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .background(Color.Black)
+                            )
+                            }
+                            com.android.purebilibili.feature.video.ui.overlay.PlayerBufferingIndicator(
+                                player = pipPlayer, modifier = Modifier.align(Alignment.Center),
                             )
                             }
                         }

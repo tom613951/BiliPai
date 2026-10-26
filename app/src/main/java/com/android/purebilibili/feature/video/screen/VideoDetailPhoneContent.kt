@@ -141,9 +141,21 @@ internal fun VideoDetailPhoneSuccessContentLayer(
     // Android 16 ART 曾拒绝校验 VideoDetailScreen 中捕获过多状态的匿名 Compose lambda。
     // 保持这个成功态为命名边界，避免 R8/Compose 再生成单个超大内容块。
     key(success.info.bvid) {
-        val lateContentReveal = rememberVideoDetailLateContentReveal(animateLateEntryContent)
-        val showLoadingUnderlay by remember {
-            derivedStateOf { lateContentReveal.value < 1f }
+        val detailContentVisible = shouldShowVideoDetailContent(
+            isTransitionFinished = isTransitionFinished,
+            isLeaving = isLeaving,
+            rootTransitionOwnsContentAlpha = rootTransitionOwnsContentAlpha,
+            keepContentVisibleAfterBackPreview = keepContentVisibleAfterBackPreview,
+        )
+        // 正文被入场门控拦住时骨架垫底必须撑住（Loading 骨架此刻已卸载），
+        // 否则骨架结束到正文放行之间是一段纯黑空窗。
+        val holdSkeletonUnderlay = !detailContentVisible && !isLeaving
+        val lateContentReveal = rememberVideoDetailLateContentReveal(
+            animateOnMount = animateLateEntryContent,
+            contentVisible = detailContentVisible,
+        )
+        val showLoadingUnderlay by remember(detailContentVisible, isLeaving) {
+            derivedStateOf { holdSkeletonUnderlay || lateContentReveal.value < 1f }
         }
         Box(modifier = Modifier.fillMaxSize().videoInputDiagnostics("detail_body") {
             "fullscreen=$isFullscreenMode portraitFs=$isPortraitFullscreen " +
@@ -160,7 +172,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                 // once complete instead of leaving an invisible skeleton mounted.
                 if (showLoadingUnderlay) {
                     Box(Modifier.fillMaxSize().graphicsLayer {
-                        alpha = 1f - lateContentReveal.value
+                        alpha = if (holdSkeletonUnderlay) 1f else 1f - lateContentReveal.value
                     }) {
                         VideoDetailSkeleton(animated = false)
                     }
@@ -180,12 +192,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                 )
                 AnimatedVisibility(
                     modifier = Modifier.graphicsLayer { alpha = lateContentReveal.value },
-                    visible = shouldShowVideoDetailContent(
-                        isTransitionFinished = isTransitionFinished,
-                        isLeaving = isLeaving,
-                        rootTransitionOwnsContentAlpha = rootTransitionOwnsContentAlpha,
-                        keepContentVisibleAfterBackPreview = keepContentVisibleAfterBackPreview,
-                    ),
+                    visible = detailContentVisible,
                     enter = if (rootTransitionOwnsContentAlpha) {
                         EnterTransition.None
                     } else {
@@ -346,6 +353,9 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                         pendingVideoShare = buildVideoSharePayload(
                                             title = success.info.title,
                                             bvid = success.info.bvid,
+                                            page = success.info.pages.indexOfFirst { it.cid == success.info.cid }.coerceAtLeast(0) + 1,
+                                            positionMs = playerState.player.currentPosition.coerceAtLeast(0L),
+                                            authorId = success.info.owner.mid,
                                             coverUrl = success.info.pic,
                                             upName = success.info.owner.name,
                                             playCountText = FormatUtils.formatStat(success.info.stat.view.toLong()),
@@ -456,6 +466,9 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                     pendingVideoShare = buildVideoSharePayload(
                                         title = success.info.title,
                                         bvid = success.info.bvid,
+                                        page = success.info.pages.indexOfFirst { it.cid == success.info.cid }.coerceAtLeast(0) + 1,
+                                        positionMs = playerState.player.currentPosition.coerceAtLeast(0L),
+                                        authorId = success.info.owner.mid,
                                         coverUrl = success.info.pic,
                                         upName = success.info.owner.name,
                                         playCountText = FormatUtils.formatStat(success.info.stat.view.toLong()),

@@ -34,6 +34,7 @@ import com.android.purebilibili.core.ui.components.AppIconButton
 import androidx.compose.material3.MaterialTheme
 import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.components.AppText
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -68,11 +69,7 @@ fun LiveFollowingScreen(
     }
     val metrics = visualSpec.homeMetrics
     val windowSizeClass = LocalWindowSizeClass.current
-    val contentWidth = if (windowSizeClass.isExpandedScreen) {
-        minOf(windowSizeClass.widthDp, visualSpec.maxContentWidthDp.dp)
-    } else {
-        windowSizeClass.widthDp
-    }
+    val contentWidth = windowSizeClass.widthDp
     val gridColumns = remember(contentWidth, windowSizeClass.isTablet) {
         resolveLiveBiliPaiGridColumns(
             widthDp = contentWidth.value.toInt(),
@@ -84,7 +81,7 @@ fun LiveFollowingScreen(
     var isLoadingMore by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     val gridState = rememberLazyGridState()
-    var totalCount by remember { mutableStateOf(0) }
+    var totalCount by remember { mutableStateOf<Int?>(null) }
     var hasMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var loadMoreError by remember { mutableStateOf<String?>(null) }
@@ -129,14 +126,22 @@ fun LiveFollowingScreen(
         }
     }
 
-    LaunchedEffect(Unit) { loadPage(refresh = true) }
+    val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    LaunchedEffect(accountIdentity) {
+        requests.invalidate()
+        items = emptyList()
+        totalCount = null
+        hasMore = false
+        isLoading = true
+        loadPage(refresh = true)
+    }
 
     AppScaffold(
         blurContentReady = !isLoading,
         modifier = Modifier.fillMaxSize(),
         topBar = {
             AppTopBar(
-                title = if (!isLoading) "${totalCount}人正在直播" else "关注直播",
+                title = totalCount?.let { "${it}人正在直播" } ?: "关注直播",
                 navigationIcon = {
                     AppIconButton(onClick = onBack) {
                         AppIcon(
@@ -177,16 +182,14 @@ fun LiveFollowingScreen(
             }
             else -> {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(gridColumns),
+                    columns = LiveRoomGridCells(),
                     state = gridState,
-                    modifier = Modifier
-                        .responsiveContentWidth(maxWidth = visualSpec.maxContentWidthDp.dp)
-                        .fillMaxSize(),
+                    modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = metrics.safeSpaceDp.dp,
                         end = metrics.safeSpaceDp.dp,
                         top = AppSpacingTokens.Small,
-                        bottom = maxOf(innerPadding.calculateBottomPadding(), LocalBottomBarContentPadding.current),
+                        bottom = maxOf(innerPadding.calculateBottomPadding(), LocalBottomBarContentPadding.current, 100.dp),
                     ),
                     horizontalArrangement = Arrangement.spacedBy(metrics.cardSpaceDp.dp),
                     verticalArrangement = Arrangement.spacedBy(metrics.cardSpaceDp.dp),

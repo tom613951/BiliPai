@@ -419,7 +419,7 @@ internal class MessageNotificationPoller(
                 val data = fetch { source.followedLive(page) }
                 val rooms = data.list.orEmpty()
                 for (room in rooms) if (room.liveStatus == 1) living.putIfAbsent(room.roomid, room)
-                if (rooms.isEmpty() || data.livingNum == 0 || living.size >= data.livingNum ||
+                if (rooms.isEmpty() || data.livingNum == 0 || data.livingNum?.let { living.size >= it } == true ||
                     (data.pageinfo?.total_page?.let { it > 0 && page >= it } == true)) {
                     complete = true
                     break

@@ -836,7 +836,7 @@ fun WatchLaterScreen(
 
     // 双指缩放列数：换档震动 + HUD 胶囊提示
     val pinchScope = rememberCoroutineScope()
-    val hapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticFeedback = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.REFRESH)
     var pinchPillVisible by remember { mutableStateOf(false) }
     var pinchPillDismissJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val onPinchColumnsChange: (Int) -> Unit = { newColumns ->
@@ -1303,7 +1303,7 @@ fun WatchLaterScreen(
                         val skeletonColumns = pinchListColumns
                         val skeletonBlockColor = com.android.purebilibili.core.ui.skeleton
                             .rememberContentSkeletonBlockColor(
-                                com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulse()
+                                com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState()
                             )
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(skeletonColumns),

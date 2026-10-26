@@ -17,6 +17,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
@@ -583,7 +586,7 @@ private fun GestureLevelStepHaptics(
     percent: Int,
     active: Boolean
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_GESTURES)
     val policy = remember(kind, style) { Md3GestureLevelHapticPolicy() }
     LaunchedEffect(active, percent, policy) {
         when (policy.update(percent, active, SystemClock.uptimeMillis())) {
@@ -657,6 +660,63 @@ fun GestureLevelOverlayContent(
                     .padding(horizontal = 16.dp)
                     .padding(top = spec.topInsetDp.dp)
                     .width(200.dp)
+            )
+        }
+    }
+}
+
+/**
+ * 上滑/下滑进入全屏的拖动跟随提示：进度驱动透明度与轻微缩放，
+ * 让 50dp 松手阈值触发与手指运动衔接。仅在拖动方向与触发方向一致时出现。
+ */
+@Composable
+fun BoxScope.SwipeToFullscreenHint(
+    visible: Boolean,
+    progressProvider: () -> Float,
+    isFullscreen: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier
+            .align(Alignment.TopCenter)
+            .windowInsetsPadding(
+                WindowInsets.statusBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top)
+            )
+            .padding(top = 48.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.Black.copy(alpha = 0.62f))
+                .graphicsLayer {
+                    val fraction = progressProvider().coerceIn(0f, 1f)
+                    alpha = 0.45f + 0.55f * fraction
+                    val scale = 0.92f + 0.08f * fraction
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            AppIcon(
+                imageVector = if (isFullscreen) {
+                    Icons.Rounded.FullscreenExit
+                } else {
+                    Icons.Rounded.Fullscreen
+                },
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(16.dp),
+            )
+            AppText(
+                text = if (isFullscreen) "松手退出全屏" else "松手进入全屏",
+                color = Color.White,
+                fontSize = 12.sp,
+                maxLines = 1,
             )
         }
     }

@@ -1,6 +1,9 @@
 // 文件路径: feature/video/screen/TabletVideoLayout.kt
 package com.android.purebilibili.feature.video.screen
 
+import com.android.purebilibili.core.util.rememberHapticFeedback
+import com.android.purebilibili.core.util.HapticType
+
 import com.android.purebilibili.feature.video.ui.components.RelatedVideoList
 
 import com.android.purebilibili.core.ui.AppContentColors
@@ -129,6 +132,7 @@ internal enum class TabletSecondaryTab(val label: String) {
     INTRO("简介"),
     RELATED("相关推荐"),
     COLLECTION("合集"),
+    QUEUE("播放列表"),
     OWNER_UPLOADS("UP 投稿")
 }
 
@@ -159,7 +163,9 @@ internal fun TabletSecondaryDanmakuActions(
         NativeDanmakuToggleButton(
             enabled = danmakuEnabled,
             onToggle = onDanmakuToggle,
-            activeTint = AppContentColors.primaryText(),
+            activeTint = AppContentColors.selectionAccent(
+                com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
+            ),
             inactiveTint = AppContentColors.secondaryText(),
             modifier = Modifier
                 .padding(end = layoutPolicy.toggleTrailingPaddingDp.dp)
@@ -280,6 +286,8 @@ internal fun TabletVideoLayout(
     videoNoteEnabled: Boolean = true,
     videoNoteDefaultCollapsed: Boolean = true,
     playerContent: (@Composable (Modifier) -> Unit)? = null,
+    externalQueueTitle: String = "播放列表",
+    externalQueueContent: (@Composable () -> Unit)? = null,
     transitionChromeAlphaProvider: () -> Float = { 1f },
 ) {
     val adaptiveInfo = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current
@@ -475,6 +483,8 @@ internal fun TabletVideoLayout(
                                 actions = VideoPlayerSectionActions(
                     resolveNextWatch = playbackActions.resolveNextWatch,
                     playNextWatch = playbackActions.playNextWatch,
+                                    onJumpToLastPlayedPart = playbackActions.jumpToLastPlayedPart,
+                                    onDismissPartResumeNotice = playbackActions.dismissPartResumeNotice,
                                     onToggleFullscreen = onToggleFullscreen,
                                     onQualityChange = playbackActions.changeQuality,
                                     onBack = onBack,
@@ -523,6 +533,7 @@ internal fun TabletVideoLayout(
                 // Tabletop 把简介移到铰链下方；普通平板仍在播放器下方展示。
                 if (contentState != null && !layoutPolicy.useTabletopLayout) {
                     TabletVideoInfoPane(
+                        currentPositionMsProvider = { playerState.player.currentPosition },
                         success = contentState,
                         engagementState = engagementState,
                         downloadProgress = downloadProgress,
@@ -585,6 +596,8 @@ internal fun TabletVideoLayout(
                             showUpBadge = showUpBadge,
                             showIdentityDecorations = commentMemberDecorationsEnabled,
                             onOpenBilibiliLink = onOpenBilibiliLink,
+                            externalQueueTitle = externalQueueTitle,
+                            externalQueueContent = externalQueueContent,
                             requestedTabName = requestedSecondaryTabName,
                             onRequestedTabConsumed = { requestedSecondaryTabName = null },
                             danmakuEnabled = danmakuChrome.enabled,
@@ -596,6 +609,7 @@ internal fun TabletVideoLayout(
                             introContent = if (layoutPolicy.useTabletopLayout) {
                                 {
                                     TabletVideoInfoPane(
+                                        currentPositionMsProvider = { playerState.player.currentPosition },
                                         success = success,
                                         engagementState = engagementState,
                                         downloadProgress = downloadProgress,
@@ -670,6 +684,7 @@ internal fun TabletVideoLayout(
 
 @Composable
 internal fun TabletVideoInfoPane(
+    currentPositionMsProvider: () -> Long = { 0L },
     success: VideoPlaybackUiState.Success,
     engagementState: VideoEngagementUiState,
     downloadProgress: androidx.compose.runtime.State<Float>,
@@ -730,6 +745,9 @@ internal fun TabletVideoInfoPane(
             pendingVideoShare = buildVideoSharePayload(
                 title = success.info.title,
                 bvid = success.info.bvid,
+                page = success.info.pages.indexOfFirst { it.cid == success.info.cid }.coerceAtLeast(0) + 1,
+                positionMs = currentPositionMsProvider().coerceAtLeast(0L),
+                authorId = success.info.owner.mid,
                 coverUrl = success.info.pic,
                 upName = success.info.owner.name,
                 playCountText = com.android.purebilibili.core.util.FormatUtils
@@ -826,6 +844,8 @@ internal fun TabletSecondaryContent(
     onOpenBilibiliLink: ((String) -> Unit)?,
     requestedTabName: String?,
     onRequestedTabConsumed: () -> Unit,
+    externalQueueTitle: String = "播放列表",
+    externalQueueContent: (@Composable () -> Unit)? = null,
     fixedTab: TabletSecondaryTab? = null,
     introContent: (@Composable () -> Unit)? = null,
     applyStatusBarPadding: Boolean = true,
@@ -849,16 +869,21 @@ internal fun TabletSecondaryContent(
         success.info.owner.mid,
         fixedTab,
         introContent != null,
+        externalQueueContent != null,
         includeRelatedTab,
         includeOwnerUploadsTab,
         relatedTabFirst,
     ) {
         if (fixedTab != null) {
-            listOf(requireNotNull(fixedTab))
+            buildList {
+                add(requireNotNull(fixedTab))
+                if (externalQueueContent != null) add(TabletSecondaryTab.QUEUE)
+            }
         } else {
             buildList {
                 if (relatedTabFirst && includeRelatedTab) add(TabletSecondaryTab.RELATED)
                 add(TabletSecondaryTab.COMMENTS)
+                if (externalQueueContent != null) add(TabletSecondaryTab.QUEUE)
                 if (introContent != null) add(TabletSecondaryTab.INTRO)
                 if (!relatedTabFirst && includeRelatedTab) add(TabletSecondaryTab.RELATED)
                 if (success.info.ugc_season != null) add(TabletSecondaryTab.COLLECTION)
@@ -994,7 +1019,7 @@ internal fun TabletSecondaryContent(
                     selectSecondaryTab(index)
                     onPaneModeChange(TabletSecondaryPaneMode.COMPACT)
                 }) {
-                    AppText(tab.label)
+                    AppText(if (tab == TabletSecondaryTab.QUEUE) externalQueueTitle else tab.label)
                 }
             }
         }
@@ -1015,7 +1040,7 @@ internal fun TabletSecondaryContent(
             )
             .background(MaterialTheme.colorScheme.background)
     ) {
-        if (fixedTab == null && tabs.size > 1) {
+        if (tabs.size > 1) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1023,7 +1048,7 @@ internal fun TabletSecondaryContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TabletSecondaryLiquidTabRow(
-                    labels = tabs.map { it.label },
+                    labels = tabs.map { if (it == TabletSecondaryTab.QUEUE) externalQueueTitle else it.label },
                     selectedIndex = pagerState.currentPage,
                     onSelected = ::selectSecondaryTab,
                     indicatorPositionProvider = {
@@ -1069,7 +1094,7 @@ internal fun TabletSecondaryContent(
             state = pagerState,
             userScrollEnabled = shouldEnableVideoContentHorizontalPagerSwipe(
                         currentPage = pagerState.currentPage,
-                        commentPageIndex = 0,
+                        commentPageIndex = resolveTabletCommentTabIndex(tabs),
                         isPagerScrollInProgress = pagerState.isScrollInProgress,
                     ),
             modifier = Modifier
@@ -1354,6 +1379,9 @@ internal fun TabletSecondaryContent(
                                 pendingVideoShare = buildVideoSharePayload(
                                     title = success.info.title,
                                     bvid = success.info.bvid,
+                                    page = success.info.pages.indexOfFirst { it.cid == success.info.cid }.coerceAtLeast(0) + 1,
+                                    positionMs = playerState.player.currentPosition.coerceAtLeast(0L),
+                                    authorId = success.info.owner.mid,
                                     coverUrl = success.info.pic,
                                     upName = success.info.owner.name,
                                     playCountText = com.android.purebilibili.core.util.FormatUtils
@@ -1471,6 +1499,10 @@ internal fun TabletSecondaryContent(
                     }
                 }
 
+                TabletSecondaryTab.QUEUE -> {
+                    externalQueueContent?.invoke()
+                }
+
                 TabletSecondaryTab.COLLECTION -> {
                     val season = success.info.ugc_season
                     if (season != null) {
@@ -1478,6 +1510,7 @@ internal fun TabletSecondaryContent(
                             ugcSeason = season,
                             currentBvid = success.info.bvid,
                             currentCid = success.info.cid,
+                            currentAid = success.info.aid,
                             onEpisodeClick = { episode ->
                                 onRelatedVideoClick(
                                     episode.bvid,
@@ -1504,8 +1537,10 @@ private fun TabletCollectionPane(
     ugcSeason: com.android.purebilibili.data.model.response.UgcSeason,
     currentBvid: String,
     currentCid: Long,
+    currentAid: Long,
     onEpisodeClick: (com.android.purebilibili.data.model.response.UgcEpisode) -> Unit
 ) {
+    val selectionHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.MENUS)
     val episodes = remember(ugcSeason.sections) { ugcSeason.sections.flatMap { it.episodes } }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1513,22 +1548,40 @@ private fun TabletCollectionPane(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            AppText(
-                text = ugcSeason.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = AppContentColors.primaryText()
-            )
-            AppText(
-                text = "共 ${episodes.size} 个视频",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppContentColors.secondaryText()
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    AppText(
+                        text = ugcSeason.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppContentColors.primaryText(),
+                    )
+                    AppText(
+                        text = "共 ${episodes.size} 个视频",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppContentColors.secondaryText(),
+                    )
+                }
+                com.android.purebilibili.feature.video.ui.components.CollectionSubscriptionButton(
+                    collectionId = ugcSeason.id,
+                    currentBvid = currentBvid,
+                    currentAid = currentAid,
+                    fontSize = MaterialTheme.typography.labelMedium.fontSize,
+                )
+            }
         }
         items(episodes, key = { it.id }) { episode ->
             val isCurrent = isCurrentUgcEpisode(currentBvid, currentCid, episode)
             AppSingleChoiceRow(
                 selected = isCurrent,
-                onClick = { if (!isCurrent) onEpisodeClick(episode) },
+                onClick = {
+                    if (!isCurrent) {
+                        selectionHaptic(HapticType.LIGHT)
+                        onEpisodeClick(episode)
+                    }
+                },
                 shape = AppShapes.container(ContainerLevel.Card),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -1706,6 +1759,7 @@ private fun ScrollableVideoInfoSection(
             ) {
                 UpInfoSection(
                     info = info,
+                    onOpenLiveRoom = onOpenBilibiliLink,
                     isFollowing = isFollowing,
                     followStatusKnown = followStatusKnown,
                     onFollowClick = onFollowClick,
@@ -1995,7 +2049,7 @@ private fun TabletVideoInfoStaggeredItem(
 @Composable
 private fun TabletRelatedCarouselSkeleton(modifier: Modifier = Modifier) {
     val color = com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonBlockColor(
-        com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulse(),
+        com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState(),
     )
     Column(modifier = modifier) {
         Spacer(Modifier.height(24.dp))
@@ -2023,14 +2077,14 @@ private fun TabletRelatedCarouselSkeleton(modifier: Modifier = Modifier) {
                     com.android.purebilibili.core.ui.skeleton.ContentSkeletonText(
                         text = "推荐视频标题占位\n第二行标题占位",
                         style = MaterialTheme.typography.bodySmall,
-                        colorProvider = { color },
+                        colorProvider = color,
                         maxLines = 2,
                     )
                     Spacer(Modifier.height(2.dp))
                     com.android.purebilibili.core.ui.skeleton.ContentSkeletonText(
                         text = "UP 主名称",
                         style = MaterialTheme.typography.labelSmall,
-                        colorProvider = { color },
+                        colorProvider = color,
                     )
                 }
             }

@@ -263,6 +263,14 @@ internal fun resolveFloatingDockContentShellInsetPx(slotWidthPx: Float, capsuleW
     ((slotWidthPx - capsuleWidthPx.coerceIn(0f, slotWidthPx.coerceAtLeast(0f))) / 2f)
         .coerceAtLeast(0f)
 
+/** Scroll viewport trims endpoint slack only while that content edge is visible. */
+internal fun resolveFloatingDockScrollableShellInsetPx(
+    slotWidthPx: Float,
+    capsuleWidthPx: Float,
+    distanceFromContentEdgePx: Float,
+): Float = (resolveFloatingDockContentShellInsetPx(slotWidthPx, capsuleWidthPx) -
+    distanceFromContentEdgePx.coerceAtLeast(0f)).coerceAtLeast(0f)
+
 /** Interpolate label-sized capsules on the same continuous position as their translation. */
 internal fun resolveFloatingDockContentIndicatorWidthPx(
     position: Float,
@@ -404,3 +412,7 @@ internal fun shouldAcceptFloatingDockDragAtWindowX(
     if (screenWidthPx <= 0f) return true
     return windowX >= leftInsetPx && windowX <= screenWidthPx - rightInsetPx
 }
+
+/** 原生前景始终可见；只有玻璃捕获副本接管文字时才淡出底层。 */
+internal fun resolveFloatingDockBaseContentAlpha(isLiquidGlass: Boolean, coverage: Float): Float =
+    if (isLiquidGlass) 1f - coverage.coerceIn(0f, 1f) else 1f

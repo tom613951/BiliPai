@@ -26,6 +26,7 @@ enum class SettingsSearchTarget {
     IMAGE_SAVE_PATH,
     CLEAR_CACHE,
     PLUGINS,
+    NEARBY_HANDOFF,
     EXPORT_LOGS,
     OPEN_SOURCE_LICENSES,
     OPEN_SOURCE_HOME,

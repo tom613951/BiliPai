@@ -379,6 +379,8 @@ internal fun PortraitInlineVideoPlayerHost(
                 onToggleFavorite = fullscreenExtras?.onToggleFavorite ?: engagementActions.toggleFavorite,
                 onTriple = fullscreenExtras?.onTriple ?: engagementActions.doTripleAction,
                 onPageSelect = fullscreenExtras?.onPageSelect ?: playbackActions.switchPage,
+                onJumpToLastPlayedPart = playbackActions.jumpToLastPlayedPart,
+                onDismissPartResumeNotice = playbackActions.dismissPartResumeNotice,
                 onFavoritePlaylistClick = fullscreenExtras?.onFavoritePlaylistClick ?: {},
                 onSubtitleDisplayModePreferenceOverrideChange =
                     onSubtitleDisplayModePreferenceOverrideChange,

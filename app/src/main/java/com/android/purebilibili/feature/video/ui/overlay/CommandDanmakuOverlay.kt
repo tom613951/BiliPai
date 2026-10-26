@@ -1,8 +1,8 @@
 package com.android.purebilibili.feature.video.ui.overlay
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -93,7 +93,7 @@ import kotlin.math.roundToInt
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.ContainerLevel
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.unit.Density
+import com.android.purebilibili.core.theme.withFontScaleMultiplier
 import com.android.purebilibili.feature.video.danmaku.DanmakuViewport
 import com.android.purebilibili.data.model.response.DynamicVoteInfo
 import com.android.purebilibili.data.repository.DynamicVoteRepository
@@ -211,8 +211,9 @@ private fun CommandDanmakuCard(
         CommandDanmakuType.TEXT -> 0.08f to 0.10f
     }
     val density = LocalDensity.current
-    val visualDensity = remember(density.density, density.fontScale, fontScale) {
-        Density(density.density, density.fontScale * fontScale.coerceIn(0.3f, 2f))
+    // 用户弹幕字号只乘在文字上；sp↔px 换算委托系统 Density，保留非线性字体缩放曲线。
+    val visualDensity = remember(density, fontScale) {
+        density.withFontScaleMultiplier(fontScale.coerceIn(0.3f, 2f))
     }
     val requestedCardWidthPx = when {
         isVote -> {
@@ -630,7 +631,7 @@ private fun AttentionCommandIconSlot(
     var pressed by remember { mutableStateOf(false) }
     val scale = animateFloatAsState(
         targetValue = if (pressed) 1.1f else 1f,
-        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 160, easing = AppMotionEasing.M1Standard),
         label = "attentionActionPressScale",
     )
     LaunchedEffect(pulseKey) {

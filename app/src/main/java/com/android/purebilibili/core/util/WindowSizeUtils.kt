@@ -152,9 +152,9 @@ data class WindowSizeClass(
     val shouldUseSplitLayout: Boolean
         get() = isTablet && heightSizeClass != WindowHeightSizeClass.Compact
     
-    /** 是否应该使用侧边导航栏（仅大屏） */
+    /** 平板在中等宽度竖屏保留侧栏；紧凑分屏回退底栏，恢复宽度后自动还原。 */
     val shouldUseSideNavigation: Boolean
-        get() = widthSizeClass >= WindowWidthSizeClass.Expanded
+        get() = isTablet && (isTabletDevice || widthSizeClass >= WindowWidthSizeClass.Expanded)
 
     val shouldUseExpandedNavigationRail: Boolean
         get() = widthSizeClass >= WindowWidthSizeClass.Large
@@ -382,7 +382,7 @@ fun calculateWindowSizeClass(
     val widthSizeClass = resolveWindowWidthSizeClass(adaptiveWindowSizeClass)
     val heightSizeClass = resolveWindowHeightSizeClass(adaptiveWindowSizeClass)
     
-    return remember(widthDp, heightDp, deviceWidthSizeClass) {
+    return remember(widthDp, heightDp, widthSizeClass, heightSizeClass, deviceWidthSizeClass) {
         WindowSizeClass(
             widthSizeClass = widthSizeClass,
             heightSizeClass = heightSizeClass,

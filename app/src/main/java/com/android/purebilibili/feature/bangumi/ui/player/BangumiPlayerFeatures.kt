@@ -31,6 +31,7 @@ import kotlin.math.roundToInt
 
 /** Plain state and callbacks shared by the bangumi surface and the common control overlay. */
 data class BangumiPlayerFeatures(
+    val shareSeasonType: Int = 0,
     val commentVisible: Boolean = false,
     val commentOnLeft: Boolean = false,
     val commentWidthDp: Int = 0,
@@ -157,6 +158,8 @@ internal fun BoxScope.BangumiSubtitleOverlay(
     val secondary = if (shouldRenderSecondarySubtitle(state.controls.displayMode)) resolveSubtitleTextAt(state.secondaryCues, position) else null
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val appearance by remember(context) { SubtitleToolsStore.appearance(context) }
+        .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.feature.video.ui.components.PlayerSubtitleAppearance())
     val savedOffset by SettingsManager.getSubtitleVerticalOffsetFraction(context)
         .collectAsStateWithLifecycle(initialValue = 0f)
     var offsetFraction by remember { mutableFloatStateOf(0f) }
@@ -169,9 +172,10 @@ internal fun BoxScope.BangumiSubtitleOverlay(
             androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx()
         }
     if (primary.isNullOrBlank() && secondary.isNullOrBlank()) return
+    val customAppearance = appearance != com.android.purebilibili.feature.video.ui.components.PlayerSubtitleAppearance()
     Column(
         Modifier.align(Alignment.BottomCenter)
-            .padding(bottom = if (controlsVisible) 76.dp else if (isFullscreen) 24.dp else 12.dp)
+            .padding(bottom = if (controlsVisible) 76.dp else if (customAppearance) appearance.bottomPadding.dp else if (isFullscreen) 24.dp else 12.dp)
             .offset { IntOffset(0, (offsetFraction * maxDragHeightPx).roundToInt()) }
             .fillMaxWidth(0.9f)
             .then(if (state.controls.positionLocked) Modifier else Modifier.pointerInput(maxDragHeightPx) {
@@ -188,10 +192,17 @@ internal fun BoxScope.BangumiSubtitleOverlay(
                     offsetFraction = normalizeSubtitleVerticalOffsetFraction(offsetFraction + delta.y / maxDragHeightPx.coerceAtLeast(1f))
                 }
             })
-            .background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 12.dp, vertical = 6.dp),
+            .then(if (customAppearance) Modifier.padding(horizontal = appearance.horizontalPadding.dp, vertical = 6.dp)
+                else Modifier.background(Color.Black.copy(alpha = 0.65f)).padding(horizontal = 12.dp, vertical = 6.dp)),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (!primary.isNullOrBlank()) AppText(primary, color = Color.White, fontSize = if (state.controls.largeTextEnabled) 22.sp else 16.sp)
-        if (!secondary.isNullOrBlank()) AppText(secondary, color = Color.White, fontSize = if (state.controls.largeTextEnabled) 18.sp else 14.sp)
+        // 自定义外观在两种材质共用；默认值保留原有番剧字幕排版。
+        if (customAppearance) {
+            if (!primary.isNullOrBlank()) PiliStyledSubtitleText(primary, if (state.controls.largeTextEnabled) 22 else 16, appearance, isFullscreen)
+            if (!secondary.isNullOrBlank()) PiliStyledSubtitleText(secondary, if (state.controls.largeTextEnabled) 18 else 14, appearance, isFullscreen)
+        } else {
+            if (!primary.isNullOrBlank()) AppText(primary, color = Color.White, fontSize = if (state.controls.largeTextEnabled) 22.sp else 16.sp)
+            if (!secondary.isNullOrBlank()) AppText(secondary, color = Color.White, fontSize = if (state.controls.largeTextEnabled) 18.sp else 14.sp)
+        }
     }
 }

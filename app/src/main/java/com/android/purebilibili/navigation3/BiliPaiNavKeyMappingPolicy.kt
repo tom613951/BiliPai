@@ -98,6 +98,8 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         BiliPaiNavKey.LiveSearch -> ScreenRoutes.LiveSearch.route
         BiliPaiNavKey.LiveArea -> ScreenRoutes.LiveArea.route
         is BiliPaiNavKey.LiveAreaDetail -> ScreenRoutes.LiveAreaDetail.createRoute(parentAreaId, areaId, title)
+        BiliPaiNavKey.LiveMatch -> ScreenRoutes.LiveMatch.route
+        is BiliPaiNavKey.MatchInfo -> ScreenRoutes.MatchInfo.createRoute(cid)
         BiliPaiNavKey.LiveFollowing -> ScreenRoutes.LiveFollowing.route
         BiliPaiNavKey.Inbox -> ScreenRoutes.Inbox.route
         BiliPaiNavKey.ReplyMe -> ScreenRoutes.ReplyMe.route
@@ -160,7 +162,7 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         is BiliPaiNavKey.Live -> ScreenRoutes.Live.createRoute(roomId, title, uname, siteId)
         is BiliPaiNavKey.BangumiDetail -> ScreenRoutes.BangumiDetail.createRoute(seasonId, epId, mediaId)
         is BiliPaiNavKey.BangumiReview -> ScreenRoutes.BangumiReview.createRoute(mediaId, title)
-        is BiliPaiNavKey.Web -> ScreenRoutes.Web.createRoute(url, title)
+        is BiliPaiNavKey.Web -> ScreenRoutes.Web.createRoute(url, title, mobileUserAgent)
         is BiliPaiNavKey.Unknown -> route
     }
 }
@@ -277,6 +279,10 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
                 areaId = segments[2].toIntOrNull() ?: 0,
                 title = query["title"].orEmpty()
             )
+        }
+        normalized == ScreenRoutes.LiveMatch.route -> BiliPaiNavKey.LiveMatch
+        segments.firstOrNull() == "match_info" && segments.size >= 2 -> {
+            BiliPaiNavKey.MatchInfo(cid = segments[1].toLongOrNull() ?: 0L)
         }
         normalized == ScreenRoutes.LiveFollowing.route -> BiliPaiNavKey.LiveFollowing
         normalized == ScreenRoutes.Inbox.route -> BiliPaiNavKey.Inbox
@@ -431,7 +437,8 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
         normalized.substringBefore("?") == "web" -> {
             BiliPaiNavKey.Web(
                 url = query["url"].orEmpty(),
-                title = query["title"].orEmpty()
+                title = query["title"].orEmpty(),
+                mobileUserAgent = query["mua"] == "1"
             )
         }
         else -> BiliPaiNavKey.Unknown(normalized)

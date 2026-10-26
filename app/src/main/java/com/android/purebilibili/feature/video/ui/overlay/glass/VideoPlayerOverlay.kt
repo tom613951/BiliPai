@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material3.*
+import com.android.purebilibili.core.ui.components.appGlassMenuSource
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.layout.layout
@@ -76,7 +77,7 @@ import com.android.purebilibili.feature.video.ui.components.glass.LandscapeDanma
 import com.android.purebilibili.feature.video.ui.components.VideoAspectRatio
 import com.android.purebilibili.feature.video.ui.components.glass.AspectRatioMenu
 import com.android.purebilibili.feature.video.ui.components.glass.VideoSettingsPanel
-import com.android.purebilibili.feature.video.ui.components.PagesSelector
+import com.android.purebilibili.feature.video.ui.components.PlayerEpisodeMenu
 import com.android.purebilibili.feature.video.ui.components.resolveCurrentUgcEpisodeLazyListIndex
 import com.android.purebilibili.feature.video.ui.components.LandscapeSidePanel
 import com.android.purebilibili.feature.video.ui.components.landscapeControlCenterGroup
@@ -88,18 +89,13 @@ import com.android.purebilibili.data.repository.VideoRepository
 import com.android.purebilibili.data.repository.isCastDashManifestAvailable
 import com.android.purebilibili.data.repository.selectCastDashAudio
 import com.android.purebilibili.data.repository.selectCastDashVideo
-import com.android.purebilibili.feature.plugin.CdnLineDiagnostic
+import com.android.purebilibili.plugin.sdk.CdnLineDiagnostic
 import com.android.purebilibili.core.player.dash.buildLocalDashManifest
 import com.android.purebilibili.feature.video.playback.audio.AudioQualityOption
 import com.android.purebilibili.feature.video.playback.audio.resolveAudioQualityControlPresentation
 import com.android.purebilibili.feature.common.resolveIndexedVideoLazyKey
 import com.android.purebilibili.feature.video.progress.PbpRidgeSample
-import com.android.purebilibili.feature.anime4k.VideoEnhancementAlgorithm
-import com.android.purebilibili.core.ui.AdaptiveLoadingIndicator
-import com.android.purebilibili.core.plugin.skin.LocalUiSkinState
-import com.android.purebilibili.core.plugin.skin.UiSkinAnimatedAsset
-import com.android.purebilibili.core.plugin.skin.UiSkinSurface
-import com.android.purebilibili.core.plugin.skin.assetPath
+import com.android.purebilibili.plugin.sdk.VideoEnhancementAlgorithm
 import com.android.purebilibili.core.ui.components.AppButton
 import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.AppSegmentOption
@@ -133,8 +129,8 @@ import com.android.purebilibili.core.util.WindowWidthSizeClass
 import com.android.purebilibili.core.util.Logger
 import com.android.purebilibili.core.util.NetworkUtils
 import com.android.purebilibili.feature.anime4k.Anime4KBypassReason
-import com.android.purebilibili.feature.anime4k.Anime4KPreset
-import com.android.purebilibili.feature.anime4k.DEFAULT_FSR_SHARPNESS
+import com.android.purebilibili.plugin.sdk.Anime4KPreset
+import com.android.purebilibili.plugin.sdk.DEFAULT_FSR_SHARPNESS
 
 import androidx.compose.foundation.lazy.LazyListState
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
@@ -158,10 +154,10 @@ import com.android.purebilibili.feature.video.usecase.applyPlaybackButtonUserAct
 import com.android.purebilibili.feature.video.usecase.playPlayerFromUserAction
 import com.android.purebilibili.feature.video.usecase.seekPlayerFromUserAction
 import com.android.purebilibili.feature.cast.DeviceListDialog
-import com.android.purebilibili.core.plugin.CastPluginApi
-import com.android.purebilibili.core.plugin.CastPluginMediaRequest
-import com.android.purebilibili.core.plugin.CastPluginRoute
-import com.android.purebilibili.core.plugin.CastPluginPlaybackState
+import com.android.purebilibili.plugin.sdk.CastPluginApi
+import com.android.purebilibili.plugin.sdk.CastPluginMediaRequest
+import com.android.purebilibili.plugin.sdk.CastPluginRoute
+import com.android.purebilibili.plugin.sdk.CastPluginPlaybackState
 import com.android.purebilibili.feature.cast.LocalProxyServer
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -176,6 +172,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.lifecycle.compose.currentStateAsState
 import com.android.purebilibili.feature.video.playback.session.PendingPlaybackUserAction
 import dev.chrisbanes.haze.HazeState
+import com.android.purebilibili.core.store.ChapterDisplayMode
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.ContainerLevel
@@ -459,23 +456,6 @@ internal fun FullscreenLockButton(
     }
 }
 
-internal fun resolvePageSelectorSheetOuterBottomPaddingDp(
-    isFullscreen: Boolean
-): Int {
-    return if (isFullscreen) 0 else 8
-}
-
-internal fun resolvePageSelectorSheetMaxWidthDp(
-    windowWidthDp: Int,
-    isFullscreen: Boolean
-): Int? {
-    return if (isFullscreen || windowWidthDp >= 600) {
-        640
-    } else {
-        null
-    }
-}
-
 internal fun shouldShowPersistentBottomProgressBar(
     controlsVisible: Boolean,
     isFullscreen: Boolean,
@@ -511,22 +491,6 @@ internal fun resolveDisplayedOnlineCount(
     showOnlineCount: Boolean
 ): String {
     return if (showOnlineCount) onlineCount else ""
-}
-
-@Composable
-private fun SkinAwareLoadingIndicator(color: Color) {
-    val skinPath = LocalUiSkinState.current.assetPath(UiSkinSurface.LOADING_INDICATOR) {
-        it.loadingAnimation ?: it.loadingFrame
-    }
-    if (skinPath != null) {
-        UiSkinAnimatedAsset(
-            path = skinPath,
-            size = 48.dp,
-            contentDescription = "加载中",
-        )
-    } else {
-        AdaptiveLoadingIndicator(color = color)
-    }
 }
 
 private const val SEEK_RESUME_TRANSITION_GRACE_MS = 350L
@@ -790,16 +754,24 @@ private fun VideoPlayerOverlayContent(
     val ambientVideoBoundsInWindow = state.ambientVideoBoundsInWindow
     val onShowDanmakuPool = actions.onShowDanmakuPool
 
+    var playerBoundsInWindow by remember(bvid, cid) { mutableStateOf<androidx.compose.ui.unit.IntRect?>(null) }
     var showQualityMenu by remember { mutableStateOf(false) }
     var qualityMenuAnchor by remember { mutableStateOf<androidx.compose.ui.unit.IntRect?>(null) }
     var speedMenuAnchor by remember { mutableStateOf<androidx.compose.ui.unit.IntRect?>(null) }
-    val anchoredGlassMenus = isFullscreen &&
-        com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    val qualityMenuSource = com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
+    val speedMenuSource = com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
+    var secondaryMenuSource by remember(bvid, cid, isFullscreen) { mutableStateOf<com.android.purebilibili.core.ui.components.AppGlassMenuSource?>(null) }
+    // 仅玻璃菜单跟随实际按钮；原生菜单保留各播放模式的默认定位。
+    val anchoredGlassMenus = com.android.purebilibili.core.ui.components.appGlassMenuAvailable()
 
     var showAudioQualityMenu by remember { mutableStateOf(false) }
     var showSpeedMenu by remember { mutableStateOf(false) }
     var showRatioMenu by remember { mutableStateOf(false) }
     var showDanmakuSettings by remember { mutableStateOf(false) }
+    val danmakuSettingsMenuSource = com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
+    var activeDanmakuMenuSource by remember(bvid, cid, isFullscreen) {
+        mutableStateOf<com.android.purebilibili.core.ui.components.AppGlassMenuSource?>(null)
+    }
     var showVideoSettings by remember(bvid, cid, isFullscreen) { mutableStateOf(false) }
     var pendingVideoShare by remember { mutableStateOf<VideoSharePayload?>(null) }
     fun openVideoShareSheet() {
@@ -807,6 +779,8 @@ private fun VideoPlayerOverlayContent(
         pendingVideoShare = buildVideoSharePayload(
             title = title,
             bvid = bvid,
+            page = currentPageIndex + 1,
+            positionMs = player.currentPosition.coerceAtLeast(0L),
             coverUrl = coverUrl,
             upName = videoOwnerName,
             playCountText = videoSharePlayCountText,
@@ -1122,6 +1096,19 @@ private fun VideoPlayerOverlayContent(
         .getShowOnlineCount(context)
         .collectAsStateWithLifecycle(initialValue = false
         )
+    val chapterDisplayMode by remember(context) { SettingsManager.getChapterDisplayMode(context) }
+        .collectAsStateWithLifecycle(initialValue = ChapterDisplayMode.WITH_CONTROLS)
+    val showViewPointMarkers = chapterDisplayMode != ChapterDisplayMode.HIDDEN
+    val onChapterVisibilityChange: (Boolean) -> Unit = { visible ->
+        scope.launch {
+            SettingsManager.setChapterDisplayMode(
+                context,
+                if (!visible) ChapterDisplayMode.HIDDEN
+                else if (chapterDisplayMode == ChapterDisplayMode.HIDDEN) ChapterDisplayMode.WITH_CONTROLS
+                else chapterDisplayMode,
+            )
+        }
+    }
     val bottomProgressBehavior by SettingsManager
         .getBottomProgressBehavior(context)
         .collectAsStateWithLifecycle(initialValue = BottomProgressBehavior.ALWAYS_HIDE
@@ -1432,7 +1419,7 @@ private fun VideoPlayerOverlayContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().playerActionBounds { playerBoundsInWindow = it }) {
         if (!isFullscreen) {
             ImmersiveStatusBarBackdrop(
                 ambientFrame = statusBarAmbientFrame,
@@ -1520,6 +1507,27 @@ private fun VideoPlayerOverlayContent(
             )
         }
 
+        // 两条材质路径共用显示策略；仅显式选择常驻时在控制栏收起后保留章节。
+        val chapterViewportIsLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+        if (chapterDisplayMode == ChapterDisplayMode.PERSISTENT &&
+            isFullscreen && chapterViewportIsLandscape && (!isVisible || isScreenLocked) &&
+            !danmakuComposerVisible && showViewPointMarkers && viewPoints.isNotEmpty()
+        ) {
+            com.android.purebilibili.feature.video.ui.overlay.OverlayPersistentChapterBar(
+                progressProvider = displayedProgressProvider,
+                viewPoints = viewPoints,
+                onChapterClick = { showChapterList = true },
+                enabled = !isScreenLocked,
+                onHeightChanged = actions.onPersistentChapterBarHeightChanged,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .landscapeEndDrawerPadding(endDrawerReservedWidthProvider)
+                    // 常驻条贴住播放器底边，仅保留左右安全区，不添加底部间距。
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(horizontal = 20.dp),
+            )
+        }
+
         // --- 3. 控制栏内容 (锁定时隐藏) ---
         val showPlayerChrome = isVisible && !isScreenLocked && !danmakuComposerVisible
         AnimatedVisibility(
@@ -1603,6 +1611,7 @@ private fun VideoPlayerOverlayContent(
                 ) {
                     key(player, bvid, cid) {
                     BottomControlBar(
+                    onSelectionMenuSource = { secondaryMenuSource = it },
                     actionDockBoundsProvider = { topActionDockBounds.value },
                     fullscreenToggleEndPaddingDp = overlayVisualPolicy.lockButtonEndPaddingDp,
                     viewportWidthDpOverride = viewportWidthDpOverride,
@@ -1624,6 +1633,7 @@ private fun VideoPlayerOverlayContent(
                     isSeekScrubbing = isSeekScrubbing,
                     onSpeedClick = { showSpeedMenu = true },
                     onSpeedAnchorChanged = { speedMenuAnchor = it },
+                    speedMenuSource = speedMenuSource,
                     onRatioClick = { showRatioMenu = true },
                     onNextEpisodeClick = {
                         onDismissEndDrawer()
@@ -1655,7 +1665,11 @@ private fun VideoPlayerOverlayContent(
                     onSponsorContributionCancel = onSponsorContributionCancel,
                     danmakuEnabled = danmakuEnabled,
                     onDanmakuToggle = onDanmakuToggle,
-                    onDanmakuSettingsClick = { showDanmakuSettings = true },
+                    onDanmakuSettingsClick = {
+                        activeDanmakuMenuSource = danmakuSettingsMenuSource
+                        showDanmakuSettings = true
+                    },
+                    danmakuSettingsMenuSource = danmakuSettingsMenuSource,
                     onDanmakuInputClick = onDanmakuInputClick,
                     isLoggedIn = isLoggedIn,
                     subtitleControlState = subtitleControlState,
@@ -1676,13 +1690,16 @@ private fun VideoPlayerOverlayContent(
                     currentQualityLabel = currentQualityLabel,
                     onQualityClick = { showQualityMenu = true },
                     onQualityAnchorChanged = { qualityMenuAnchor = it },
+                    qualityMenuSource = qualityMenuSource,
                     // 🖼️ [新增] 视频预览图数据
                     videoshotData = videoshotData,
                     // 📖 [新增] 视频章节数据
                     viewPoints = viewPoints,
+                    showViewPoints = showViewPointMarkers,
+                    onViewPointsToggle = { onChapterVisibilityChange(!showViewPointMarkers) },
                     sponsorMarkers = sponsorMarkers,
                     pbpRidgeSamples = pbpRidgeSamples,
-                    currentChapterProvider = currentChapterProvider,
+                    currentChapterProvider = { if (showViewPointMarkers) currentChapterProvider() else null },
                     onChapterClick = { showChapterList = true },
                     // 📱 [新增] 竖屏全屏模式
                     isVerticalVideo = isVerticalVideo,
@@ -1730,7 +1747,7 @@ private fun VideoPlayerOverlayContent(
             )
         }
 
-        // 玻璃横屏与详情内嵌播放器共用中央入口，竖屏分页继续使用其独立控制层。
+        // 玻璃横竖屏统一由中央入口控制播放与暂停，随控制栏显隐。
         if ((isFullscreen || configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) &&
             com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
             CenterPlaybackControl(
@@ -1988,7 +2005,10 @@ private fun VideoPlayerOverlayContent(
             enter = EnterTransition.None,
             exit = fadeOut(OverlayControlFadeSpec)
         ) {
-            SkinAwareLoadingIndicator(color = centerLoadingVisualState.indicatorColor)
+            BiliTvBufferingIndicator(
+                tint = centerLoadingVisualState.indicatorColor,
+                bufferedProvider = { progressProvider().buffered },
+            )
         }
 
         AnimatedVisibility(
@@ -1998,11 +2018,7 @@ private fun VideoPlayerOverlayContent(
             exit = fadeOut(OverlayControlFadeSpec)
         ) {
             val loadingState = centerLoadingUiState ?: return@AnimatedVisibility
-            AppSurface(
-                color = Color.Black.copy(alpha = 0.72f),
-                shape = RoundedCornerShape(overlayVisualPolicy.qualitySwitchCornerRadiusDp.dp),
-                modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)
-            ) {
+            Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(
@@ -2010,7 +2026,7 @@ private fun VideoPlayerOverlayContent(
                         vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
                     )
                 ) {
-                    SkinAwareLoadingIndicator(color = centerLoadingVisualState.indicatorColor)
+                    BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
                     Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
                     AppText(
                         text = loadingState.primaryText,
@@ -2038,11 +2054,7 @@ private fun VideoPlayerOverlayContent(
             enter = fadeIn(OverlayControlFadeSpec),
             exit = fadeOut(OverlayControlFadeSpec)
         ) {
-            AppSurface(
-                color = Color.Black.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(overlayVisualPolicy.qualitySwitchCornerRadiusDp.dp),
-                modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)
-            ) {
+            Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(
@@ -2050,7 +2062,7 @@ private fun VideoPlayerOverlayContent(
                         vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
                     )
                 ) {
-                    SkinAwareLoadingIndicator(color = centerLoadingVisualState.indicatorColor)
+                    BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
                     Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
                     AppText(
                         text = "正在切换清晰度...",
@@ -2068,65 +2080,79 @@ private fun VideoPlayerOverlayContent(
         )
 
         // --- 6. 清晰度菜单 ---
-        if (showQualityMenu) {
-            QualitySelectionMenu(
-                qualities = qualityLabels,
-                qualityIds = qualityIds,
-                switchableQualityIds = switchableQualityIds,
-                currentQuality = currentQualityLabel,
-                isLoggedIn = isLoggedIn,
-                isVip = isVip,
-                onQualitySelected = { index ->
-                    onQualitySelected(index)
-                    showQualityMenu = false
-                },
-                onDismiss = { showQualityMenu = false },
-                useDialog = true,
-                placement = if (anchoredGlassMenus) PlayerListPopupPlacement.ANCHOR_END
-                    else if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
-                anchorBounds = qualityMenuAnchor.takeIf { anchoredGlassMenus },
-            )
+        CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides qualityMenuSource) {
+            if (showQualityMenu) {
+                QualitySelectionMenu(
+                    qualities = qualityLabels,
+                    qualityIds = qualityIds,
+                    switchableQualityIds = switchableQualityIds,
+                    currentQuality = currentQualityLabel,
+                    isLoggedIn = isLoggedIn,
+                    isVip = isVip,
+                    onQualitySelected = { index ->
+                        onQualitySelected(index)
+                        showQualityMenu = false
+                    },
+                    onDismiss = { showQualityMenu = false },
+                    useDialog = true,
+                    placement = if (anchoredGlassMenus) PlayerListPopupPlacement.ANCHOR_END
+                        else if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
+                    anchorBounds = qualityMenuAnchor.takeIf { anchoredGlassMenus },
+                )
+            }
         }
 
-        if (showAudioQualityMenu) {
-            AudioQualitySelectionMenuDialog(
-                options = availableAudioQualities,
-                requestedAudioQuality = currentAudioQuality,
-                onAudioQualitySelected = { preferenceId ->
-                    onAudioQualityChange(preferenceId)
-                    showAudioQualityMenu = false
-                },
-                onDismiss = { showAudioQualityMenu = false },
-                placement = if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
-            )
+        CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides secondaryMenuSource) {
+            if (showAudioQualityMenu) {
+                AudioQualitySelectionMenuDialog(
+                    options = availableAudioQualities,
+                    requestedAudioQuality = currentAudioQuality,
+                    onAudioQualitySelected = { preferenceId ->
+                        onAudioQualityChange(preferenceId)
+                        showAudioQualityMenu = false
+                    },
+                    onDismiss = { showAudioQualityMenu = false },
+                    placement = if (isFullscreen) PlayerListPopupPlacement.END_BOTTOM else PlayerListPopupPlacement.CENTER,
+                )
+            }
         }
 
         // --- 7.  [新增] 倍速选择菜单 ---
-        if (showSpeedMenu) {
-            SpeedSelectionMenuDialog(
-                currentSpeed = currentSpeed,
-                onSpeedSelected = { speed ->
-                    currentSpeed = speed
-                    onPlaybackSpeedChange(speed)
-                    scope.launch {
-                        SettingsManager.setLastPlaybackSpeed(context, speed)
+        CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides speedMenuSource) {
+            if (showSpeedMenu) {
+                SpeedSelectionMenuDialog(
+                    currentSpeed = currentSpeed,
+                    onSpeedSelected = { speed ->
+                        currentSpeed = speed
+                        onPlaybackSpeedChange(speed)
+                        scope.launch {
+                            SettingsManager.setLastPlaybackSpeed(context, speed)
+                        }
+                        showSpeedMenu = false
+                    },
+                    onDismiss = { showSpeedMenu = false },
+                    anchorBounds = speedMenuAnchor.takeIf { anchoredGlassMenus },
+                    placement = if (anchoredGlassMenus) {
+                        SpeedSelectionMenuPlacement.ANCHOR_END
+                    } else if (isFullscreen) {
+                        SpeedSelectionMenuPlacement.RIGHT_SIDE
+                    } else {
+                        SpeedSelectionMenuPlacement.CENTER
                     }
-                    showSpeedMenu = false
-                },
-                onDismiss = { showSpeedMenu = false },
-                anchorBounds = speedMenuAnchor.takeIf { anchoredGlassMenus },
-                placement = if (anchoredGlassMenus) {
-                    SpeedSelectionMenuPlacement.ANCHOR_END
-                } else if (isFullscreen) {
-                    SpeedSelectionMenuPlacement.RIGHT_SIDE
-                } else {
-                    SpeedSelectionMenuPlacement.CENTER
-                }
-            )
+                )
+            }
         }
 
         // --- 7.5  [新增] 视频比例选择菜单 ---
-        if (showRatioMenu) {
+        if (showRatioMenu && com.android.purebilibili.core.ui.components.appGlassMenuAvailable()) {
+            CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides secondaryMenuSource) {
+                AspectRatioMenu(
+                    currentRatio = currentAspectRatio,
+                    onRatioSelected = { ratio -> onAspectRatioChange(ratio); showRatioMenu = false },
+                    onDismiss = { showRatioMenu = false },
+                )
+            }
+        } else if (showRatioMenu) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -2150,6 +2176,7 @@ private fun VideoPlayerOverlayContent(
 
         // --- 8.  [新增] 弹幕设置面板 ---
         if (showDanmakuSettings) {
+            CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides activeDanmakuMenuSource) {
             DanmakuSettingsPanel(
                 isFullscreen = isFullscreen,
                 settingsScope = danmakuSettingsScope,
@@ -2222,6 +2249,7 @@ private fun VideoPlayerOverlayContent(
                 },
                 onDismiss = { showDanmakuSettings = false }
             )
+            }
         }
 
         // --- 9.  [新增] 视频设置面板 ---
@@ -2258,12 +2286,17 @@ private fun VideoPlayerOverlayContent(
 
         if (showVideoSettings) {
             VideoSettingsPanel(
+                chapterDisplayMode = chapterDisplayMode,
+                onChapterDisplayModeChange = { mode ->
+                    scope.launch { SettingsManager.setChapterDisplayMode(context, mode) }
+                },
                 isFullscreen = isFullscreen,
                 sleepTimerMinutes = sleepTimerMinutes,
                 onSleepTimerChange = onSleepTimerChange,
                 onReload = onReloadVideo,
                 onDanmakuSettingsClick = {
                     showVideoSettings = false
+                    activeDanmakuMenuSource = null
                     showDanmakuSettings = true
                 },
                 onShowDanmakuPool = onShowDanmakuPool?.let { action ->
@@ -2359,18 +2392,20 @@ private fun VideoPlayerOverlayContent(
             )
         }
 
-        if (showPlaybackOrderSheet) {
-            PlaybackOrderSelectionSheet(
-                currentBehavior = playbackCompletionBehavior,
-                isFullscreen = isFullscreen,
-                onSelect = { behavior ->
-                    scope.launch {
-                        SettingsManager.setPlaybackCompletionBehavior(context, behavior)
-                    }
-                    showPlaybackOrderSheet = false
-                },
-                onDismiss = { showPlaybackOrderSheet = false }
-            )
+        CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides secondaryMenuSource) {
+            if (showPlaybackOrderSheet) {
+                PlaybackOrderSelectionSheet(
+                    currentBehavior = playbackCompletionBehavior,
+                    isFullscreen = isFullscreen,
+                    onSelect = { behavior ->
+                        scope.launch {
+                            SettingsManager.setPlaybackCompletionBehavior(context, behavior)
+                        }
+                        showPlaybackOrderSheet = false
+                    },
+                    onDismiss = { showPlaybackOrderSheet = false }
+                )
+            }
         }
 
         // --- 10. 📖 [新增] 章节列表面板 ---
@@ -2380,73 +2415,22 @@ private fun VideoPlayerOverlayContent(
                 viewPoints = viewPoints,
                 progressProvider = displayedProgressProvider,
                 onSeek = commitSeek,
-                onDismiss = { showChapterList = false }
+                onDismiss = { showChapterList = false },
+                showViewPoints = showViewPointMarkers,
+                onShowViewPointsChange = onChapterVisibilityChange,
             )
         }
 
         if (showPageSelectorSheet && pages.size > 1) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.55f))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) {
-                        showPageSelectorSheet = false
-                    },
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                val pageSelectorMaxWidthDp = remember(configuration.screenWidthDp, isFullscreen) {
-                    resolvePageSelectorSheetMaxWidthDp(
-                        windowWidthDp = configuration.screenWidthDp,
-                        isFullscreen = isFullscreen
-                    )
-                }
-                val pageSelectorMaxHeight = com.android.purebilibili.feature.video.ui.components.episodeSheetMaxHeight()
-                AppSurface(
-                    shape = AppShapes.container(ContainerLevel.Sheet),
-                    color = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .heightIn(max = pageSelectorMaxHeight)
-                        .then(
-                            if (pageSelectorMaxWidthDp != null) {
-                                Modifier.widthIn(max = pageSelectorMaxWidthDp.dp)
-                            } else {
-                                Modifier.fillMaxWidth()
-                            }
-                        )
-                        .padding(
-                            start = 8.dp,
-                            top = 8.dp,
-                            end = 8.dp,
-                            bottom = resolvePageSelectorSheetOuterBottomPaddingDp(isFullscreen).dp
-                        )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() }
-                            ) {}
-                    ) {
-                        PagesSelector(
-                            pages = pages,
-                            coverUrl = coverUrl,
-                            currentPageIndex = currentPageIndex,
-                            forceGridMode = true,
-                            blockParentVerticalScroll = true,
-                            onDismissRequest = { showPageSelectorSheet = false },
-                            onPageSelect = { index ->
-                                showPageSelectorSheet = false
-                                onPageSelect(index)
-                            }
-                        )
-                    }
-                }
-            }
+            PlayerEpisodeMenu(
+                pages = pages,
+                currentPageIndex = currentPageIndex,
+                isFullscreen = isFullscreen,
+                playerBounds = playerBoundsInWindow,
+                cover = coverUrl,
+                onDismiss = { showPageSelectorSheet = false },
+                onPageSelect = onPageSelect,
+            )
         }
 
         if (shouldConsumeBackgroundGesturesForEndDrawer(endDrawerVisible)) {
@@ -2711,10 +2695,11 @@ private fun PortraitTopBar(
                     }
                 }
 
+                val moreMenuSource = com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
                 //  设置按钮 - 无背景
                 AppIconButton(
                     onClick = { showMoreMenu = true },
-                    modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp)
+                    modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp).appGlassMenuSource(moreMenuSource, onOpen = { showMoreMenu = true })
                 ) {
                     AppIcon(
                         imageVector = moreIcon,
@@ -2727,6 +2712,7 @@ private fun PortraitTopBar(
                 if (useMiuixNonGlassChrome) {
                     AppDropdownMenu(
                         expanded = showMoreMenu,
+                        glassSource = moreMenuSource,
                         onDismissRequest = { showMoreMenu = false },
                     ) {
                         AppDropdownMenuItem(
@@ -2754,6 +2740,7 @@ private fun PortraitTopBar(
                 } else {
                     AppDropdownMenu(
                         expanded = showMoreMenu,
+                        glassSource = moreMenuSource,
                         onDismissRequest = { showMoreMenu = false }
                     ) {
                         AppDropdownMenuItem(
@@ -3098,12 +3085,14 @@ fun LandscapeEndDrawer(
                                     horizontal = layoutPolicy.followButtonHorizontalPaddingDp.dp,
                                     vertical = 0.dp
                                 ),
-                                modifier = Modifier.height(layoutPolicy.followButtonHeightDp.dp),
+                                modifier = Modifier.heightIn(min = layoutPolicy.followButtonHeightDp.dp),
                                 shape = AppShapes.container(ContainerLevel.Card)
                             ) {
                                 AppText(
                                     if (!followStatusKnown) "—" else if (isFollowed) "已关注" else "+ 关注",
-                                    fontSize = layoutPolicy.followButtonFontSp.sp
+                                    fontSize = layoutPolicy.followButtonFontSp.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
                                 )
                             }
                         }
@@ -3197,7 +3186,8 @@ fun LandscapeEndDrawer(
                             }
                             LaunchedEffect(visible, selectedTab, currentLazyIndex) {
                                 if (visible && selectedTab == 1 && currentLazyIndex >= 0) {
-                                    collectionListState.scrollToItem(currentLazyIndex)
+                                    // 面板展开后动画定位当前集，与面板入场衔接。
+                                    collectionListState.animateScrollToItem(currentLazyIndex)
                                 }
                             }
                             LazyColumn(
@@ -3293,7 +3283,7 @@ private fun TripleLikeInteractionButton(
     layoutPolicy: VideoPlayerOverlayVisualPolicy,
     modifier: Modifier = Modifier
 ) {
-    val haptic = rememberHapticFeedback()
+    val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.VIDEO_ACTIONS)
     val favoriteIcon = rememberAppBookmarkIcon()
     val coinIcon = rememberAppCoinIcon()
     val likeIcon = rememberAppLikeIcon()
@@ -3342,10 +3332,13 @@ private fun TripleLikeInteractionButton(
             progress = longPressProgress,
             progressColor = AppContentColors.accent(),
             isActive = isLiked,
-            onClick = onLikeClick,
+            onClick = { haptic(HapticType.LIGHT); onLikeClick() },
             onLongPress = { isLongPressing = true },
             onRelease = {
-                if (longPressProgress < 0.1f) onLikeClick()
+                if (longPressProgress < 0.1f) {
+                    haptic(HapticType.LIGHT)
+                    onLikeClick()
+                }
                 isLongPressing = false
             },
             layoutPolicy = layoutPolicy
@@ -3358,7 +3351,7 @@ private fun TripleLikeInteractionButton(
             progress = longPressProgress,
             progressColor = AppContentColors.accent(),
             isActive = isCoined,
-            onClick = onCoinClick,
+            onClick = { haptic(HapticType.LIGHT); onCoinClick() },
             showProgress = longPressProgress > 0.05f,
             layoutPolicy = layoutPolicy
         )
@@ -3370,7 +3363,7 @@ private fun TripleLikeInteractionButton(
             progress = longPressProgress,
             progressColor = AppContentColors.accent(),
             isActive = isFavorited,
-            onClick = onFavoriteClick,
+            onClick = { haptic(HapticType.LIGHT); onFavoriteClick() },
             showProgress = longPressProgress > 0.05f,
             layoutPolicy = layoutPolicy
         )

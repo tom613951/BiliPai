@@ -138,13 +138,17 @@ internal fun BiliPaiNavDisplayHost(
     videoSharedReturnGestureFollowEnabled: Boolean = true,
     videoSharedReturnGestureTranslationEnabled: Boolean = true,
     videoReturnContentFollowProgressEnabled: Boolean = true,
+    settingsContainerMorphEnabled: Boolean = true,
+    settingsContainerRealtimeBlurEnabled: Boolean = false,
     sourceMetadata: BiliPaiNavSourceMetadata,
     programmaticBackDispatcher: BiliPaiProgrammaticBackDispatcher,
     preferWholeCardReturn: Boolean = false,
     onBack: () -> Unit,
     onPrepareVideoCardSharedReturn: () -> Boolean = { false },
-    onRelatedVideoDetailReturned: () -> Unit = {},
-    restorePreviousVideoSourceOnDetailReturn: Boolean = false,
+    pendingRelatedReturnCount: Int = 0,
+    relatedReturnRequestId: Long = 0L,
+    onRelatedVideoDetailReturned: (Long, Long) -> Boolean = { _, _ -> false },
+    videoSourceGeneration: Long = 0L,
     modifier: Modifier = Modifier,
     content: @Composable (BiliPaiNavKey) -> Unit,
 ) = BoxWithConstraints(modifier = modifier) {
@@ -177,6 +181,35 @@ internal fun BiliPaiNavDisplayHost(
     )
     val stackSnapshot = backStack.toList()
     val settingsPersistentPanes = settingsHasPersistentPanes()
+    val settingsContainerSources = remember { com.android.purebilibili.feature.settings.SettingsContainerSources() }
+    val settingsContainerEnabled = settingsContainerMorphEnabled && !settingsPersistentPanes && !reduceMotion &&
+        predictiveBackAnimationStyle != BiliPaiPredictiveBackAnimationStyle.NONE
+    val settingsContainerPageColor = AppSurfaceTokens.groupedListContainer()
+    val settingsContainerSnapshot = settingsContainerSources.sources.toMap()
+    val availableSettingsContainerTransitions = remember(
+        settingsContainerSnapshot, settingsContainerPageColor, settingsContainerRealtimeBlurEnabled, navBlurMotionTierProvider,
+    ) {
+        settingsContainerSnapshot.mapValues { (_, source) ->
+            SettingsContainerTransition(
+                source, settingsContainerPageColor,
+                realtimeBlurEnabled = settingsContainerRealtimeBlurEnabled,
+                blurMotionTierProvider = navBlurMotionTierProvider,
+            )
+        }
+    }
+    val settingsContainerTransitions = if (!settingsContainerEnabled) emptyMap() else
+        availableSettingsContainerTransitions.filterKeys { target ->
+            isSettingsContainerBoundary(
+                enabled = settingsContainerEnabled,
+                backStack = stackSnapshot,
+                target = target,
+                owner = settingsContainerSnapshot[target]?.owner,
+            )
+        }
+    LaunchedEffect(stackSnapshot, settingsContainerSnapshot.keys) {
+        // 离场 entry 保留自己的转场对象；目录中清除旧来源，搜索直达不能复用上次点击。
+        settingsContainerSources.sources.keys.retainAll(stackSnapshot.toSet())
+    }
     val currentKey = stackSnapshot.lastOrNull()
     val latestOnBack by rememberUpdatedState(onBack)
     val latestPrepareReturn by rememberUpdatedState(onPrepareVideoCardSharedReturn)
@@ -191,8 +224,7 @@ internal fun BiliPaiNavDisplayHost(
             ?.let { it.width > 1f && it.height > 1f } == true,
     )
     val cardMorphAvailable = cardMorphMode != BiliPaiVideoCardMorphMode.NONE
-    var relatedReturnRestorePending by remember { mutableStateOf(false) }
-    var relatedReturnTransitionObserved by remember { mutableStateOf(false) }
+    var relatedReturnTransitionObserved by remember(videoSourceGeneration) { mutableStateOf(false) }
     val style = if (reduceMotion) {
         BiliPaiPredictiveBackAnimationStyle.NONE
     } else {
@@ -202,9 +234,7 @@ internal fun BiliPaiNavDisplayHost(
     val performBack = remember(
         backStack,
         cardMorphAvailable,
-        videoReturnAnimated,
         sourceMetadata.sourceRoute,
-        restorePreviousVideoSourceOnDetailReturn,
     ) {
         {
             val leavingKey = backStack.lastOrNull()
@@ -214,19 +244,7 @@ internal fun BiliPaiNavDisplayHost(
                     videoCardClock.beginReturning(sourceMetadata.sourceRoute, videoCardClock.depthProgress())
                 }
             }
-            val returningFromRelated = (leavingKey as? BiliPaiNavKey.VideoDetail)
-                ?.sourceRoute
-                ?.substringBefore('?')
-                ?.startsWith("video/") == true || restorePreviousVideoSourceOnDetailReturn
             latestOnBack()
-            if (returningFromRelated) {
-                if (videoReturnAnimated) {
-                    relatedReturnTransitionObserved = false
-                    relatedReturnRestorePending = true
-                } else {
-                    latestRelatedReturn()
-                }
-            }
         }
     }
 
@@ -285,7 +303,7 @@ internal fun BiliPaiNavDisplayHost(
     }
     // 抓取返回卡片的瞬间给一次轻触觉反馈，强化“拿起来了”的跟手感。
     if (videoSharedReturnGestureFollowEnabled || videoSharedReturnGestureTranslationEnabled) {
-        val followHapticFeedback = androidx.compose.ui.platform.LocalHapticFeedback.current
+        val followHapticFeedback = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.NAVIGATION)
         LaunchedEffect(videoCardTransitionProgress.gestureFollow) {
             androidx.compose.runtime.snapshotFlow {
                 videoCardTransitionProgress.gestureFollow.grabEvent
@@ -308,15 +326,14 @@ internal fun BiliPaiNavDisplayHost(
             }
         }
     }
-    val videoFallbackTransition = if (cardTransitionEnabled) {
-        // 卡片形变开启时，fallback 只负责接住源卡片不可用等降级场景，避免再接管
-        // Miuix 预测返回进度。
-        predictiveBackExcludedTransition
-    } else {
-        // 关闭卡片形变后，视频页完整沿用“全局导航动画”：Miuix、AOSP、缩放、
-        // 经典与无动画都由同一个 Miuix NavDisplay 驱动，不叠加 Compose 转场。
-        globalTransition
-    }
+    // 卡片开关同时覆盖玻璃与原生视频页。关闭后，默认样式直接使用导航预设，
+    // 不附加卡片进度限制或背景模糊；显式选择的其他全局样式及减弱动效仍然生效。
+    val videoFallbackTransition = resolveVideoCardFallbackTransition(
+        cardTransitionEnabled = cardTransitionEnabled,
+        animationStyle = style,
+        globalTransition = globalTransition,
+        cardEnabledFallback = predictiveBackExcludedTransition,
+    )
     val observedVideoFallbackTransition = remember(
         videoFallbackTransition,
         videoCardTransitionProgress,
@@ -590,12 +607,14 @@ internal fun BiliPaiNavDisplayHost(
     }
     val relatedReturnExposure = if (cardMorphAvailable) effectiveVideoCardExposure else fallbackReturnExposure
     LaunchedEffect(
-        relatedReturnRestorePending,
+        pendingRelatedReturnCount,
+        relatedReturnRequestId,
+        videoSourceGeneration,
         relatedReturnExposure,
         videoReturnAnimated,
     ) {
         val restoreDecision = resolveRelatedReturnSourceRestoreDecision(
-            restorePending = relatedReturnRestorePending,
+            restorePending = pendingRelatedReturnCount > 0,
             transitionObserved = relatedReturnTransitionObserved,
             transitionAnimated = videoReturnAnimated,
             exposure = relatedReturnExposure,
@@ -604,9 +623,9 @@ internal fun BiliPaiNavDisplayHost(
         if (restoreDecision.shouldRestore) {
             // The nested source geometry remains immutable through the complete predictive
             // settle. Only arm the parent's older session after the navigation driver is idle.
-            relatedReturnRestorePending = false
-            relatedReturnTransitionObserved = false
-            latestRelatedReturn()
+            if (latestRelatedReturn(videoSourceGeneration, relatedReturnRequestId)) {
+                relatedReturnTransitionObserved = false
+            }
         }
     }
     LaunchedEffect(effectiveVideoCardExposure) {
@@ -788,6 +807,8 @@ internal fun BiliPaiNavDisplayHost(
         modifier = Modifier
             .fillMaxSize()
             .onGloballyPositioned { coordinates ->
+                settingsContainerSources.hostOrigin = coordinates.positionInRoot()
+                settingsContainerSources.hostSize = coordinates.size
                 videoCardTransitionProgress.gestureFollow.hostOriginInRoot = coordinates.positionInRoot()
                 // System events are in screen pixels; card bounds and layers are host-local.
                 val origin = coordinates.localToScreen(Offset.Zero)
@@ -843,6 +864,7 @@ internal fun BiliPaiNavDisplayHost(
                 swipeBackDirection = swipeBackDirection,
                 settingsBackStack = stackSnapshot,
                 settingsPersistentPanes = settingsPersistentPanes,
+                settingsContainerTransitions = settingsContainerTransitions,
                 activeMainHostRoute = activeMainHostRoute,
                 predictiveBackExcludedTransition = predictiveBackExcludedTransition,
                 videoCardTransition = videoCardTransition,
@@ -857,6 +879,9 @@ internal fun BiliPaiNavDisplayHost(
                     onBack = performBack,
                 ) {
                     CompositionLocalProvider(
+                        com.android.purebilibili.feature.settings.LocalSettingsContainerSources provides
+                            (if (settingsContainerEnabled) settingsContainerSources else null),
+                        com.android.purebilibili.feature.settings.LocalSettingsContainerOwner provides key,
                         LocalVideoDetailNavigationTransitionScope provides LocalNavTransitionScope.current,
                         LocalGlobalWallpaperBackdropVisible provides
                             (globalWallpaperVisible && !opaqueVideoChild &&

@@ -1,6 +1,7 @@
 package com.android.purebilibili.feature.video.subtitle
 
 import android.content.Context
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -17,10 +18,17 @@ object SubtitleToolsStore {
     private val bottom = intPreferencesKey("subtitle_tools_bottom_padding")
     private val opacity = floatPreferencesKey("subtitle_tools_background_opacity")
 
+    private val textColor = intPreferencesKey("subtitle_tools_text_color")
+    private val strokeColor = intPreferencesKey("subtitle_tools_stroke_color")
+    private val fontFile = stringPreferencesKey("subtitle_tools_font_file")
+    private val fontName = stringPreferencesKey("subtitle_tools_font_name")
+
     fun appearance(context: Context) = context.settingsDataStore.data.map { prefs ->
         normalizeSubtitleAppearance(PlayerSubtitleAppearance(
             prefs[inline] ?: 1f, prefs[fullscreen] ?: 1.5f, prefs[weight] ?: 6,
-            prefs[stroke] ?: 2f, prefs[horizontal] ?: 24, prefs[bottom] ?: 24, prefs[opacity] ?: 0.67f
+            prefs[stroke] ?: 2f, prefs[horizontal] ?: 24, prefs[bottom] ?: 24, prefs[opacity] ?: 0.67f,
+            prefs[textColor] ?: android.graphics.Color.WHITE, prefs[strokeColor] ?: android.graphics.Color.BLACK,
+            prefs[fontFile].orEmpty(), prefs[fontName].orEmpty()
         ))
     }
 
@@ -31,6 +39,8 @@ object SubtitleToolsStore {
             it[weight] = value.fontWeight; it[stroke] = value.strokeWidth
             it[horizontal] = value.horizontalPadding; it[bottom] = value.bottomPadding
             it[opacity] = value.backgroundOpacity
+            it[textColor] = value.textColor; it[strokeColor] = value.strokeColor
+            it[fontFile] = value.fontFileName; it[fontName] = value.fontDisplayName
         }
     }
 }

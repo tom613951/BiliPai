@@ -5,7 +5,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,11 +29,13 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.Text
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 
 /**
  * 数值变化时带滚动 + 脉冲缩放的计数文本：
  * 数值经弹性 spring 插值滚动到目标，同时整体放大再回落（1 -> 1.15 -> 1），
  * 用于高赞弹幕计数、点赞数等需要"跳一下"反馈的场景。
+ * 数字以等宽特性渲染，滚动与进位期间文本宽度保持稳定。
  */
 @Composable
 fun AnimatedCountText(
@@ -54,7 +55,7 @@ fun AnimatedCountText(
     LaunchedEffect(animateFromZero) { countAnimationStarted = true }
     val animatedValue by animateIntAsState(
         targetValue = if (countAnimationStarted) target else 0,
-        animationSpec = if (animateFromZero) tween(1100, easing = FastOutSlowInEasing) else spring(
+        animationSpec = if (animateFromZero) tween(1100, easing = AppMotionEasing.M1Standard) else spring(
             dampingRatio = Spring.DampingRatioLowBouncy,
             stiffness = Spring.StiffnessMedium,
         ),
@@ -79,7 +80,7 @@ fun AnimatedCountText(
             coroutineScope {
                 launch {
                     // Retarget from the current value when counts change during a rebound.
-                    pulseScale.animateTo(1.15f, tween(80, easing = FastOutSlowInEasing))
+                    pulseScale.animateTo(1.15f, tween(80, easing = AppMotionEasing.M1Standard))
                     pulseScale.animateTo(
                         targetValue = 1f,
                         animationSpec = spring(
@@ -89,7 +90,7 @@ fun AnimatedCountText(
                     )
                 }
                 if (blurOnChange) launch {
-                    blurProgress.animateTo(1f, tween(80, easing = FastOutSlowInEasing))
+                    blurProgress.animateTo(1f, tween(80, easing = AppMotionEasing.M1Standard))
                     blurProgress.animateTo(0f, tween(if (animateFromZero) 1100 else 360))
                 }
             }
@@ -99,7 +100,7 @@ fun AnimatedCountText(
         text = prefix + formatter(
             if (count > Int.MAX_VALUE.toLong()) count else animatedValue.coerceAtLeast(0).toLong()
         ),
-        style = style,
+        style = style.withTabularNumbers(),
         color = color,
         maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,

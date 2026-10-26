@@ -45,6 +45,7 @@ internal fun BindPlayerAmbient(
     var seekReady by remember(player) { mutableStateOf(true) }
     var surfaceGeneration by remember(playerView) { mutableIntStateOf(0) }
     val surface = playerView?.videoSurfaceView
+    val bindingOwner = remember(presentation, controller, player, surface) { Any() }
     var surfaceAvailable by remember(surface) {
         mutableStateOf(when (surface) {
             is SurfaceView -> surface.holder.surface.isValid
@@ -124,6 +125,7 @@ internal fun BindPlayerAmbient(
     }
     val surfaceLocation = remember(surface) { IntArray(2) }
     SideEffect {
+        presentation.claimBinding(bindingOwner)
         presentation.layoutEnabled = glowAllowed && !excluded
         presentation.visible = glowAllowed && active
         presentation.visibilityGate = { !transitioning && !navTransition.isRunning && kotlin.math.abs(navTransition.relativeDepth) <= 0.001f }
@@ -148,7 +150,9 @@ internal fun BindPlayerAmbient(
             controller.run(ViewAmbientFrameSource(surface), width, height) { latestPolicy.value() }
         }
     }
-    DisposableEffect(controller) {
-        onDispose { controller.invalidate(); presentation.visible = false }
+    DisposableEffect(presentation, controller, bindingOwner) {
+        onDispose {
+            if (presentation.releaseBinding(bindingOwner)) controller.invalidate()
+        }
     }
 }

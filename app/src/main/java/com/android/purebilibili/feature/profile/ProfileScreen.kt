@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.profile
 
+import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 
 import com.android.purebilibili.feature.personal.PersonalMediaCardFrame
@@ -59,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.Brush
@@ -96,8 +98,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.imageLoader
 import coil3.request.ImageRequest
@@ -1017,10 +1017,12 @@ private fun ProfileSkinVideoBackground(
     val lifecycleOwner = LocalLifecycleOwner.current
     val repeatMode = remember(playMode) { resolveProfileSkinVideoRepeatMode(playMode) }
     val player = remember(videoPath) {
-        ExoPlayer.Builder(context).build()
-    }
+        com.android.purebilibili.core.lifecycle.AbandonableResource(
+            ExoPlayer.Builder(context).build(),
+        ) { it.release() }
+    }.value
 
-    DisposableEffect(player, videoPath, repeatMode) {
+    DisposableEffect(player, videoPath) {
         player.volume = 0f
         player.repeatMode = repeatMode
         player.setMediaItem(MediaItem.fromUri(Uri.fromFile(File(videoPath))))
@@ -1051,23 +1053,15 @@ private fun ProfileSkinVideoBackground(
     }
 
     SideEffect {
+        player.repeatMode = repeatMode
         if (!playbackEnabled) player.pause()
     }
 
     AndroidView(
-        factory = { viewContext ->
-            PlayerView(viewContext).apply {
-                useController = false
-                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                setKeepContentOnPlayerReset(true)
-                this.player = player
-            }
-        },
-        update = { playerView ->
-            playerView.player = player
-        },
-        modifier = modifier,
+        factory = { viewContext -> ProfileSkinVideoView(viewContext).apply { this.player = player } },
+        update = { it.player = player },
+        onRelease = { it.player = null },
+        modifier = modifier.clipToBounds(),
     )
 }
 
@@ -3064,7 +3058,7 @@ private fun ProfileDynamicCard(
                     )
                 }
             }
-            Box {
+            com.android.purebilibili.core.ui.components.AppGlassMenuAnchor(onOpen = { showMoreMenu = true }) {
                 AppIconButton(onClick = { showMoreMenu = true }, modifier = Modifier.size(40.dp)) {
                     AppIcon(
                         imageVector = moreIcon,
@@ -3076,7 +3070,8 @@ private fun ProfileDynamicCard(
                 AppDropdownMenu(
                     expanded = showMoreMenu,
                     onDismissRequest = { showMoreMenu = false },
-                    modifier = Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
+                    modifier = if (com.android.purebilibili.core.ui.components.appGlassMenuAvailable()) Modifier
+                else Modifier.background(MaterialTheme.colorScheme.surfaceContainer)
                 ) {
                     AppDropdownMenuItem(
                         text = { AppText("复制链接") },
@@ -5399,7 +5394,7 @@ fun ProfileTripleActionEntry(
     var showCelebration by remember { mutableStateOf(false) }
     val progressDuration = 1500 // 1.5 秒
 
-    val haptic = com.android.purebilibili.core.util.rememberHapticFeedback()
+    val haptic = com.android.purebilibili.core.util.rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.VIDEO_ACTIONS)
 
     // 进度动画
     val animatedProgress by androidx.compose.animation.core.animateFloatAsState(
@@ -5407,7 +5402,7 @@ fun ProfileTripleActionEntry(
         animationSpec = if (isLongPressing) {
             androidx.compose.animation.core.tween(durationMillis = progressDuration, easing = androidx.compose.animation.core.LinearEasing)
         } else {
-            androidx.compose.animation.core.tween(durationMillis = 200, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+            androidx.compose.animation.core.tween(durationMillis = 200, easing = AppMotionEasing.M1Standard)
         },
         label = "tripleProgress",
         finishedListener = { progress ->

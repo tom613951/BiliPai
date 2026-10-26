@@ -295,6 +295,17 @@ internal sealed interface BiliPaiNavKey : NavKey {
     }
 
     @Serializable
+    data object LiveMatch : BiliPaiNavKey {
+        override val routeBase: String = "live_match"
+    }
+
+    /** 原生比赛详情页，cid 为比赛 id（x/esports/match/info）。 */
+    @Serializable
+    data class MatchInfo(val cid: Long) : BiliPaiNavKey {
+        override val routeBase: String = "match_info"
+    }
+
+    @Serializable
     data object LiveFollowing : BiliPaiNavKey {
         override val routeBase: String = "live_following"
     }
@@ -519,7 +530,9 @@ internal sealed interface BiliPaiNavKey : NavKey {
     @Serializable
     data class Web(
         val url: String,
-        val title: String = ""
+        val title: String = "",
+        /** 官方 H5 页面（如赛事主页）需要移动端 UA 才能按手机版渲染。 */
+        val mobileUserAgent: Boolean = false,
     ) : BiliPaiNavKey {
         override val routeBase: String = "web"
     }

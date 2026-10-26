@@ -61,7 +61,9 @@ internal fun LiveStreamSourceSheet(
         }
     }
     val groups = remember(candidates) { candidates.withIndex().groupBy { it.value.protocolName } }
-    val listHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.7f - 80f).coerceAtLeast(120f).dp
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val panelFraction = if (configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 1f else 0.7f
+    val listHeight = (configuration.screenHeightDp * panelFraction - 100f).coerceAtLeast(48f).dp
     AppModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -142,6 +144,7 @@ private fun LiveSourceRow(
 ) {
     AppSingleChoiceRow(
         selected = isActive,
+        enabled = !isActive,
         onClick = onClick,
         shape = AppShapes.container(ContainerLevel.Card),
         modifier = Modifier.fillMaxWidth()

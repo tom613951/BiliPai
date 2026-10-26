@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 
-import com.android.purebilibili.core.theme.resolveAdaptivePrimaryAccentColors
 import com.android.purebilibili.core.util.FormatUtils
 import com.android.purebilibili.core.util.bouncyClickable
 import com.android.purebilibili.data.model.response.RelatedVideo
@@ -232,7 +231,7 @@ fun UpInfoSection(
             ),
             color = followContainer,
             shape = AppShapes.container(ContainerLevel.Card),
-            modifier = Modifier.height(32.dp)
+            modifier = Modifier.heightIn(min = 32.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -249,6 +248,8 @@ fun UpInfoSection(
                 }
                 AppText(
                     text = if (isFollowing) "已关注" else "关注",
+                    maxLines = 1,
+                    softWrap = false,
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
                     color = followContent
                 )
@@ -727,161 +728,3 @@ fun RelatedVideoItem(video: RelatedVideo, onClick: () -> Unit) {
     }
 }
 
-
-
-//  [新增] 视频分P选择器 (支持展开/收起)
-@Composable
-fun PagesSelector(
-    pages: List<com.android.purebilibili.data.model.response.Page>,
-    currentPageIndex: Int,
-    onPageSelect: (Int) -> Unit
-) {
-    //  展开/收起状态
-    var isExpanded by remember { mutableStateOf(false) }
-    val selectedColors = resolveAdaptivePrimaryAccentColors(MaterialTheme.colorScheme)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .animateContentSize()
-            .padding(vertical = 8.dp)
-    ) {
-        // 标题行 + 展开按钮
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AppText(
-                    text = "选集",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                AppText(
-                    text = "(${pages.size}P)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppContentColors.secondaryText()
-                )
-            }
-
-            //  展开/收起按钮
-            Row(
-                modifier = Modifier
-                    .clickable { isExpanded = !isExpanded }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AppText(
-                    text = if (isExpanded) "收起" else "展开",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                    color = AppContentColors.accent()
-                )
-                AppIcon(
-                    imageVector = if (isExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = AppContentColors.accent(),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (isExpanded) {
-            //  展开状态：垂直网格布局
-            val columns = 3  // 每行3个
-            val chunkedPages = pages.chunked(columns)
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                chunkedPages.forEachIndexed { rowIndex, rowPages ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowPages.forEachIndexed { colIndex, page ->
-                            val actualIndex = rowIndex * columns + colIndex
-                            val isSelected = actualIndex == currentPageIndex
-
-                            AppSurface(
-                                onClick = { onPageSelect(actualIndex) },
-                                color = if (isSelected) selectedColors.backgroundColor else MaterialTheme.colorScheme.surfaceVariant,
-                                shape = AppShapes.container(ContainerLevel.Chip),
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
-                                ) {
-                                    AppText(
-                                        text = "P${page.page}",
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = if (isSelected) selectedColors.contentColor else AppContentColors.accent()
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    AppText(
-                                        text = page.part.ifEmpty { "第${page.page}P" },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = if (isSelected) selectedColors.contentColor.copy(alpha = 0.9f) else AppContentColors.secondaryText()
-                                    )
-                                }
-                            }
-                        }
-                        // 填充空位
-                        repeat(columns - rowPages.size) {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
-            }
-        } else {
-            //  收起状态：横向滚动列表
-            androidx.compose.foundation.lazy.LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(pages.size, key = { index -> pages[index].cid }) { index ->
-                    val page = pages[index]
-                    val isSelected = index == currentPageIndex
-
-                    AppSurface(
-                        onClick = { onPageSelect(index) },
-                        color = if (isSelected) selectedColors.backgroundColor else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = AppShapes.container(ContainerLevel.Chip),
-                        modifier = Modifier.width(120.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                        ) {
-                            AppText(
-                                text = "P${page.page}",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (isSelected) selectedColors.contentColor else AppContentColors.accent()
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            AppText(
-                                text = page.part.ifEmpty { "第${page.page}P" },
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = if (isSelected) selectedColors.contentColor.copy(alpha = 0.9f) else AppContentColors.secondaryText()
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

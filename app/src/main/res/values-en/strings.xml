@@ -318,7 +318,7 @@
     <string name="animation_section_maid">Blue Snow Maid</string>
     <string name="animation_maid_summary">Hides maid animations and static images when turned off</string>
     <string name="animation_card_entrance_summary">Fade cards in one at a time when opening Home</string>
-    <string name="animation_card_transition_summary">Smoothly transition the cover and title into the detail page</string>
+    <string name="animation_card_transition_summary">Smoothly transition the cover and title into the detail page; use the global page animation when off</string>
     <string name="animation_related_transition_on">Open a related video by expanding its card into the video page</string>
     <string name="animation_related_transition_off">Use the standard page animation when opening a related video</string>
     <string name="animation_live_transition_summary">Keep the currently playing frame visible during the transition</string>
@@ -331,6 +331,10 @@
     <string name="animation_transition_blur_summary">Adds depth to transitions; turn off to save power</string>
     <string name="animation_back_title">Page transition animation</string>
     <string name="animation_back_summary">Animation style shared by page entry and return</string>
+    <string name="animation_settings_container_title">Settings container animation</string>
+    <string name="animation_settings_container_summary">Entry and return animation for settings pages</string>
+    <string name="animation_settings_container_morph">Container morph</string>
+    <string name="animation_settings_container_default">Default navigation</string>
     <string name="animation_back_preview_title">Back preview range</string>
     <string name="animation_back_preview_summary">Adjust how much of the page is revealed during swipe back</string>
     <string name="animation_back_blur_on">Blur the page behind during swipe back</string>
@@ -351,7 +355,7 @@
     <string name="animation_glass_share_title">Share Liquid Glass settings</string>
     <string name="animation_glass_share_failed">Could not open the system share sheet</string>
     <string name="animation_glass_export_failed">Could not export Liquid Glass settings</string>
-    <string name="animation_skeleton_summary">Subtle brightness changes on placeholder cards while loading</string>
+    <string name="animation_skeleton_summary">A soft highlight sweeps across loading placeholders; turn off for static placeholders</string>
     <string name="animation_header_blur_summary">Blur content behind the top bar, without refraction or lighting</string>
     <string name="animation_progressive_blur_summary">Gradually adjust top bar blur while scrolling (Android 13+)</string>
     <string name="animation_progressive_fade_summary">Use a solid color fade from the status bar to the top bar; more power efficient than blur</string>
@@ -505,7 +509,6 @@
     <string name="settings_search_history_clear_all">Clear all</string>
     <string name="settings_search_history_empty">No search history yet. Search for a setting to see it here.</string>
     <string name="settings_search_history_delete">Delete search history: %1$s</string>
-    <string name="settings_search_load_more">Load more</string>
     <string name="settings_search_legacy_001_title">Interface and theme</string>
     <string name="settings_search_legacy_001_summary">Interface style, colors, fonts, and launch screen</string>
     <string name="settings_search_legacy_002_title">Home and recommendations</string>
@@ -921,4 +924,5 @@
     <string name="appearance_home_card_ratio_bilipai_label">16:10 (BiliPai default)</string>
     <string name="animation_indicator_wobble_title">Liquid glass indicator recoil</string>
     <string name="animation_indicator_wobble_summary">Add squash and rebound when selecting a tab or releasing a drag. Applies only to liquid glass indicators; turning it off keeps normal movement and press feedback.</string>
+    <string name="animation_settings_container_blur_summary">Blur the settings page behind container transitions in real time; requires Android 12 or later</string>
 </resources>

@@ -8,6 +8,13 @@ import kotlin.test.assertNotEquals
 
 class BiliPaiNavKeyMappingPolicyTest {
     @Test
+    fun liveMatchesRestoreIntoNativeScheduleDestination() {
+        assertEquals(ScreenRoutes.LiveMatch.route, BiliPaiNavKey.LiveMatch.toLegacyRoute())
+        assertEquals(BiliPaiNavKey.LiveMatch, legacyRouteToBiliPaiNavKey("live_match"))
+        assertEquals(BiliPaiNavEntryContentRole.LIVE_MATCH, resolveBiliPaiNavEntryContentRole(BiliPaiNavKey.LiveMatch))
+    }
+
+    @Test
     fun audioCollectionKeysPreserveSourceAndTitleAcrossRouteRestoration() {
         for (key in listOf(
             BiliPaiNavKey.AudioMode(collectionMediaId = 42L, collectionTitle = "默认收藏夹 + 100% & 音乐"),

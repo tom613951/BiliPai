@@ -242,6 +242,9 @@ internal fun TabletCinemaLayout(
             pendingVideoShare = buildVideoSharePayload(
                 title = info.title,
                 bvid = info.bvid,
+                page = info.pages.indexOfFirst { it.cid == info.cid }.coerceAtLeast(0) + 1,
+                positionMs = playerState.player.currentPosition.coerceAtLeast(0L),
+                authorId = info.owner.mid,
                 coverUrl = info.pic,
                 upName = info.owner.name,
                 playCountText = com.android.purebilibili.core.util.FormatUtils
@@ -599,6 +602,8 @@ private fun CinemaStagePlayer(
                     actions = VideoPlayerSectionActions(
                     resolveNextWatch = playbackActions.resolveNextWatch,
                     playNextWatch = playbackActions.playNextWatch,
+                        onJumpToLastPlayedPart = playbackActions.jumpToLastPlayedPart,
+                        onDismissPartResumeNotice = playbackActions.dismissPartResumeNotice,
                         onToggleFullscreen = onToggleFullscreen,
                         onQualityChange = playbackActions.changeQuality,
                         onBack = onBack,
@@ -782,6 +787,7 @@ private fun CinemaMetaPanel(
                                         ) {
                                             CinemaMetaUpInfo(
                                                 success = success,
+                                                onOpenLiveRoom = onOpenBilibiliLink,
                                                 isFollowing = engagement.isFollowing,
                                                 followStatusKnown = engagement.followStatusKnown,
                                                 onFollowClick = onFollowClick,
@@ -815,6 +821,7 @@ private fun CinemaMetaPanel(
                                         Column(Modifier.fillMaxWidth()) {
                                             CinemaMetaUpInfo(
                                                 success = success,
+                                                onOpenLiveRoom = onOpenBilibiliLink,
                                                 isFollowing = engagement.isFollowing,
                                                 followStatusKnown = engagement.followStatusKnown,
                                                 onFollowClick = onFollowClick,
@@ -904,8 +911,7 @@ private fun CinemaMetaPanel(
                                 pages = success.info.pages,
                                 coverUrl = success.info.pic,
                                 currentPageIndex = currentPageIndex,
-                                onPageSelect = onPageSelect,
-                                forceGridMode = true
+                                onPageSelect = onPageSelect
                             )
                         }
                     }
@@ -981,6 +987,7 @@ private fun CinemaMetaActions(
 @Composable
 private fun CinemaMetaUpInfo(
     success: VideoPlaybackUiState.Success,
+    onOpenLiveRoom: ((String) -> Unit)?,
     isFollowing: Boolean,
     followStatusKnown: Boolean,
     onFollowClick: () -> Unit,
@@ -992,6 +999,7 @@ private fun CinemaMetaUpInfo(
 ) {
     UpInfoSection(
         info = success.info,
+        onOpenLiveRoom = onOpenLiveRoom,
         isFollowing = isFollowing,
         followStatusKnown = followStatusKnown,
         onFollowClick = onFollowClick,

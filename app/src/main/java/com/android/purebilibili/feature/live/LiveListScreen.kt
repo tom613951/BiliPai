@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.live
 
+import androidx.compose.foundation.border
+
 import com.android.purebilibili.core.ui.AppContentColors
 
 import android.app.Application
@@ -17,13 +19,14 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Subscriptions
+import androidx.compose.material.icons.outlined.Apps
 import androidx.compose.material.icons.outlined.NotificationsNone
-import androidx.compose.material.icons.outlined.Photo
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Widgets
+import com.android.purebilibili.core.ui.components.AppFilledIconButton
+import com.android.purebilibili.core.ui.components.AppIconButtonDefaults
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.SportsEsports
-import androidx.compose.material.icons.outlined.Widgets
 import androidx.compose.runtime.LaunchedEffect
 import android.widget.Toast
 import com.android.purebilibili.core.ui.components.AppBadge
@@ -53,10 +56,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.android.purebilibili.core.ui.ImmersiveAppScaffold
 import com.android.purebilibili.core.ui.AdaptivePullToRefreshBox
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.AppSpacingTokens
@@ -80,6 +85,7 @@ import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 
 data class LiveRoomItem(
     val roomId: Long,
@@ -93,6 +99,7 @@ data class LiveRoomItem(
     val liveStatus: Int = 1,
     val uid: Long = 0,
     val viewerText: String = "",
+    val feedback: List<com.android.purebilibili.data.model.response.LiveFeedbackGroup> = emptyList(),
 ) {
     fun resolvedCover(preferFirstFrame: Boolean): String {
         return if (preferFirstFrame) {
@@ -104,6 +111,7 @@ data class LiveRoomItem(
 }
 
 data class LiveListUiState(
+    val accountIdentity: com.android.purebilibili.core.store.AccountSessionIdentity = com.android.purebilibili.core.store.AccountSessionIdentity(),
     val contentItems: List<LiveRoomItem> = emptyList(),
     val followItems: List<LiveRoomItem> = emptyList(),
     val areaEntries: List<com.android.purebilibili.data.model.response.LiveFeedAreaEntry> = emptyList(),
@@ -121,31 +129,104 @@ data class LiveListUiState(
     val showFirstFrame: Boolean = false,
     val error: String? = null,
     val loadMoreError: String? = null,
-    val livingCount: Int = 0,
+    val livingCount: Int? = null,
+    val followError: String? = null,
+    val refreshCompletion: Long = 0L,
 )
 
 class LiveListViewModel(application: Application) : AndroidViewModel(application) {
-    private val _uiState = MutableStateFlow(LiveListUiState(isLoading = true))
+    private val _uiState = MutableStateFlow(LiveListUiState(isLoading = true, accountIdentity = com.android.purebilibili.core.store.TokenManager.accountIdentity.value))
     val uiState = _uiState.asStateFlow()
     private val requests = LiveBrowseRequestPolicy()
+    private var refreshEpoch = 0L
+    private var topRefreshJob: kotlinx.coroutines.Job? = null
+    private var accountIdentity = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
 
     init {
         refresh()
     }
 
+    fun onAccountChanged() {
+        val current = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
+        if (current == accountIdentity) return
+        accountIdentity = current
+        topRefreshJob?.cancel()
+        requests.invalidate()
+        _uiState.value = _uiState.value.copy(accountIdentity = current, contentItems = emptyList(), followItems = emptyList(), livingCount = null, followError = null, areaEntries = emptyList())
+        refresh()
+    }
+
     fun refresh() {
         val request = requests.refresh() ?: return
+        topRefreshJob?.cancel()
         val state = _uiState.value
-        _uiState.value = state.copy(
-            isLoading = true, isLoadingMore = false, error = null, loadMoreError = null,
-        )
+        val epoch = ++refreshEpoch
+        val identity = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
+        _uiState.value = state.copy(isLoading = true, isLoadingMore = false, error = null, loadMoreError = null)
         viewModelScope.launch {
+            val modules = if (state.selectedAreaIndex != LIVE_HOME_RECOMMEND_INDEX) async {
+                LiveRepository.getLiveFeedHome(page = 1, moduleSelect = true)
+            } else null
             loadPage(request, state)
-            // 分区详情子标签仍用 web area list 兜底；元数据不依赖当前分类。
-            if (_uiState.value.areaList.isEmpty()) {
-                LiveRepository.getLiveAreaIndex().onSuccess { areas ->
-                    _uiState.value = _uiState.value.copy(areaList = areas)
+            modules?.await()?.onSuccess { snapshot ->
+                if (epoch == refreshEpoch && identity == com.android.purebilibili.core.store.TokenManager.accountIdentity.value) {
+                    val current = _uiState.value
+                    val entries = snapshot.areaEntries.ifEmpty { current.areaEntries }
+                    // 解析失败（-1，如快照缺少该分区）视为未知，保留当前选中，
+                    // 不能用 -1 覆盖导致指示器退回推荐。
+                    val resolvedIndex = resolveRefreshedLiveHomeAreaIndex(current.selectedAreaIndex, current.selectedParentAreaId, current.selectedAreaId, entries)
+                    _uiState.value = current.copy(
+                        selectedAreaIndex = if (resolvedIndex >= 0) resolvedIndex else current.selectedAreaIndex,
+                        followItems = if (snapshot.hasFollowModule && snapshot.followError == null) snapshot.followRooms.map { it.toLiveRoomItem() } else current.followItems,
+                        livingCount = if (snapshot.hasFollowModule && snapshot.followError == null) snapshot.totalCount else current.livingCount,
+                        followError = snapshot.followError,
+                        areaEntries = entries,
+                    )
                 }
+            }
+            if (epoch == refreshEpoch && identity == com.android.purebilibili.core.store.TokenManager.accountIdentity.value) {
+                _uiState.value = _uiState.value.copy(refreshCompletion = epoch)
+            }
+            if (epoch == refreshEpoch && _uiState.value.areaList.isEmpty()) {
+                LiveRepository.getLiveAreaIndex().onSuccess { areas ->
+                    if (epoch == refreshEpoch && identity == com.android.purebilibili.core.store.TokenManager.accountIdentity.value) {
+                        _uiState.value = _uiState.value.copy(areaList = areas)
+                    }
+                }
+            }
+        }
+    }
+
+    fun refreshTop() {
+        if (_uiState.value.isLoading) return
+        topRefreshJob?.cancel()
+        val identity = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
+        topRefreshJob = viewModelScope.launch {
+            LiveRepository.getLiveFeedHome(page = 1, moduleSelect = true).onSuccess { snapshot ->
+                if (identity != com.android.purebilibili.core.store.TokenManager.accountIdentity.value) return@onSuccess
+                val current = _uiState.value
+                val entries = snapshot.areaEntries
+                // 同 refresh()：解析失败视为未知，保留当前选中，避免指示器退回推荐。
+                val resolvedIndex = resolveRefreshedLiveHomeAreaIndex(current.selectedAreaIndex, current.selectedParentAreaId, current.selectedAreaId, entries)
+                _uiState.value = current.copy(
+                    followItems = if (snapshot.hasFollowModule && snapshot.followError == null) snapshot.followRooms.map { it.toLiveRoomItem() } else current.followItems,
+                    livingCount = if (snapshot.hasFollowModule && snapshot.followError == null) snapshot.totalCount else current.livingCount,
+                    followError = snapshot.followError,
+                    areaEntries = entries,
+                    selectedAreaIndex = if (resolvedIndex >= 0) resolvedIndex else current.selectedAreaIndex,
+                )
+            }
+        }
+    }
+
+    suspend fun submitFeedback(
+        roomId: Long,
+        reason: com.android.purebilibili.data.model.response.LiveFeedbackReason,
+    ): Result<Unit> {
+        val identity = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
+        return LiveRepository.submitLiveFeedFeedback(roomId, reason).onSuccess {
+            if (identity == com.android.purebilibili.core.store.TokenManager.accountIdentity.value) {
+                _uiState.value = _uiState.value.copy(contentItems = _uiState.value.contentItems.filterNot { it.roomId == roomId })
             }
         }
     }
@@ -159,6 +240,7 @@ class LiveListViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun reloadSelection() {
+        refreshEpoch += 1L
         requests.invalidate()
         _uiState.value = _uiState.value.copy(
             contentItems = emptyList(), isLoadingMore = false, loadMoreError = null,
@@ -176,6 +258,7 @@ class LiveListViewModel(application: Application) : AndroidViewModel(application
 
     fun selectHomeArea(index: Int) {
         val state = _uiState.value
+        // 加载中也允许改选：新的 reloadSelection 递增 refreshEpoch，旧加载结果按 epoch 丢弃。
         if (index == state.selectedAreaIndex) return
         if (index <= LIVE_HOME_RECOMMEND_INDEX) {
             _uiState.value = state.copy(
@@ -227,8 +310,8 @@ class LiveListViewModel(application: Application) : AndroidViewModel(application
 
     fun selectSortTag(sortType: String?) {
         val state = _uiState.value
-        if (state.selectedAreaIndex <= LIVE_HOME_FOLLOWED_INDEX) return
-        if (state.selectedSortType == sortType) return
+        // 加载中也允许改选：reloadSelection 的 refreshEpoch 会让旧结果失效。
+        if (state.selectedParentAreaId <= 0) return
         _uiState.value = state.copy(
             selectedSortType = sortType,
             page = 1,
@@ -272,8 +355,9 @@ class LiveListViewModel(application: Application) : AndroidViewModel(application
                 }
                 _uiState.value = current.copy(
                     contentItems = mergedRooms,
-                    followItems = if (followMapped.isNotEmpty()) followMapped else if (!append) emptyList() else current.followItems,
-                    livingCount = if (!append) snapshot.totalCount else current.livingCount,
+                    followItems = if (!append && snapshot.hasFollowModule && snapshot.followError == null) followMapped else current.followItems,
+                    livingCount = if (!append && snapshot.hasFollowModule && snapshot.followError == null) snapshot.totalCount else current.livingCount,
+                    followError = if (!append) snapshot.followError else current.followError,
                     areaEntries = areaEntries,
                     page = page,
                     hasMore = snapshot.hasMore,
@@ -311,6 +395,7 @@ class LiveListViewModel(application: Application) : AndroidViewModel(application
                     contentItems = mergedRooms,
                     followItems = if (!append) mapped else current.followItems,
                     livingCount = if (!append) snapshot.totalCount else current.livingCount,
+                    followError = if (!append) null else current.followError,
                     page = page,
                     hasMore = snapshot.hasMore,
                     isLoading = false,
@@ -399,6 +484,7 @@ private fun com.android.purebilibili.data.model.response.LiveRoom.toLiveRoomItem
         online = viewerCount(),
         viewerText = watchedShow?.textLarge.orEmpty(),
         areaName = areaName,
+        feedback = feedback,
     )
 
 @Composable
@@ -409,11 +495,13 @@ fun LiveListScreen(
     onAreaListClick: () -> Unit,
     onFollowingClick: () -> Unit,
     onAreaDetailClick: (Int, Int, String) -> Unit,
-    onMatchClick: () -> Unit = {},
+    onMatchClick: () -> Unit,
     onUserClick: (Long) -> Unit = {},
     /** 底栏主入口时隐藏返回，更接近 BiliPai 主 tab 形态。 */
     showNavigationBack: Boolean = true,
-    /** 首页顶栏独立页：去掉自有顶栏和状态栏垫高，避免和首页搜索/标签叠两层。 */
+    user: com.android.purebilibili.feature.home.UserState = com.android.purebilibili.feature.home.UserState(),
+    onAvatarClick: () -> Unit = {},
+    /** 嵌入首页时共用首页顶栏和采样层，顶部避让通过列表内容内边距提供。 */
     embeddedInHome: Boolean = false,
     contentTopPadding: androidx.compose.ui.unit.Dp = AppSpacingTokens.None,
     scrollToTopRequestId: Int = 0,
@@ -421,11 +509,20 @@ fun LiveListScreen(
     viewModel: LiveListViewModel = viewModel(),
     globalHazeState: HazeState? = null
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val collectedState by viewModel.uiState.collectAsStateWithLifecycle()
+    val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val state = if (collectedState.accountIdentity == accountIdentity) collectedState
+        else LiveListUiState(isLoading = true, accountIdentity = accountIdentity)
+    LaunchedEffect(accountIdentity) { viewModel.onAccountChanged() }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshTop()
+    }
     val context = LocalContext.current
     val palette = rememberLiveChromePalette()
     val coroutineScope = rememberCoroutineScope()
     var coverToSave by remember { mutableStateOf<LiveRoomCardUiModel?>(null) }
+    var feedbackCard by remember { mutableStateOf<LiveRoomCardUiModel?>(null) }
+    var feedbackSource by remember { mutableStateOf<com.android.purebilibili.core.ui.components.AppGlassMenuSource?>(null) }
 
     val windowSizeClass = LocalWindowSizeClass.current
     val topChromePolicy = rememberAppTopChromePolicy()
@@ -433,16 +530,16 @@ fun LiveListScreen(
         resolveLiveVisualSpec(topChromePolicy.tabPresentation)
     }
     val metrics = visualSpec.homeMetrics
-    val contentWidth = if (windowSizeClass.isExpandedScreen) {
-        minOf(windowSizeClass.widthDp, visualSpec.maxContentWidthDp.dp)
-    } else {
-        windowSizeClass.widthDp
-    }
+    val contentWidth = windowSizeClass.widthDp
     val gridColumns = remember(contentWidth, windowSizeClass.isTablet) {
         resolveLiveBiliPaiGridColumns(contentWidth.value.toInt(), windowSizeClass.isTablet)
     }
     val gridBottomPadding = LocalBottomBarContentPadding.current
     val liveGridState = rememberLazyGridState()
+    val followRowState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LaunchedEffect(state.refreshCompletion) {
+        if (state.refreshCompletion > 0L) followRowState.scrollToItem(0)
+    }
     suspend fun scrollLiveHomeToTop() {
         val atTop = liveGridState.firstVisibleItemIndex == 0 &&
             liveGridState.firstVisibleItemScrollOffset < 50
@@ -462,73 +559,113 @@ fun LiveListScreen(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.backgroundBrush())
-    ) {
-        Column(
-            modifier = Modifier
-                .responsiveContentWidth(maxWidth = visualSpec.maxContentWidthDp.dp)
-                .fillMaxSize()
-                .then(if (embeddedInHome) Modifier.padding(top = contentTopPadding) else Modifier.statusBarsPadding())
+    // 顶部避让属于可滚动内容；视口保持全高，让卡片经过顶栏下方供模糊采样。
+    val liveContent: @Composable (androidx.compose.ui.unit.Dp) -> Unit = { topInset ->
+        AdaptivePullToRefreshBox(
+            isRefreshing = state.isLoading,
+            onRefresh = viewModel::refresh,
+            modifier = Modifier.fillMaxSize(),
+            indicatorTopInset = topInset,
         ) {
-            if (!embeddedInHome) {
-                LiveListHeader(
-                    metrics = metrics,
-                    livingCount = state.livingCount,
-                    primaryFace = state.followItems.firstOrNull()?.face.orEmpty(),
-                    showNavigationBack = showNavigationBack,
-                    onBack = onBack,
-                    onSearchClick = onSearchClick,
-                    onInboxClick = onFollowingClick,
-                    onAvatarClick = onAreaListClick
-                )
-            }
-            AdaptivePullToRefreshBox(
-                isRefreshing = state.isLoading,
-                onRefresh = viewModel::refresh,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-            ) {
-                LiveHomeContent(
-                    gridState = liveGridState,
-                    contentItems = state.contentItems,
-                    followItems = state.followItems,
-                    areaEntries = state.areaEntries,
-                    areaList = state.areaList,
-                    selectedAreaIndex = state.selectedAreaIndex,
-                    selectedParentAreaId = state.selectedParentAreaId,
-                    sortTags = state.sortTags,
-                    selectedSortType = state.selectedSortType,
-                    livingCount = state.livingCount,
-                    isLoading = state.isLoading,
-                    error = state.error,
-                    onRetry = viewModel::refresh,
-                    isLoadingMore = state.isLoadingMore,
-                    hasMore = state.hasMore,
-                    loadMoreError = state.loadMoreError,
-                    showFirstFrame = state.showFirstFrame,
-                    gridColumns = gridColumns,
-                    bottomPadding = gridBottomPadding,
-                    metrics = metrics,
-                    visualSpec = visualSpec,
-                    onLiveClick = onLiveClick,
-                    onUserClick = onUserClick,
-                    onAreaSelected = { index ->
+            LiveHomeContent(
+                gridState = liveGridState,
+                followRowState = followRowState,
+                contentItems = state.contentItems,
+                followItems = state.followItems,
+                areaEntries = state.areaEntries,
+                areaList = state.areaList,
+                selectedAreaIndex = state.selectedAreaIndex,
+                selectedParentAreaId = state.selectedParentAreaId,
+                sortTags = state.sortTags,
+                selectedSortType = state.selectedSortType,
+                livingCount = state.livingCount,
+                showFollowSection = accountIdentity.mid != null || state.followItems.isNotEmpty() || state.livingCount != null,
+                followError = state.followError,
+                isLoading = state.isLoading,
+                error = state.error,
+                onRetry = viewModel::refresh,
+                isLoadingMore = state.isLoadingMore,
+                hasMore = state.hasMore,
+                loadMoreError = state.loadMoreError,
+                showFirstFrame = state.showFirstFrame,
+                gridColumns = gridColumns,
+                bottomPadding = gridBottomPadding,
+                topPadding = topInset,
+                metrics = metrics,
+                visualSpec = visualSpec,
+                onLiveClick = onLiveClick,
+                onUserClick = onUserClick,
+                onAreaSelected = { index ->
+                    // 加载中允许改选：reloadSelection 用 epoch 让旧结果失效，旧请求不会写回。
+                    // 静默丢弃会让拖动松手后的选中被吞掉，指示器弹回旧分 Tab。
+                    if (index != state.selectedAreaIndex) {
                         viewModel.selectHomeArea(index)
                         coroutineScope.launch { liveGridState.scrollToItem(0) }
-                    },
-                    onToggleFirstFrame = viewModel::toggleShowFirstFrame,
-                    onAreaListClick = onAreaListClick,
-                    onMatchClick = onMatchClick,
-                    onSortTagSelected = viewModel::selectSortTag,
-                    onLoadMore = viewModel::loadMore,
-                    onAreaDetailClick = onAreaDetailClick,
-                    onFollowingClick = onFollowingClick,
-                    onLongPressCard = { coverToSave = it },
-                )
+                    }
+                },
+                onToggleFirstFrame = viewModel::toggleShowFirstFrame,
+                onAreaListClick = onAreaListClick,
+                onMatchClick = onMatchClick,
+                onSortTagSelected = { sort ->
+                    if (!state.isLoading) {
+                        viewModel.selectSortTag(sort)
+                        coroutineScope.launch { liveGridState.scrollToItem(0) }
+                    }
+                },
+                onLoadMore = viewModel::loadMore,
+                onAreaDetailClick = onAreaDetailClick,
+                onFollowingClick = onFollowingClick,
+                onLongPressCard = { coverToSave = it },
+                onFeedback = { card, source -> feedbackSource = source; feedbackCard = card },
+            )
+        }
+    }
+    if (embeddedInHome) {
+        // 首页负责顶栏及背景采样，嵌入页只提供内容内边距，不再缩短滚动视口。
+        Box(Modifier.fillMaxSize().background(palette.backgroundBrush())) {
+            liveContent(contentTopPadding)
+        }
+    } else {
+        ImmersiveAppScaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = palette.backgroundTop,
+            topBarSurfaceColor = palette.backgroundTop,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            blurContentReady = !(state.isLoading && state.contentItems.isEmpty()),
+            topBar = {
+                Box(
+                    Modifier.windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                    ),
+                ) {
+                    LiveListHeader(
+                        metrics = metrics,
+                        user = user,
+                        onAvatarClick = onAvatarClick,
+                        showNavigationBack = showNavigationBack,
+                        onBack = onBack,
+                        onSearchClick = onSearchClick,
+                        onAreaListClick = onAreaListClick,
+                    )
+                }
+            },
+        ) { padding ->
+            Box(
+                Modifier.fillMaxSize()
+                    .background(palette.backgroundBrush())
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+            ) {
+                liveContent(padding.calculateTopPadding())
             }
         }
+    }
+    feedbackCard?.let { card ->
+        LiveFeedbackDialog(
+            card = card,
+            source = feedbackSource,
+            onSubmit = { reason -> viewModel.submitFeedback(card.roomId, reason) },
+            onDismiss = { feedbackCard = null },
+        )
     }
     coverToSave?.let { card -> LiveCoverSaveDialog(card) { coverToSave = null } }
 
@@ -537,6 +674,7 @@ fun LiveListScreen(
 @Composable
 private fun LiveHomeContent(
     gridState: androidx.compose.foundation.lazy.grid.LazyGridState,
+    followRowState: androidx.compose.foundation.lazy.LazyListState,
     contentItems: List<LiveRoomItem>,
     followItems: List<LiveRoomItem>,
     areaEntries: List<com.android.purebilibili.data.model.response.LiveFeedAreaEntry>,
@@ -545,7 +683,9 @@ private fun LiveHomeContent(
     selectedParentAreaId: Int,
     sortTags: List<com.android.purebilibili.data.model.response.LiveSecondSortTag>,
     selectedSortType: String?,
-    livingCount: Int,
+    livingCount: Int?,
+    showFollowSection: Boolean,
+    followError: String?,
     isLoading: Boolean,
     error: String?,
     onRetry: () -> Unit,
@@ -555,6 +695,7 @@ private fun LiveHomeContent(
     showFirstFrame: Boolean,
     gridColumns: Int,
     bottomPadding: androidx.compose.ui.unit.Dp,
+    topPadding: androidx.compose.ui.unit.Dp,
     metrics: LiveBiliPaiHomeMetrics,
     visualSpec: LiveVisualSpec,
     onLiveClick: (Long, String, String) -> Unit,
@@ -567,7 +708,8 @@ private fun LiveHomeContent(
     onLoadMore: () -> Unit,
     onAreaDetailClick: (Int, Int, String) -> Unit,
     onFollowingClick: () -> Unit,
-    onLongPressCard: (LiveRoomCardUiModel) -> Unit = {}
+    onLongPressCard: (LiveRoomCardUiModel) -> Unit = {},
+    onFeedback: (LiveRoomCardUiModel, com.android.purebilibili.core.ui.components.AppGlassMenuSource) -> Unit = { _, _ -> },
 ) {
     val selectedParent = areaList.firstOrNull { it.id == selectedParentAreaId }
         ?: areaList.firstOrNull {
@@ -575,34 +717,42 @@ private fun LiveHomeContent(
         }
 
     LazyVerticalGrid(
-        columns = GridCells.Fixed(gridColumns),
+        columns = LiveRoomGridCells(),
         state = gridState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = metrics.safeSpaceDp.dp,
             end = metrics.safeSpaceDp.dp,
-            top = metrics.cardSpaceDp.dp,
-            bottom = bottomPadding
+            top = topPadding + metrics.cardSpaceDp.dp,
+            bottom = maxOf(bottomPadding, 100.dp)
         ),
         horizontalArrangement = Arrangement.spacedBy(metrics.cardSpaceDp.dp),
         verticalArrangement = Arrangement.spacedBy(metrics.cardSpaceDp.dp)
     ) {
-        if (followItems.isNotEmpty() || livingCount > 0) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
+        if (showFollowSection) {
+            item(key = "live_follow_header", span = { GridItemSpan(maxLineSpan) }) {
                 LiveFollowHeader(
                     livingCount = livingCount,
-                    onActionClick = onFollowingClick
+                    onActionClick = onFollowingClick,
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            if (followItems.isNotEmpty()) item(key = "live_follow_avatars", span = { GridItemSpan(maxLineSpan) }) {
                 LiveFollowAvatarRow(
                     items = followItems,
+                    listState = followRowState,
                     metrics = metrics,
                     onLiveClick = onLiveClick,
                     onUserClick = onUserClick,
                     onFollowingClick = onFollowingClick,
-                    showMore = livingCount > followItems.size,
+                    showMore = (livingCount ?: 0) > followItems.size,
                 )
+            }
+        }
+        if (showFollowSection && followError != null) item(key = "live_follow_error", span = { GridItemSpan(maxLineSpan) }) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                AppText(followError, modifier = Modifier.weight(1f), color = rememberLiveChromePalette().secondaryText)
+                AppTextButton(onClick = onRetry) { AppText("重试") }
             }
         }
         item(key = "live_categories", span = { GridItemSpan(maxLineSpan) }) {
@@ -616,7 +766,7 @@ private fun LiveHomeContent(
                 onMatchClick = onMatchClick,
             )
         }
-        if (selectedAreaIndex > LIVE_HOME_FOLLOWED_INDEX && sortTags.isNotEmpty()) {
+        if (selectedParentAreaId > 0 && sortTags.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     LiveSortTagChipRow(
                         tags = sortTags,
@@ -652,7 +802,8 @@ private fun LiveHomeContent(
                         model = model,
                         enableSharedCoverTransition = true,
                         onClick = { onLiveClick(item.roomId, item.title, item.uname) },
-                        onLongPress = { onLongPressCard(model) }
+                        onLongPress = { onLongPressCard(model) },
+                        onFeedback = { source -> onFeedback(model, source) },
                     )
                 }
             }
@@ -674,13 +825,12 @@ private fun LiveHomeContent(
 @Composable
 private fun LiveListHeader(
     metrics: LiveBiliPaiHomeMetrics,
-    livingCount: Int,
-    primaryFace: String,
+    user: com.android.purebilibili.feature.home.UserState,
+    onAvatarClick: () -> Unit,
     showNavigationBack: Boolean,
     onBack: () -> Unit,
     onSearchClick: () -> Unit,
-    onInboxClick: () -> Unit,
-    onAvatarClick: () -> Unit
+    onAreaListClick: () -> Unit
 ) {
     val palette = rememberLiveChromePalette()
     val compactChrome = rememberAppTopChromePolicy().compactChromeSpec
@@ -712,13 +862,20 @@ private fun LiveListHeader(
                     }
                 }
             } else {
-                AppText(
-                    text = "直播",
-                    color = palette.primaryText,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(end = AppSpacingTokens.ExtraSmall),
-                )
+                // 头像在玻璃与原生主题中共用账号来源和尺寸，材质由顶栏容器负责。
+                AppSurface(
+                    onClick = onAvatarClick,
+                    color = Color.Transparent,
+                    shape = CircleShape,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    com.android.purebilibili.feature.home.components.HomeTopAvatarContent(
+                        user = user,
+                        shape = CircleShape,
+                        fallbackBackgroundColor = palette.surface,
+                        modifier = Modifier.padding(4.dp),
+                    )
+                }
             }
             AppSurface(
                 onClick = onSearchClick,
@@ -747,63 +904,22 @@ private fun LiveListHeader(
                     )
                 }
             }
-            Box {
-                AppSurface(
-                    onClick = onInboxClick,
-                    color = Color.Transparent,
-                    shape = CircleShape,
-                    modifier = Modifier.size(AppSpacingTokens.TripleExtraLarge)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        AppIcon(
-                            imageVector = Icons.Outlined.Subscriptions,
-                            contentDescription = "关注直播",
-                            tint = palette.primaryText
-                        )
-                    }
-                }
-                if (livingCount > 0) {
-                    AppBadge(
-                        containerColor = palette.accentStrong,
-                        contentColor = palette.onAccent,
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) {
-                        AppText(
-                            text = if (livingCount > 99) "99+" else livingCount.toString(),
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-            }
-            Box(
+            // 关注直播入口收敛到页内「已关注」分类与关注主播行，头部不再重复；
+            // 分区入口使用诚实的分区图标，不再用关注主播头像伪装。
+            AppSurface(
+                onClick = onAreaListClick,
+                color = Color.Transparent,
+                shape = CircleShape,
                 modifier = Modifier
                     .size(AppSpacingTokens.TripleExtraLarge)
-                    .clickable(onClick = onAvatarClick)
-                    .semantics { contentDescription = "全部直播分区" },
-                contentAlignment = Alignment.Center,
+                    .semantics { contentDescription = "全部直播分区" }
             ) {
-                AppSurface(
-                    color = palette.surfaceMuted,
-                    shape = CircleShape,
-                    modifier = Modifier.size(compactChrome.secondaryButtonSizeDp.dp)
-                ) {
-                    if (primaryFace.isNotBlank()) {
-                        AsyncImage(
-                            model = primaryFace,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Box(contentAlignment = Alignment.Center) {
-                            AppText(
-                                text = "LIVE",
-                                color = palette.primaryText,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
+                Box(contentAlignment = Alignment.Center) {
+                    AppIcon(
+                        imageVector = Icons.Outlined.Apps,
+                        contentDescription = "全部直播分区",
+                        tint = palette.primaryText
+                    )
                 }
             }
         }
@@ -812,32 +928,29 @@ private fun LiveListHeader(
 
 @Composable
 private fun LiveFollowHeader(
-    livingCount: Int,
-    onActionClick: () -> Unit
+    livingCount: Int?,
+    onActionClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val palette = rememberLiveChromePalette()
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.Bottom) {
-            AppText(
-                text = "我的关注  ",
-                color = palette.primaryText,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Medium
-            )
-            AppText(
-                text = livingCount.toString(),
-                color = palette.accentStrong,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            AppText(
-                text = " 人正在直播",
-                color = palette.secondaryText,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        AppText(
+            text = androidx.compose.ui.text.buildAnnotatedString {
+                append("我的关注  ")
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = palette.accentStrong))
+                append(livingCount?.toString() ?: "—")
+                pop()
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = palette.secondaryText))
+                append(" 人正在直播")
+                pop()
+            },
+            modifier = Modifier.weight(1f),
+            color = palette.primaryText,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Row(
             modifier = Modifier.clickable(onClick = onActionClick),
             verticalAlignment = Alignment.CenterVertically
@@ -861,6 +974,7 @@ private fun LiveFollowHeader(
 @Composable
 private fun LiveFollowAvatarRow(
     items: List<LiveRoomItem>,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     metrics: LiveBiliPaiHomeMetrics,
     onLiveClick: (Long, String, String) -> Unit,
     onUserClick: (Long) -> Unit,
@@ -868,11 +982,12 @@ private fun LiveFollowAvatarRow(
     showMore: Boolean,
 ) {
     val palette = rememberLiveChromePalette()
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(AppSpacingTokens.Small)) {
+    LazyRow(state = listState) {
         items(items, key = { it.roomId }) { item ->
             Column(
                 modifier = Modifier
                     .width(metrics.followItemExtentDp.dp)
+                    .liveSecondaryClick { if (item.uid > 0) onUserClick(item.uid) }
                     .combinedClickable(
                         onClick = { onLiveClick(item.roomId, item.title, item.uname) },
                         onLongClick = { if (item.uid > 0) onUserClick(item.uid) },
@@ -882,10 +997,9 @@ private fun LiveFollowAvatarRow(
                 Box(contentAlignment = Alignment.Center) {
                     Box(
                         modifier = Modifier
-                            .size((metrics.followAvatarSizeDp + 5).dp)
-                            .clip(CircleShape)
-                            .background(palette.accentStrong)
-                            .padding(AppSpacingTokens.Micro)
+                            .size((metrics.followAvatarSizeDp + 4).dp)
+                            .then(if (item.liveStatus == 1) Modifier.border(1.5.dp, palette.accentStrong, CircleShape) else Modifier)
+                            .padding(2.dp)
                     ) {
                         AsyncImage(
                             model = item.face.ifBlank { item.cover },
@@ -897,12 +1011,30 @@ private fun LiveFollowAvatarRow(
                                 .background(palette.surface)
                         )
                     }
+                    if (item.liveStatus == 1) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(22.dp)
+                                .background(palette.accentStrong, CircleShape)
+                                .border(1.5.dp, palette.backgroundTop, CircleShape)
+                                .padding(5.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            com.android.purebilibili.core.ui.components.PlaybackBarsIndicator(
+                                isPlaying = true,
+                                color = Color.White,
+                                contentDescription = "正在直播",
+                                modifier = Modifier.size(12.dp),
+                            )
+                        }
+                    }
                 }
-                Spacer(Modifier.height(AppSpacingTokens.Small))
+                Spacer(Modifier.height(6.dp))
                 AppText(
                     text = item.uname,
                     color = palette.primaryText,
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 12.sp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
@@ -942,80 +1074,84 @@ private fun LiveAreaHomeChipRow(
             }
         }
     }
-    val selectedCategory = categoryOptions
-        .firstOrNull { it.value == selectedAreaIndex }
-        ?.value
-        ?: LIVE_HOME_RECOMMEND_INDEX
-    val uiStyle = LocalAppUiStyle.current
+    val selectedCategory = selectedAreaIndex
+    val quickActionColors = AppIconButtonDefaults.colors(
+        containerColor = com.android.purebilibili.core.ui.AppSurfaceTokens.secondaryContainer(),
+        contentColor = com.android.purebilibili.core.ui.AppSurfaceTokens.onSecondaryContainer(),
+    )
     val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
-    // The 82dp compact-chrome slot belongs to native Miuix. Glass categories should use
-    // the common text measurement rather than inherit that larger fixed minimum.
-    val categoryMinWidth = if (liquidGlassEnabled) {
-        // Short category labels should stay close to the rail's leading edge;
-        // the touch-target wrapper still preserves accessible hit regions.
-        40.dp
-    } else if (uiStyle == AppUiStyle.MATERIAL3) {
-        AppChromeSizeTokens.MinimumTouchTarget
-    } else {
-        rememberAppTopChromePolicy()
-            .compactChromeSpec
-            .let(::resolveLiveHomeCategorySegmentedControlSpec)
-            .itemWidthDp
-            ?.dp
-            ?: 82.dp
-    }
-
-    // MD3 follows the app-wide animated underline. Miuix uses the shared moving
-    // capsule, which automatically opts into global liquid-glass reuse when enabled.
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppThemeAdaptiveTabRow(
-            role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
-            centerContent = false,
-            options = categoryOptions,
-            selectedValue = selectedCategory,
-            onSelectionChange = onAreaSelected,
-            scrollable = true,
-            minTabWidth = categoryMinWidth,
-            liquidGlassLabelHorizontalPadding = if (liquidGlassEnabled) 4.dp else null,
-            // Keep the first/last capsule inset equal to the rail inset, even for 推荐.
-            liquidGlassAdaptIndicatorToLabel = false,
-            modifier = Modifier.weight(1f),
-        )
-        AppIconButton(
+        if (liquidGlassEnabled) {
+            AppThemeAdaptiveTabRow(
+                role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
+                centerContent = false,
+                options = categoryOptions,
+                selectedValue = selectedCategory,
+                onSelectionChange = onAreaSelected,
+                scrollable = true,
+                minTabWidth = 40.dp,
+                liquidGlassLabelHorizontalPadding = 4.dp,
+                // 直播分类长短差异明显，玻璃指示器显式随标签宽度变化；
+                // 标签集合异步更新时仍平滑调整槽宽，关闭玻璃后沿用原生标签布局。
+                liquidGlassAdaptIndicatorToLabel = true,
+                liquidGlassAnimateLabelWidthChanges = true,
+                modifier = Modifier.weight(1f),
+            )
+        } else {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(end = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(categoryOptions, key = { it.value }) { option ->
+                    LiveHomeSelectableChip(
+                        label = option.label,
+                        selected = option.value == selectedCategory,
+                        onClick = { onAreaSelected(option.value) },
+                    )
+                }
+            }
+        }
+        AppFilledIconButton(
             onClick = onToggleFirstFrame,
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(26.dp),
+            colors = quickActionColors,
         ) {
             AppIcon(
                 imageVector = if (showFirstFrame) {
-                    Icons.Outlined.Photo
+                    LiveFirstFrameIcon
                 } else {
-                    Icons.Outlined.Image
+                    Icons.Filled.Image
                 },
                 contentDescription = if (showFirstFrame) "显示封面" else "显示首帧",
                 modifier = Modifier.size(18.dp),
             )
         }
-        AppIconButton(
+        Spacer(Modifier.width(8.dp))
+        AppFilledIconButton(
             onClick = onMatchClick,
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(26.dp),
+            colors = quickActionColors,
         ) {
             AppIcon(
-                imageVector = Icons.Outlined.SportsEsports,
+                imageVector = Icons.Filled.Gamepad,
                 contentDescription = "游戏赛事",
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(16.dp),
             )
         }
-        AppIconButton(
+        Spacer(Modifier.width(8.dp))
+        AppFilledIconButton(
             onClick = onAreaListClick,
-            modifier = Modifier.size(40.dp),
+            modifier = Modifier.size(26.dp),
+            colors = quickActionColors,
         ) {
             AppIcon(
-                imageVector = Icons.Outlined.Widgets,
+                imageVector = Icons.Filled.Widgets,
                 contentDescription = "全部标签",
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(16.dp),
             )
         }
     }
@@ -1039,28 +1175,33 @@ internal fun LiveSortTagChipRow(
     val selectedValue = selectedSortType
         ?.takeIf { selected -> options.any { it.value == selected } }
         ?: options.first().value
-    val uiStyle = LocalAppUiStyle.current
     val liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
-    val sortTagMinWidth = if (liquidGlassEnabled || uiStyle == AppUiStyle.MATERIAL3) {
-        AppChromeSizeTokens.MinimumTouchTarget
+    if (liquidGlassEnabled) {
+        AppThemeAdaptiveTabRow(
+            // 排序标签与分类共用玻璃动态宽度策略，原生分支保留自身布局。
+            liquidGlassAdaptIndicatorToLabel = true,
+            liquidGlassAnimateLabelWidthChanges = true,
+            role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
+            centerContent = false,
+            options = options,
+            selectedValue = selectedValue,
+            onSelectionChange = { onSortTagSelected(it.takeIf(String::isNotBlank)) },
+            scrollable = true,
+            minTabWidth = 40.dp,
+            modifier = Modifier.fillMaxWidth(),
+        )
     } else {
-        72.dp
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(options, key = { it.value }) { option ->
+                LiveHomeSelectableChip(
+                    label = option.label,
+                    selected = selectedValue == option.value,
+                    onClick = { onSortTagSelected(option.value.takeIf(String::isNotBlank)) },
+                    compact = true,
+                )
+            }
+        }
     }
-    AppThemeAdaptiveTabRow(
-        // Glass indicator fills the measured slot; native geometry keeps its defaults.
-        liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
-        role = com.android.purebilibili.core.ui.components.AppTabRowRole.FILTER,
-        // This filter owns the full row. The category row beside action buttons keeps its start anchor.
-        centerContent = LocalWindowSizeClass.current.let { it.isTabletDevice && it.isTablet },
-        options = options,
-        selectedValue = selectedValue,
-        onSelectionChange = { value ->
-            onSortTagSelected(value.takeIf { it.isNotBlank() })
-        },
-        scrollable = true,
-        minTabWidth = sortTagMinWidth,
-        modifier = Modifier.fillMaxWidth(),
-    )
 }
 
 @Composable
@@ -1103,7 +1244,7 @@ private fun LiveAreaChildChipRow(
     parentAreaId: Int,
     onAreaDetailClick: (Int, Int, String) -> Unit
 ) {
-    LazyRow(horizontalArrangement = Arrangement.spacedBy(AppSpacingTokens.Small)) {
+    LazyRow {
         items(items, key = { it.id }) { child ->
             LiveHomeSelectableChip(
                 label = child.name,
@@ -1205,4 +1346,5 @@ private fun LiveRoomItem.toLiveRoomCardUiModel(preferFirstFrame: Boolean) = Live
     viewerCount = online,
     viewerText = viewerText,
     areaName = areaName,
+    feedback = feedback,
 )

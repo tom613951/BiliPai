@@ -6,7 +6,6 @@ package com.android.purebilibili.feature.video.player
 import coil3.request.allowHardware
 import coil3.request.transformations
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.RemoteAction
@@ -26,7 +25,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.VideoSize
@@ -88,7 +86,6 @@ import com.android.purebilibili.feature.video.usecase.togglePlayerPlaybackFromUs
 
 private const val TAG = "MiniPlayerManager"
 private const val NOTIFICATION_ID = 1002
-private const val CHANNEL_ID = "mini_player_channel"
 private const val FOREGROUND_START_DEBOUNCE_MS = 1500L
 private const val USER_LEAVE_HINT_WINDOW_MS = 1500L
 private const val SESSION_COMMAND_SKIP_TO_PREVIOUS = "SKIP_TO_PREVIOUS"
@@ -405,13 +402,20 @@ internal fun shouldRefreshNotificationOnPlaybackStateChange(
     return isActive && title.isNotBlank()
 }
 
+/** A buffering player that is about to play still owns the media session; removing its
+ * notification makes some system media panels send `stop` and leaves the player idle. */
 internal fun shouldKeepPlaybackNotificationVisible(
     isActive: Boolean,
     title: String,
     isPlaying: Boolean,
-    appInBackground: Boolean
+    appInBackground: Boolean,
+    isStartingPlayback: Boolean = false
 ): Boolean {
-    return isActive && title.isNotBlank() && (isPlaying || appInBackground)
+    return isActive && title.isNotBlank() && (isPlaying || isStartingPlayback || appInBackground)
+}
+
+internal fun isPlayerStartingPlayback(playWhenReady: Boolean, playbackState: Int): Boolean {
+    return playWhenReady && playbackState == Player.STATE_BUFFERING
 }
 
 internal fun shouldClearStalePlaybackNotificationOnAppResume(
@@ -899,10 +903,21 @@ class MiniPlayerManager private constructor(private val context: Context) :
         remoteReclaimMutex.withLock {
             remoteTransferJob?.cancel()
             remoteTransferJob?.join()
-            if (!remoteAudio.active) recoverRemoteAudioIfPresentLocked(failOnError = true)
-            if (!remoteAudio.active) return@withLock null
-            remotePreferencesJob?.cancel()
-            val state = remoteAudio.reclaim() ?: return@withLock null
+            val state = try {
+                if (!remoteAudio.active) recoverRemoteAudioIfPresentLocked(failOnError = true)
+                if (!remoteAudio.active) return@withLock null
+                remotePreferencesJob?.cancel()
+                remoteAudio.reclaim() ?: return@withLock null
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // An unresponsive audio process must not keep the video page from loading.
+                // Stopping the service also stops its playback, so local audio cannot double up.
+                Logger.w(TAG, "Background audio did not return; stopping it before video playback", e)
+                remotePreferencesJob?.cancel()
+                remoteAudio.close()
+                return@withLock null
+            }
             state.current?.let { item ->
                 com.android.purebilibili.core.player.PlaybackProgressManager.getInstance(context).apply {
                     // A return near the beginning must replace an older (>5s) cached position too.
@@ -986,6 +1001,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
     private var notificationThemeJob: Job? = null
     private var notificationThemeSettings: AppThemeSettings? = null
     private var notificationThemeMetadata: Pair<String, String>? = null
+    internal var onNotificationRefreshRequested: (() -> Unit)? = null
     
     // 🔋 [后台优化] 低内存模式状态
     private var isLowMemoryMode = false
@@ -1440,6 +1456,9 @@ class MiniPlayerManager private constructor(private val context: Context) :
     var isActive by mutableStateOf(false)
         private set
     
+    var miniPlayerSessionId by mutableLongStateOf(0L)
+        private set
+
     var isMiniMode by mutableStateOf(false)
         private set
 
@@ -1628,6 +1647,10 @@ class MiniPlayerManager private constructor(private val context: Context) :
             Logger.d(TAG, "clearExternalPlayerIfMatches: cleared external player ${target.hashCode()}")
             target.removeListener(playerListener)
             _externalPlayer = null
+            // 会话包装器也持有播放器；只释放仍绑定该实例的会话。
+            if (mediaSession?.let { !shouldRebindMediaSessionPlayer(it.player, target) } == true) {
+                releaseMediaSession()
+            }
             return true
         }
         return false
@@ -2119,6 +2142,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
             playbackServiceRequested = false
             _externalPlayer?.removeListener(playerListener)
             _externalPlayer = null
+            releaseMediaSession()
             clearPlaybackNotificationArtifacts()
             Logger.d(TAG, "🔧 标记 isActive=false，清除外部播放器引用")
         }
@@ -2331,9 +2355,26 @@ class MiniPlayerManager private constructor(private val context: Context) :
         return audioPlayer
     }
 
+    /** 返回列表前交接当前直播播放器；不重新请求播放地址或创建播放器。 */
+    fun prepareLiveMiniPlayerOnExit(roomId: Long, enabled: Boolean): Boolean {
+        val currentPlayer = player ?: return false
+        if (!com.android.purebilibili.feature.live.shouldAutoEnterLiveMiniPlayer(
+                enabled = enabled,
+                isActive = isActive,
+                isMatchingLiveRoom = isLiveMode && roomId > 0L && currentRoomId == roomId,
+                playWhenReady = currentPlayer.playWhenReady,
+                playbackState = currentPlayer.playbackState,
+                stopPlaybackOnExit = SettingsManager.getStopPlaybackOnExitSync(context),
+            )
+        ) return false
+        // 直播独立偏好允许应用内接管，不依赖普通视频选择的小窗模式。
+        enterMiniMode(forced = true)
+        return isMiniMode
+    }
+
     /**
-     * 进入小窗模式
-     * @param forced 强制进入（点击小窗按钮时使用），忽略模式检查
+     * 进入小窗模式。
+     * @param forced 显式小窗入口或独立直播偏好允许时跳过普通视频模式检查。
      */
     fun enterMiniMode(forced: Boolean = false) {
         val mode = getCurrentMode()
@@ -2359,6 +2400,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
         } == true
         Logger.d(TAG) { "📲 Entering mini mode for video: $currentTitle (forced=$forced)" }
         isLeavingByNavigation = false
+        if (!isMiniMode) miniPlayerSessionId++
         isMiniMode = true
         // Detail-session handoff may have muted the shared player; always restore for mini window.
         currentPlayer?.let(PlayerVolumeController::applyPreferredVolume)
@@ -2601,6 +2643,8 @@ class MiniPlayerManager private constructor(private val context: Context) :
         fromLeft: Boolean = false
     ) {
         Logger.d(TAG, "📺 setLiveInfo: roomId=$roomId, title=$title, uname=$uname")
+        val keepMiniMode = isMiniMode && isLiveMode && currentRoomId == roomId &&
+            isPlayerManaged(externalPlayer)
         currentRoomId = roomId
         currentTitle = title
         currentCover = cover
@@ -2615,7 +2659,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
         
         replaceExternalPlayer(externalPlayer)
         isActive = true
-        isMiniMode = false
+        isMiniMode = keepMiniMode
 
         updateMediaSession(externalPlayer)
         optimizeReplacementPlayerIfInBackground()
@@ -3176,7 +3220,6 @@ class MiniPlayerManager private constructor(private val context: Context) :
 
     private fun pushNotification(title: String, artist: String, bitmap: Bitmap?) {
         if (remoteAudio.active) return
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationIsPlaying = resolveNotificationIsPlaying(
             playerIsPlaying = player?.isPlaying,
             cachedIsPlaying = isPlaying
@@ -3186,7 +3229,11 @@ class MiniPlayerManager private constructor(private val context: Context) :
                 isActive = isActive,
                 title = title,
                 isPlaying = notificationIsPlaying,
-                appInBackground = BackgroundManager.isInBackground
+                appInBackground = BackgroundManager.isInBackground,
+                // Cold-start artwork can arrive while the first segments are still buffering.
+                isStartingPlayback = player?.let {
+                    isPlayerStartingPlayback(it.playWhenReady, it.playbackState)
+                } == true
             )
         ) {
             playbackServiceRequested = false
@@ -3214,103 +3261,29 @@ class MiniPlayerManager private constructor(private val context: Context) :
                 }
             }
         }
-        val themeSettings = notificationThemeSettings ?: return
+        if (notificationThemeSettings == null) return
+        requestForegroundServiceIfNeeded()
+        onNotificationRefreshRequested?.invoke()
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (notificationManager.getNotificationChannel(CHANNEL_ID) == null) {
-                val channel = NotificationChannel(CHANNEL_ID, "小窗播放", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "小窗播放控制"
-                    setShowBadge(false)
-                    setSound(null, null)
-                }
-                notificationManager.createNotificationChannel(channel)
-            }
+    /** 只补充品牌外观和当前内容；播放状态、按钮和通知发布由媒体服务负责。 */
+    internal fun decoratePlaybackNotification(notification: android.app.Notification): android.app.Notification {
+        val builder = android.app.Notification.Builder.recoverBuilder(context, notification)
+            .setSmallIcon(resolveNotificationIconResByPriority(
+                launcherIconRes = resolveLaunchActivityIconRes(context),
+                fallbackIconKey = SettingsManager.getAppIconSync(context),
+            ))
+            .setContentTitle(currentTitle)
+            .setContentText(currentOwner)
+            .setContentIntent(PendingIntent.getActivity(
+                context, 0, resolveActivePlaybackLaunchIntent(context, currentBvid),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            ))
+        cachedArtworkBitmap?.let { builder.setLargeIcon(it) }
+        notificationThemeSettings?.let { settings ->
+            builder.setColor(resolvePlaybackNotificationColor(context, settings)).setColorized(true)
         }
-
-        val compactActionOrder = resolveExternalTransportActionOrder()
-        val style = mediaSession?.let { session ->
-            androidx.media3.session.MediaStyleNotificationHelper.MediaStyle(session)
-                .setShowActionsInCompactView(0, 1, 2)
-        }
-
-        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(
-                resolveNotificationIconResByPriority(
-                    launcherIconRes = resolveLaunchActivityIconRes(context),
-                    fallbackIconKey = SettingsManager.getAppIconSync(context)
-                )
-            )
-            .setContentTitle(title)
-            .setContentText(artist)
-            .setLargeIcon(effectiveArtworkBitmap)
-            .setColor(resolvePlaybackNotificationColor(context, themeSettings))
-            .setColorized(true)
-            .setOngoing(notificationIsPlaying)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(mediaSession?.sessionActivity)
-            .apply {
-                style?.let(::setStyle)
-            }
-        
-        // 🎯 [修复] 确保点击通知本体也能正确跳转（覆盖 setContentIntent 作为双重保障）
-        val intent = resolveActivePlaybackLaunchIntent(context, currentBvid)
-        val contentIntent = PendingIntent.getActivity(
-            context, 0, intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        builder.setContentIntent(contentIntent)
-        
-        compactActionOrder.forEach { actionType ->
-            val intent = android.app.PendingIntent.getForegroundService(
-                context,
-                actionType,
-                android.content.Intent(context, PlaybackService::class.java)
-                    .setAction(PlaybackService.ACTION_MEDIA_CONTROL)
-                    .putExtra(EXTRA_CONTROL_TYPE, actionType),
-                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            val action = when (actionType) {
-                ACTION_NEXT -> NotificationCompat.Action.Builder(
-                    android.R.drawable.ic_media_next,
-                    "下一曲",
-                    intent
-                ).build()
-                ACTION_PLAY_PAUSE -> {
-                    val playPauseIcon = if (notificationIsPlaying) {
-                        android.R.drawable.ic_media_pause
-                    } else {
-                        android.R.drawable.ic_media_play
-                    }
-                    val playPauseText = if (notificationIsPlaying) "暂停" else "播放"
-                    NotificationCompat.Action.Builder(
-                        playPauseIcon,
-                        playPauseText,
-                        intent
-                    ).build()
-                }
-                ACTION_PREVIOUS -> NotificationCompat.Action.Builder(
-                    android.R.drawable.ic_media_previous,
-                    "上一曲",
-                    intent
-                ).build()
-                else -> null
-            }
-            if (action != null) {
-                builder.addAction(action)
-            }
-        }
-
-        try {
-            val notification = builder.build()
-            currentNotification = notification
-            
-            requestForegroundServiceIfNeeded()
-            
-            notificationManager.notify(NOTIFICATION_ID, notification)
-        } catch (e: Exception) {
-            com.android.purebilibili.core.util.Logger.e(TAG, "Failed to show notification", e)
-        }
+        return builder.build().also { currentNotification = it }
     }
 
     private fun requestForegroundServiceIfNeeded() {

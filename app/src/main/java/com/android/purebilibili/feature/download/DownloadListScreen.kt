@@ -1,12 +1,22 @@
 package com.android.purebilibili.feature.download
 
+import com.android.purebilibili.core.util.rememberHapticFeedback
+import com.android.purebilibili.core.util.HapticType
+
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.appElasticPress
 
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import com.android.purebilibili.core.ui.components.AppCheckbox
+import com.android.purebilibili.core.ui.components.AppTextButton
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
-import com.android.purebilibili.core.ui.animation.jiggleOnDissolve
 import com.android.purebilibili.core.ui.components.VideoListLayoutToggle
 import com.android.purebilibili.core.ui.components.resolveVideoListColumns
 import com.android.purebilibili.core.ui.components.rememberVideoListLayoutControl
@@ -22,7 +32,8 @@ import com.android.purebilibili.core.ui.AppAlertDialog
 import com.android.purebilibili.core.ui.AppSpacingTokens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import com.android.purebilibili.core.ui.components.appActionClickable
+import com.android.purebilibili.core.ui.components.appActionWithFeedback
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -75,6 +86,11 @@ fun DownloadListScreen(
 ) {
     val context = LocalContext.current
     val actionScope = rememberCoroutineScope()
+    val deleteDialogExitDelayMs = if (com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
+        com.android.purebilibili.core.ui.AppGlassPopupMotionSpec.UnanchoredExitMillis.toLong()
+    } else 0L
+    var deletingTaskId by remember { mutableStateOf<String?>(null) }
+    val downloadHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.REFRESH)
     val listLayout = rememberVideoListLayoutControl(defaultSingleColumn = true)
     val gridState = rememberLazyGridState()
     val columns = resolveVideoListColumns(
@@ -89,6 +105,26 @@ fun DownloadListScreen(
     val taskList = remember(tasks) { tasks.values.toList().sortedByDescending { it.createdAt } }
     var pendingDeleteTask by remember { mutableStateOf<com.android.purebilibili.feature.download.DownloadTask?>(null) }
     var dissolvingTaskIds by remember { mutableStateOf(setOf<String>()) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedTaskIds by remember { mutableStateOf(emptySet<String>()) }
+    var pendingBatchDeleteIds by remember { mutableStateOf(emptySet<String>()) }
+    var deletingBatch by remember { mutableStateOf(false) }
+    val completedTaskIds = remember(taskList, dissolvingTaskIds) {
+        taskList.filter { it.isComplete && it.id !in dissolvingTaskIds }.map { it.id }.toSet()
+    }
+    val selectedCompletedIds = selectedTaskIds.intersect(completedTaskIds)
+    val exitSelection = {
+        selectionMode = false
+        selectedTaskIds = emptySet<String>()
+        pendingBatchDeleteIds = emptySet<String>()
+    }
+    BackHandler(enabled = selectionMode) {
+        if (!deletingBatch) exitSelection()
+    }
+    LaunchedEffect(completedTaskIds) {
+        selectedTaskIds = selectedTaskIds.intersect(completedTaskIds)
+        if (completedTaskIds.isEmpty() && !deletingBatch) exitSelection()
+    }
     val currentDir = resolveDisplayedDownloadLocation(
         defaultManagedPath = remember(context) { SettingsManager.getDefaultDownloadPath(context) },
         customManagedPath = customDownloadPath,
@@ -126,16 +162,29 @@ fun DownloadListScreen(
     AppScaffold(
         topBar = {
             AppTopBar(
-                title = "离线缓存",
+                title = if (selectionMode) "已选 ${selectedCompletedIds.size} 项" else "离线缓存",
                 navigationIcon = {
-                    AppIconButton(onClick = onBack) {
+                    AppIconButton(onClick = {
+                        if (selectionMode) {
+                            if (!deletingBatch) exitSelection()
+                        } else onBack()
+                    }) {
                         AppIcon(rememberAppBackIcon(), contentDescription = "返回")
                     }
                 },
                 actions = {
                     val hasActive = taskList.any(::shouldPauseAllInclude)
                     val hasResumable = taskList.any(::shouldContinueAllInclude)
-                    if (hasActive || hasResumable) {
+                    if (selectionMode) {
+                        AppTextButton(onClick = exitSelection, enabled = !deletingBatch) {
+                            AppText("完成")
+                        }
+                    } else if (completedTaskIds.isNotEmpty()) {
+                        AppTextButton(onClick = { selectionMode = true }) {
+                            AppText("管理")
+                        }
+                    }
+                    if (!selectionMode && (hasActive || hasResumable)) {
                         androidx.compose.material3.TextButton(onClick = {
                             actionScope.launch {
                                 if (hasActive) {
@@ -214,24 +263,57 @@ fun DownloadListScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                if (selectionMode) {
+                    item(key = "batch_management", span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AppTextButton(
+                                enabled = !deletingBatch && completedTaskIds.isNotEmpty(),
+                                onClick = {
+                                    selectedTaskIds = if (selectedCompletedIds == completedTaskIds) {
+                                        emptySet()
+                                    } else completedTaskIds
+                                },
+                            ) {
+                                AppText(if (selectedCompletedIds == completedTaskIds) "取消全选" else "全选")
+                            }
+                            Spacer(Modifier.weight(1f))
+                            AppTextButton(
+                                enabled = !deletingBatch && selectedCompletedIds.isNotEmpty(),
+                                onClick = { pendingBatchDeleteIds = selectedCompletedIds.toSet() },
+                            ) {
+                                AppText(if (deletingBatch) "删除中…" else "删除 (${selectedCompletedIds.size})")
+                            }
+                        }
+                    }
+                }
                 items(taskList, key = { it.id }) { task ->
                     val isDissolving = task.id in dissolvingTaskIds
                     AnimatedVideoListItem(modifier = videoListItemModifier(), enabled = true, useLookaheadBounds = false) {
                     com.android.purebilibili.core.ui.animation.MaybeDissolvableVideoCard(
                         isDissolving = isDissolving,
                         onDissolveComplete = {
-                            dissolvingTaskIds = dissolvingTaskIds - task.id
                             actionScope.launch {
-                                DownloadManager.removeTask(task.id)
-                                pendingDeleteTask = null
+                                try {
+                                    DownloadManager.removeTask(task.id)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    android.util.Log.e("DownloadList", "Failed to delete cache task ${task.id}", error)
+                                    Toast.makeText(context, "删除失败，请重试", Toast.LENGTH_SHORT).show()
+                                } finally {
+                                    dissolvingTaskIds = dissolvingTaskIds - task.id
+                                    deletingTaskId = null
+                                }
                             }
                         },
                         cardId = task.id,
                         preset = com.android.purebilibili.core.ui.animation.DissolveAnimationPreset.TELEGRAM_FAST,
-                        modifier = Modifier.jiggleOnDissolve(
-                            cardId = task.id,
-                            isCurrentCardDissolving = isDissolving,
-                        ),
+                        // 删除只作用于当前卡片，避免相邻内容在磨砂背景中持续抖动。
+                        publishGlobalDissolveState = false,
+                        keepInvisibleAfterDissolve = true,
                     ) {
                         val playableOffline = remember(task.filePath, task.status) {
                             isDownloadTaskPlayableOffline(task)
@@ -240,7 +322,13 @@ fun DownloadListScreen(
                             task = task,
                             stacked = columns > 1,
                             onClick = {
-                                when (resolveDownloadTaskClickTarget(task, isNetworkAvailable = isNetworkAvailable)) {
+                                if (selectionMode) {
+                                    if (!deletingBatch && task.id in completedTaskIds) {
+                                        selectedTaskIds = if (task.id in selectedTaskIds) {
+                                            selectedTaskIds - task.id
+                                        } else selectedTaskIds + task.id
+                                    }
+                                } else when (resolveDownloadTaskClickTarget(task, isNetworkAvailable = isNetworkAvailable)) {
                                     DownloadTaskClickTarget.OfflinePlayer -> onOfflineVideoClick(task.id)
                                     DownloadTaskClickTarget.OnlinePlayer -> {
                                         Toast.makeText(
@@ -255,16 +343,24 @@ fun DownloadListScreen(
                             },
                             onPauseResume = {
                                 actionScope.launch {
-                                    if (task.isDownloading) {
+                                    val currentTask = DownloadManager.tasks.value[task.id] ?: return@launch
+                                    if (currentTask.isDownloading) {
                                         DownloadManager.pauseDownload(task.id)
-                                    } else if (task.canResume) {
+                                    } else if (currentTask.canResume) {
                                         DownloadManager.startDownload(task.id)
+                                    }
+                                    val updatedStatus = DownloadManager.tasks.value[task.id]?.status
+                                    if (updatedStatus != null && updatedStatus != currentTask.status) {
+                                        downloadHaptic(HapticType.LIGHT)
                                     }
                                 }
                             },
                             onDelete = {
-                                pendingDeleteTask = task
+                                if (deletingTaskId == null) pendingDeleteTask = task
                             },
+                            selectionMode = selectionMode,
+                            selected = task.id in selectedCompletedIds,
+                            selectionEnabled = !deletingBatch && task.id in completedTaskIds,
                             offlinePlayable = playableOffline,
                             speedBytesPerSecond = if (task.status == DownloadStatus.DOWNLOADING) {
                                 downloadSpeedsByTask[task.id] ?: 0L
@@ -311,6 +407,58 @@ fun DownloadListScreen(
         }
     }
 
+    if (pendingBatchDeleteIds.isNotEmpty()) {
+        AppAlertDialog(
+            onDismissRequest = { pendingBatchDeleteIds = emptySet() },
+            title = { AppText("批量删除缓存") },
+            text = {
+                AppText("确定删除选中的 ${pendingBatchDeleteIds.size} 个已缓存视频吗？视频、音频、封面和弹幕文件将一并清除，此操作无法撤销。")
+            },
+            confirmButton = {
+                AppTextButton(enabled = !deletingBatch, onClick = {
+                    if (deletingBatch || pendingBatchDeleteIds.isEmpty()) return@AppTextButton
+                    val idsToDelete = pendingBatchDeleteIds.toSet()
+                    pendingBatchDeleteIds = emptySet()
+                    deletingBatch = true
+                    actionScope.launch {
+                        // 批量删除直接处理全部选中项，不依赖可见卡片的消散回调。
+                        withContext(NonCancellable) {
+                            var failedCount = 0
+                            try {
+                                delay(deleteDialogExitDelayMs)
+                                idsToDelete.forEach { id ->
+                                    if (DownloadManager.tasks.value[id]?.isComplete == true) {
+                                        try {
+                                            DownloadManager.removeTask(id)
+                                        } catch (cancelled: CancellationException) {
+                                            throw cancelled
+                                        } catch (error: Exception) {
+                                            android.util.Log.e("DownloadList", "Failed to delete cache task $id", error)
+                                            failedCount++
+                                        }
+                                    }
+                                }
+                                if (failedCount == 0) exitSelection()
+                                Toast.makeText(
+                                    context,
+                                    if (failedCount == 0) "已删除所选缓存" else "$failedCount 项删除失败，请重试",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } finally {
+                                deletingBatch = false
+                            }
+                        }
+                    }
+                }) {
+                    AppText("删除", color = AppContentColors.error())
+                }
+            },
+            dismissButton = {
+                AppTextButton(onClick = { pendingBatchDeleteIds = emptySet() }) { AppText("取消") }
+            },
+        )
+    }
+
     // 删除确认：避免误触直接清掉已下载的文件
     pendingDeleteTask?.let { taskToDelete ->
         AppAlertDialog(
@@ -325,8 +473,14 @@ fun DownloadListScreen(
             confirmButton = {
                 androidx.compose.material3.TextButton(
                     onClick = {
-                        // Dissolve first; the actual removal happens onDissolveComplete.
-                        dissolvingTaskIds = dissolvingTaskIds + taskToDelete.id
+                        if (deletingTaskId != null) return@TextButton
+                        deletingTaskId = taskToDelete.id
+                        pendingDeleteTask = null
+                        actionScope.launch {
+                            // 玻璃弹窗退场完成后再改变背景；原生弹窗关闭后直接开始。
+                            delay(deleteDialogExitDelayMs)
+                            dissolvingTaskIds = dissolvingTaskIds + taskToDelete.id
+                        }
                     }, modifier = Modifier.appElasticPress()
                 ) {
                     AppText("删除", color = AppContentColors.error())
@@ -366,8 +520,12 @@ private fun DownloadTaskItem(
     stacked: Boolean = false,
     offlinePlayable: Boolean,
     speedBytesPerSecond: Long = 0L,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    selectionEnabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    val feedbackClick = appActionWithFeedback(onClick)
     // 与相关推荐/个人列表一致：复用全局横向卡骨架（顶对齐、共享封面宽度与信息区排版）。
     HorizontalVideoCardFrame(
         stacked = stacked,
@@ -375,7 +533,14 @@ private fun DownloadTaskItem(
             .fillMaxWidth()
             .clip(AppShapes.container(ContainerLevel.Card))
             .background(AppSurfaceTokens.cardContainer())
-            .clickable(onClick = onClick),
+            .then(
+                if (selectionMode) Modifier.toggleable(
+                    value = selected,
+                    enabled = selectionEnabled,
+                    role = Role.Checkbox,
+                    onValueChange = { feedbackClick() },
+                ) else Modifier.appActionClickable(onClick = onClick)
+            ),
         coverContent = {
             // 🖼️ [修复] 优先使用本地封面（无网络时也能显示）
             val localCoverFile = task.localCoverPath?.let { java.io.File(it) }
@@ -540,7 +705,14 @@ private fun DownloadTaskItem(
             }
         },
         trailingContent = {
-            Column(
+            if (selectionMode) {
+                AppCheckbox(
+                    checked = selected,
+                    onCheckedChange = null,
+                    enabled = selectionEnabled,
+                    modifier = Modifier.size(48.dp),
+                )
+            } else Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 暂停/继续
