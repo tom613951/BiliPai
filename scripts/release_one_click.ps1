@@ -24,6 +24,11 @@ function Write-Step($msg) { Write-Host $msg -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host $msg -ForegroundColor Yellow }
 function Fail($msg) { Write-Host $msg -ForegroundColor Red; exit 1 }
 
+# 整个流程包在 try/finally 中：无论成功、Fail 退出还是异常中断，
+# 结束时都会释放 Gradle daemon，避免后台常驻占用内存（本工程堆上限 8g）。
+# 注意 try 必须在任何 Fail 之前开始，否则提前退出的分支不会走到 finally。
+try {
+
 # 脚本必须从仓库根目录执行（app/build.gradle.kts 与 keystore.properties 都在此）
 if (-not (Test-Path "app/build.gradle.kts")) {
     Fail "请在仓库根目录执行本脚本（找不到 app/build.gradle.kts）"
@@ -132,3 +137,13 @@ Write-Host "`n=========================================" -ForegroundColor Cyan
 Write-Host " 🎉 全部完成！" -ForegroundColor Green
 Write-Host " Release: https://github.com/$Repo/releases/tag/$Tag" -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
+
+}
+finally {
+    # 释放 Gradle daemon：本项目堆上限 8g，常驻会白白占住内存。
+    # 只停 daemon，不动编译产物；下次构建会重新拉起（多花约 10-20s 启动）。
+    if (Test-Path ".\gradlew.bat") {
+        & ".\gradlew.bat" --stop *> $null
+    }
+    Write-Host "`n🧹 已释放 Gradle daemon" -ForegroundColor DarkGray
+}
