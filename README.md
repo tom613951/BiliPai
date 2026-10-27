@@ -21,9 +21,9 @@
 
 ## 📌 说明
 
-本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁后自行打包发布。
+本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁。
 
-当前基于官方 **v0.6.4**（`80866cae2`，versionCode 519）源码构建。
+当前基于官方 **v0.6.4**（`80866cae2`，versionCode 519）源码。**只同步代码，不提供预编译包。**
 
 ---
 
@@ -38,26 +38,28 @@
 
 ---
 
-## 📦 APK 下载
+## 📦 获取安装包
 
-在 [**Releases 页面**](https://github.com/tom613951/BiliPai/releases) 获取最新可安装包。
+> ⚠️ **自 v0.6.4 起，本仓库不再提供预编译 APK**，请自行构建（见下方「自行构建」）。
+> 历史版本仍可在 [Releases 页面](https://github.com/tom613951/BiliPai/releases) 下载。
+
+本仓库只跟随上游同步源码并叠加个人补丁，构建由使用者自行完成。
 
 ### 构建变体说明
 
-本仓库使用自签名配置构建 **`release`** 变体：
-
 | 变体 | 特性 |
 | --- | --- |
-| `release`（本仓库发布） | 启用 R8 代码压缩 + 资源压缩，使用自签名密钥库签名 |
+| `release` | 启用 R8 代码压缩 + 资源压缩，需自备密钥库签名 |
 | `smooth` | 继承 release 语义，`isDebuggable=false`，跳过 R8，用于本地快速验证 |
 | `dev` | 同 release，包名带 `.dev` 后缀，用于并存测试 |
 
-> ⚠️ 本仓库 APK 使用**自签名证书**（非官方密钥）。与官方版应用 ID 相同，**安装前需先卸载官方版本**，且后续版本升级须使用同一密钥库签名。
+> ⚠️ 自行构建的 APK 与官方版应用 ID 相同，**安装前需先卸载官方版本**。
+> 若你之前安装过本仓库的预编译包（v0.6.4 及更早），自行构建时请沿用同一密钥库，
+> 否则需先卸载再安装，否则会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
 
-> 🔑 **v0.5.5-personal 起换用了新密钥库**（`CN=BiliPai Personal`，SHA-256
-> `44:B5:F2:B9:...:4B`，有效期至 2054）。与 v0.3.9-personal 及更早版本的签名不同，
-> 从旧版升级**必须先卸载再安装**，否则会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
-> 新密钥库已固定，v0.5.5 之后的版本可直接覆盖升级（v0.6.3 / v0.6.4 均沿用同一密钥库）。
+> 🔑 历史预编译包（v0.5.5 ~ v0.6.4）使用密钥库 `CN=BiliPai Personal`
+> （SHA-256 `44:B5:F2:B9:...:4B`，有效期至 2054）。v0.3.9-personal 及更早版本
+> 使用不同签名，从那些版本升级**必须先卸载**。
 
 ---
 
@@ -103,6 +105,14 @@ keytool -genkeypair -v -keystore release.jks -alias bilipai \
 ```
 
 产物位于 `app/build/outputs/bilipai/release/BiliPai-<version>.apk`（上游自 0.4.x 起改由 export task 输出规范名）。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
+
+> 💡 只想要一个能用的包、不在意 R8 压缩？用 `./gradlew :app:assembleSmooth`
+> 跳过 R8，构建时间约为 release 的一半，产物在 `outputs/bilipai/smooth/`。
+
+> 💡 内存吃紧时，`gradle.properties` 已配置为单 JVM 构建
+> （`kotlin.compiler.execution.strategy=in-process` + `-Xmx8g`），
+> 实测峰值约 8.7GB。若物理内存不足 16GB，把 `org.gradle.jvmargs` 的 `-Xmx8g`
+> 降到 `-Xmx6g`、`org.gradle.workers.max` 从 8 降到 4。
 
 > ⚠️ 项目路径**不能包含非 ASCII 字符**（含中文的目录会导致 AGP 直接拒绝构建）。
 
