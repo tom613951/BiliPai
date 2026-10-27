@@ -219,7 +219,9 @@ fun BottomBarSettingsContent(
     val topTabLabelMode = homeConfiguration.topTabLabelMode
     val bottomBarLabelMode = homeConfiguration.bottomBarLabelMode
     val homeTopLayoutOrder = homeConfiguration.homeTopLayoutOrder
-    val homeHeaderCollapseMode = homeConfiguration.homeHeaderCollapseMode
+    val homeHeaderCollapseMode = com.android.purebilibili.feature.home.policy.resolveHomeRecommendationHeaderCollapseMode(
+        homeConfiguration.homeHeaderCollapseMode
+    )
 
     val homeTopRightAction = homeConfiguration.homeTopRightAction
     val isBottomBarFloating = homeConfiguration.isBottomBarFloating
@@ -586,23 +588,18 @@ fun BottomBarSettingsContent(
                                 title = "首页顶栏显示",
                                 subtitle = when (homeHeaderCollapseMode) {
                                     HomeHeaderCollapseMode.OFF -> "首页顶栏始终显示"
-                                    HomeHeaderCollapseMode.SEARCH_ONLY -> "下滑时仅收起顶部搜索框，标签页留在顶部"
-                                    HomeHeaderCollapseMode.BOTH -> "首页离开顶部后收起搜索与标签栏，回顶后恢复；其他列表页由列表页顶栏折叠设置控制"
-                                    HomeHeaderCollapseMode.TABS_ONLY -> "下滑时仅收起标签页，搜索框保持显示"
+                                    HomeHeaderCollapseMode.SEARCH_ONLY,
+                                    HomeHeaderCollapseMode.BOTH,
+                                    HomeHeaderCollapseMode.TABS_ONLY -> "向上浏览时收起搜索框，反向下拉时恢复，分类栏保留"
                                 },
                                 optionLeading = { value -> SettingsOptionPreviewThumb(SettingsOptionPreview.HeaderCollapse(
                                     searchVisible = !value.collapseSearch, tabsVisible = !value.collapseTabs,
                                 )) },
-                                options = listOf(
-                                    AppSegmentOption(HomeHeaderCollapseMode.OFF, "始终显示"),
-                                    AppSegmentOption(HomeHeaderCollapseMode.SEARCH_ONLY, "仅收起搜索"),
-                                    AppSegmentOption(HomeHeaderCollapseMode.BOTH, "全部收起"),
-                                ),
-                                selectedValue = if (homeHeaderCollapseMode == HomeHeaderCollapseMode.TABS_ONLY) {
-                                    HomeHeaderCollapseMode.BOTH
-                                } else {
-                                    homeHeaderCollapseMode
+                                options = buildList {
+                                    add(AppSegmentOption(HomeHeaderCollapseMode.OFF, "始终显示"))
+                                    add(AppSegmentOption(HomeHeaderCollapseMode.SEARCH_ONLY, "仅收起搜索"))
                                 },
+                                selectedValue = homeHeaderCollapseMode,
                                 onSelectionChange = { mode ->
                                     scope.launch { SettingsManager.setHomeHeaderCollapseMode(context, mode) }
                                 },

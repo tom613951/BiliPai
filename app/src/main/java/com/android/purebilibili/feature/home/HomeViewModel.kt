@@ -555,6 +555,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         accountRequests.observe { resetForAccountChange() }
+        viewModelScope.launch {
+            MessageRepository.readEvents.collect {
+                messageUnreadRefreshJob?.cancel()
+                messageUnreadRefreshJob = accountRequests.launch { refreshMessageUnreadCount() }
+            }
+        }
         refreshUserInfoInBackground()
         loadData()
     }
