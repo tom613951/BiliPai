@@ -78,6 +78,8 @@ import com.android.purebilibili.core.ui.rememberAppSemanticVisualPolicy
 import com.android.purebilibili.core.ui.rememberAppTopChromePolicy
 
 import com.android.purebilibili.feature.settings.GITHUB_URL
+import com.android.purebilibili.core.store.CommonListHeaderCollapseMode
+import com.android.purebilibili.core.store.HomeHeaderCollapseMode
 import com.android.purebilibili.core.store.SettingsManager //  引入 SettingsManager
 import com.android.purebilibili.core.store.AppNavigationSettings
 import com.android.purebilibili.core.store.resolveEffectiveHomeSettings
@@ -257,7 +259,7 @@ fun HomeScreen(
                 bvid = video.bvid,
                 cid = video.cid,
                 coverUrl = video.pic,
-                isVerticalVideo = video.isVertical,
+                isVerticalVideo = video.resolveIsVerticalForNavigation(),
                 source = HomeVideoClickSource.GRID,
                 sourceRoute = partitionVideoSourceRoute
             )
@@ -280,6 +282,7 @@ fun HomeScreen(
     onLiveAreaDetailClick: (Int, Int, String) -> Unit = { _, _, _ -> },
     onBangumiSeasonClick: (Long) -> Unit = {},
     onBangumiEpisodeClick: (Long, Long) -> Unit = { seasonId, _ -> onBangumiSeasonClick(seasonId) },
+    onBangumiPlayFollow: (Long) -> Unit = onBangumiSeasonClick,
     onWatchLaterClick: () -> Unit = {},  // 稍后再看页面
     onDownloadClick: () -> Unit = {},  // 离线缓存页面
     onInboxClick: () -> Unit = {},  // 私信页面
@@ -1222,7 +1225,16 @@ fun HomeScreen(
         chromeCategoryState.videos.isEmpty() && chromeCategoryState.liveRooms.isEmpty())
     val homeChromeBlurEnabled = isLiquidGlassEnabled || isHeaderBlurEnabled ||
         isBottomBarBlurEnabled || appThemeConfig.progressiveTopBlurEnabled
-    val shouldCaptureHomeChromeBackdrop = homeChromeBlurEnabled
+    // 渐进模糊没有有效半径、系统不支持或被预算关闭时，不单独录制整个 feed。
+    // 搜索、标签和底栏的独立磨砂/玻璃仍按原有需求保留背景源，纯色渐隐无需采样。
+    val progressiveTopBlurNeedsBackdrop =
+        com.android.purebilibili.feature.home.components.shouldUseBiliPaiProgressiveTopBlur(
+            enabled = appThemeConfig.progressiveTopBlurEnabled && !isHeaderBlurEnabled,
+            hasBackdrop = true,
+            blurRadiusDp = homeLiquidGlassTuning.progressiveBlurRadius,
+        ) && !com.android.purebilibili.core.ui.performance.isLowBlurBudgetForced()
+    val shouldCaptureHomeChromeBackdrop = isLiquidGlassEnabled || isHeaderBlurEnabled ||
+        isBottomBarBlurEnabled || progressiveTopBlurNeedsBackdrop
     val homeMiuixBackdropSource = if (shouldCaptureHomeChromeBackdrop) {
         rememberChromeBackdropSource()
     } else {
@@ -1843,6 +1855,7 @@ fun HomeScreen(
     }
     var subscriptionRefreshInteractionActive by remember { mutableStateOf(false) }
 
+    val partitionListState = androidx.compose.foundation.lazy.rememberLazyListState()
     val nestedScrollConnection = rememberHomeHeaderScrollConnection(
         configuration = HomeHeaderScrollConfiguration(
             collapseEnabled = isAnyHeaderCollapseEnabled,
@@ -1852,6 +1865,11 @@ fun HomeScreen(
             useSideNavigation = useSideNavigation,
             liquidGlassEnabled = isLiquidGlassEnabled,
             hideType = homeBarHideType,
+            collapseMode = if (headerCollapseMode == HomeHeaderCollapseMode.SHOW_AT_TOP_ONLY) {
+                CommonListHeaderCollapseMode.SHOW_AT_TOP_ONLY
+            } else {
+                CommonListHeaderCollapseMode.SHOW_ON_REVERSE_SCROLL
+            },
         ),
         pagerState = pagerState,
         topTabEntries = topTabEntries,
@@ -1866,6 +1884,7 @@ fun HomeScreen(
             }
         },
         subscriptionListState = subscriptionListState,
+        partitionListState = partitionListState,
         revealLocked = homeHeaderRevealLock,
         refreshInteractionActiveProvider = {
             val entry = resolveHomeTopTabEntryOrNull(topTabEntries, pagerState.currentPage)
@@ -1949,7 +1968,7 @@ fun HomeScreen(
                     bvid = video.bvid,
                     cid = video.cid,
                     coverUrl = video.pic,
-                    isVerticalVideo = video.isVertical,
+                    isVerticalVideo = video.resolveIsVerticalForNavigation(),
                     source = HomeVideoClickSource.TODAY_WATCH,
                     sourceRoute = resolveHomeCategoryVideoSourceRoute(HomeCategory.RECOMMEND)
                 )
@@ -2128,6 +2147,8 @@ fun HomeScreen(
                                         ),
                                         onVideoClick = onPartitionVideoClick,
                                         onBangumiClick = onBangumiClick,
+                                        onBangumiSeasonClick = onBangumiSeasonClick,
+                                        listState = partitionListState,
                                         scrollToTopRequestId = partitionScrollToTopRequestId
                                     )
                                 }
@@ -2199,6 +2220,7 @@ fun HomeScreen(
                                     ),
                                     onBangumiClick = onBangumiSeasonClick,
                                     onBangumiEpisodeClick = onBangumiEpisodeClick,
+                                    onPlayFollow = onBangumiPlayFollow,
                                     scrollToTopRequestId = bangumiScrollToTopRequestId,
                                 )
                             }
@@ -3103,7 +3125,7 @@ fun HomeScreen(
                              bvid = item.bvid,
                              cid = item.cid,
                              coverUrl = item.pic,
-                             isVerticalVideo = item.isVertical,
+                             isVerticalVideo = item.resolveIsVerticalForNavigation(),
                              source = HomeVideoClickSource.PREVIEW,
                              sourceRoute = resolveHomeCategoryVideoSourceRoute(currentCategory)
                          )

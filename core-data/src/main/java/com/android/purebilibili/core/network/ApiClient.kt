@@ -220,8 +220,28 @@ interface BilibiliApi {
     @POST("x/member/web/sign/update")
     suspend fun updateMemberSign(
         @retrofit2.http.Field("user_sign") userSign: String,
-        @retrofit2.http.Field("csrf") csrf: String
-    ): SimpleApiResponse
+        @retrofit2.http.Field("csrf") csrf: String,
+        @retrofit2.http.Header(FORCE_COOKIE_HEADER) cookie: String
+    ): ProfileUpdateResponse
+
+    @retrofit2.http.FormUrlEncoded
+    @POST("x/member/app/{field}/update")
+    suspend fun updateMemberAppProfile(
+        @retrofit2.http.Path("field") field: String,
+        @retrofit2.http.FieldMap fields: Map<String, String>,
+        @retrofit2.http.Header(FORCE_COOKIE_HEADER) cookie: String,
+        @retrofit2.http.Header("User-Agent") userAgent: String
+    ): ProfileUpdateResponse
+
+    @retrofit2.http.Multipart
+    @POST("x/member/web/face/update")
+    suspend fun updateMemberAvatar(
+        @Query("csrf") csrf: String,
+        @retrofit2.http.Part("dopost") action: okhttp3.RequestBody,
+        @retrofit2.http.Part("DisplayRank") displayRank: okhttp3.RequestBody,
+        @retrofit2.http.Part face: okhttp3.MultipartBody.Part,
+        @retrofit2.http.Header(FORCE_COOKIE_HEADER) cookie: String
+    ): ProfileUpdateResponse
 
     //  [New] 获取用户卡片信息 (轻量级用户信息)
     @GET("x/web-interface/card")
@@ -553,6 +573,12 @@ interface BilibiliApi {
         @Query("ps") ps: Int = 20
     ): PopularResponse  //  使用专用响应类型
 
+    @GET("pgc/web/rank/list")
+    suspend fun getPgcRanking(@QueryMap params: Map<String, String>): kotlinx.serialization.json.JsonObject
+
+    @GET("pgc/season/rank/web/list")
+    suspend fun getPgcSeasonRanking(@QueryMap params: Map<String, String>): kotlinx.serialization.json.JsonObject
+
     @GET("x/web-interface/ranking/v2")
     suspend fun getRankingVideos(
         @QueryMap params: Map<String, String>
@@ -877,6 +903,13 @@ interface BilibiliApi {
     // [修复] 通过 aid 获取视频信息 - 用于移动端推荐流（可能只返回 aid）
     @GET("x/web-interface/view")
     suspend fun getVideoInfoByAid(@Query("aid") aid: Long): VideoDetailResponse
+
+    /**
+     * 轻量接口：只返回分P列表（含 dimension），用于在播放信息加载前判断横竖屏。
+     * 比 x/web-interface/view 少返回播放地址、字幕、相关推荐等大字段。
+     */
+    @GET("x/player/pagelist")
+    suspend fun getPageList(@Query("bvid") bvid: String): PageListResponse
     
     @GET("x/tag/archive/tags")
     suspend fun getVideoTags(@Query("bvid") bvid: String): VideoTagResponse
@@ -1204,8 +1237,10 @@ interface BilibiliApi {
     @GET("x/topic/pub/search")
     suspend fun searchDynamicPublishTopics(
         @Query("keywords") keywords: String? = null,
-        @Query("page_size") pageSize: Int = 20,
-        @Query("page_num") pageNum: Int = 1,
+        @Query("page_size") pageSize: Int? = 20,
+        @Query("page_num") pageNum: Int? = 1,
+        @Query("offset") offset: Int? = null,
+        @Query("web_location") location: String = "333.1365",
     ): com.android.purebilibili.data.model.response.DynamicTopicSearchResponse
 
     // [新增] 发送评论
@@ -1957,6 +1992,31 @@ interface DynamicApi {
         @retrofit2.http.Body body: DynamicCreateVoteRequest
     ): DynamicCreateVoteResponse
 
+    @retrofit2.http.POST("x/vote/update")
+    suspend fun updateVote(
+        @Query("csrf") csrf: String,
+        @retrofit2.http.Body body: DynamicCreateVoteRequest
+    ): DynamicCreateVoteResponse
+
+    @retrofit2.http.GET("x/new-reserve/up/reserve/info")
+    suspend fun getReserveInfo(
+        @Query("id") id: Long,
+        @Query("from") from: Int = 1,
+        @Query("web_location") location: String = "333.1365",
+    ): com.android.purebilibili.data.model.response.DynamicReserveInfoResponse
+
+    @retrofit2.http.FormUrlEncoded
+    @retrofit2.http.POST("x/new-reserve/up/reserve/update")
+    suspend fun updateReserve(
+        @retrofit2.http.Field("id") id: Long,
+        @retrofit2.http.Field("type") type: Int = 2,
+        @retrofit2.http.Field("sub_type") subType: Int,
+        @retrofit2.http.Field("from") from: Int = 1,
+        @retrofit2.http.Field("title") title: String,
+        @retrofit2.http.Field("live_plan_start_time") livePlanStartTime: Long,
+        @retrofit2.http.Field("csrf") csrf: String,
+    ): DynamicCreateReserveResponse
+
     @retrofit2.http.FormUrlEncoded
     @retrofit2.http.POST("x/new-reserve/up/reserve/create")
     suspend fun createReserve(
@@ -2325,6 +2385,14 @@ fun buildSpaceLikedArchiveParams(
 
 //  [新增] 番剧/影视 API
 interface BangumiApi {
+    @FormUrlEncoded
+    @POST("pgc/season/episode/like/triple")
+    @Headers("Origin: https://www.bilibili.com")
+    suspend fun tripleBangumiEpisode(
+        @retrofit2.http.Field("ep_id") episodeId: Long,
+        @retrofit2.http.Field("csrf") csrf: String,
+        @Header("Referer") referer: String,
+    ): BangumiTripleResponse
     // 番剧时间表
     @GET("pgc/web/timeline")
     suspend fun getTimeline(
@@ -2496,11 +2564,39 @@ interface BangumiApi {
     ): SimpleApiResponse
 
     @retrofit2.http.FormUrlEncoded
+    @retrofit2.http.POST("pgc/review/action/dislike")
+    suspend fun dislikeBangumiReview(
+        @retrofit2.http.Field("media_id") mediaId: Long,
+        @retrofit2.http.Field("review_type") reviewType: Int = 2,
+        @retrofit2.http.Field("review_id") reviewId: Long,
+        @retrofit2.http.Field("csrf") csrf: String
+    ): SimpleApiResponse
+
+    @retrofit2.http.FormUrlEncoded
+    @retrofit2.http.POST("pgc/review/short/modify")
+    suspend fun modifyBangumiShortReview(
+        @retrofit2.http.Field("media_id") mediaId: Long,
+        @retrofit2.http.Field("review_id") reviewId: Long,
+        @retrofit2.http.Field("score") score: Int,
+        @retrofit2.http.Field("content") content: String,
+        @retrofit2.http.Field("csrf") csrf: String
+    ): SimpleApiResponse
+
+    @retrofit2.http.FormUrlEncoded
+    @retrofit2.http.POST("pgc/review/short/del")
+    suspend fun deleteBangumiShortReview(
+        @retrofit2.http.Field("media_id") mediaId: Long,
+        @retrofit2.http.Field("review_id") reviewId: Long,
+        @retrofit2.http.Field("csrf") csrf: String
+    ): SimpleApiResponse
+
+    @retrofit2.http.FormUrlEncoded
     @retrofit2.http.POST("pgc/review/short/post")
     suspend fun postBangumiShortReview(
         @retrofit2.http.Field("media_id") mediaId: Long,
         @retrofit2.http.Field("score") score: Int,
         @retrofit2.http.Field("content") content: String,
+        @retrofit2.http.Field("share_feed") shareFeed: Int = 0,
         @retrofit2.http.Field("csrf") csrf: String
     ): SimpleApiResponse
 }

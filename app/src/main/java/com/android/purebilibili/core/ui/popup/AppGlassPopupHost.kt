@@ -103,6 +103,8 @@ import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import com.android.purebilibili.core.theme.AppUiStyle
+import com.android.purebilibili.core.theme.LocalAppUiStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -141,6 +143,9 @@ private val PopupScreenMargin = 16.dp
 
 /** 锚定菜单向上覆盖源控件的距离。 */
 private val PopupAnchorOverlap = 8.dp
+
+/** 玻璃弹窗的基础背景模糊，供同类浮层共用。 */
+internal val AppGlassPopupBackdropBlur = 12.dp
 
 /**
  * 锚定弹窗的默认最大宽度：与原生菜单一致按窗口宽度自适应，
@@ -1089,7 +1094,7 @@ private fun AppGlassChoicePopupCard(
     // 滑动触发预算降级时仍保留 backdrop 磨砂，不将玻璃切换为不透明底板。
     // 降级只减少采样半径并停用折射；配色与透明度在同一展示中保持一致。
     val blurRadiusPx = with(density) {
-        (if (lowBlurBudget) 6.dp else if (interactivePanel && !themeFrosted) 24.dp else 12.dp).toPx()
+        (if (lowBlurBudget) 6.dp else if (interactivePanel && !themeFrosted) 24.dp else AppGlassPopupBackdropBlur).toPx()
     }
     val refractionHeightPx = with(density) { (tuning.refractionHeight * MenuLensScale).dp.toPx() }
     val refractionAmountPx = with(density) { (tuning.refractionAmount * MenuLensScale).dp.toPx() }
@@ -1207,8 +1212,7 @@ private fun AppGlassChoicePopupCard(
                                 }
                                 if (!elasticActive) elasticActive = controller.beginPress(origin)
                                 if (elasticActive) {
-                                    val pull = overscroll - kotlin.math.sign(overscroll) * touchSlop
-                                    controller.movePress(origin + Offset(0f, pull), allowSelection = false, fromScrollBoundary = true)
+                                    controller.movePress(origin + Offset(0f, overscroll), allowSelection = false, fromScrollBoundary = true)
                                 }
                             }
                         } finally {
@@ -1269,7 +1273,7 @@ private fun AppGlassChoicePopupCard(
                                 // 列表内位移不累积为拉伸量，否则到边界时形变早已饱和。
                                 edgePull = if (remaining == 0f) 0f else edgePull + remaining
                                 val beyondEdge = scrollGesture && kotlin.math.abs(edgePull) > touchSlop
-                                val pull = if (beyondEdge) edgePull - kotlin.math.sign(edgePull) * touchSlop else 0f
+                                val pull = if (beyondEdge) edgePull else 0f
                                 // 列表滚动不覆盖真实越界坐标：手指拖出面板后持续拉伸，
                                 // 即便该帧仍有滚动消费，也不能把形变重新归零。
                                 val outside = popupPullBeyondBounds(position, morph.card) != Offset.Zero
@@ -1375,7 +1379,7 @@ private fun AppGlassChoicePopupCard(
                         .then(if (request.menu?.interactiveContent == true) Modifier.fillMaxWidth() else Modifier.width(IntrinsicSize.Max))
                         .selectableGroup()
                         .padding(PopupItemInset)
-                        .then(if (!interactivePanel && request.menu?.showScrollbar != false) Modifier.padding(end = 12.dp) else Modifier),
+                        .then(if (!interactivePanel && request.menu?.showScrollbar == true) Modifier.padding(end = 12.dp) else Modifier),
                 ) {
                     request.menu?.let { menu ->
                         Box(menu.modifier) { menu.content(contentMenuScope) }
@@ -1414,9 +1418,13 @@ private fun AppGlassChoicePopupCard(
                                 AppText(
                                     text = option.label,
                                     tapToCopyEnabled = false,
-                                    // 与原生菜单一致的 bodyLarge 16sp，玻璃开关切换时选项文字排版不变。
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium,
+                                    // 保持各主题原生菜单的字号和字重，玻璃只改变弹窗材质。
+                                    style = if (LocalAppUiStyle.current == AppUiStyle.MIUIX) {
+                                        MaterialTheme.typography.bodyMedium
+                                    } else MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (LocalAppUiStyle.current == AppUiStyle.MIUIX) {
+                                        FontWeight.Medium
+                                    } else null,
                                     color = AppContentColors.primaryText(),
                                 )
                                 option.description?.let { description ->
@@ -1443,7 +1451,7 @@ private fun AppGlassChoicePopupCard(
                 }
                 }
             }
-            if (!interactivePanel && request.menu?.showScrollbar != false) {
+            if (!interactivePanel && request.menu?.showScrollbar == true) {
                 Box(Modifier.matchParentSize()) {
                     com.android.purebilibili.core.ui.components.AppMenuScrollbar(
                         scrollState = scrollState,

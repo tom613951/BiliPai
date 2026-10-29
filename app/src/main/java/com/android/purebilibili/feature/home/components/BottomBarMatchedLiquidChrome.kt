@@ -313,7 +313,7 @@ internal fun BottomBarMatchedReusableLiquidDock(
     liquidGlassEffectsEnabled: Boolean = true,
     /**
      * Allowlisted callers only: home search field, comment [BottomInputBar], and dynamic
-     * composer/detail chrome and the live room header that explicitly follow the same floating-dock contract.
+     * composer/detail chrome, live list search and the live room header that explicitly follow the same floating-dock contract.
      * Other chrome must leave this false.
      */
     reuseEnabled: Boolean = false,
@@ -324,6 +324,8 @@ internal fun BottomBarMatchedReusableLiquidDock(
     drawShellLens: Boolean = true,
     shellLensIntensity: Float = 1f,
     isScrollInProgressProvider: () -> Boolean = { false },
+    /** 仅含文字、图标的内容无需录制外壳；内部有玻璃采样控件时保留默认值。 */
+    captureShellForContent: Boolean = true,
     content: @Composable BoxScope.(liquidChromeActive: Boolean) -> Unit
 ) {
     val elasticState = com.android.purebilibili.core.ui.components.rememberAppElasticPressState(
@@ -331,14 +333,16 @@ internal fun BottomBarMatchedReusableLiquidDock(
     )
     val reuseAllowed = LocalAppThemeConfig.current.liquidGlassEnabled
     if (!reuseEnabled || !reuseAllowed || !liquidGlassEffectsEnabled) {
+        val fallbackElasticFeedbackEnabled = elasticFeedbackEnabled &&
+            !com.android.purebilibili.core.ui.isMiuixNonGlassEnabled()
         Box(modifier = modifier.appElasticPress(
-            enabled = elasticFeedbackEnabled,
+            enabled = fallbackElasticFeedbackEnabled,
             state = elasticState,
             allowConsumedDrag = allowConsumedDrag,
         )) {
             CompositionLocalProvider(
                 com.android.purebilibili.core.ui.components.LocalElasticPressEnabled provides
-                    (!elasticFeedbackEnabled && com.android.purebilibili.core.ui.components.LocalElasticPressEnabled.current),
+                    (!fallbackElasticFeedbackEnabled && com.android.purebilibili.core.ui.components.LocalElasticPressEnabled.current),
             ) {
                 content(false)
             }
@@ -362,7 +366,9 @@ internal fun BottomBarMatchedReusableLiquidDock(
         com.android.purebilibili.feature.home.components.liquid.rememberStableBackdrop(it)
     }
     // 只录制外壳这一兄弟层，内部控件不得进入自身消费的背景源。
-    val shellSource = if (glassEnabled) com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource() else null
+    val shellSource = if (glassEnabled && captureShellForContent) {
+        com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource()
+    } else null
     val isDarkTheme = com.android.purebilibili.core.ui.isAppInDarkTheme()
     val blurIntensity = currentUnifiedBlurIntensity()
     val tuning = resolveAndroidNativeBottomBarTuning(
@@ -480,9 +486,10 @@ internal fun BoxScope.BottomBarMatchedLiquidIndicator(
     dragScaleTarget: Float = BOTTOM_BAR_INDICATOR_DRAG_SCALE_TARGET,
     bottomBarMotionSpec: BottomBarMotionSpec,
     isDarkTheme: Boolean,
-    indicatorSettleReboundTransform: BottomBarClickPulseTransform =
-        BottomBarClickPulseTransform(scaleX = 1f),
     orientation: BottomBarLiquidOrientation = BottomBarLiquidOrientation.HORIZONTAL,
+    // Optional physical shell thickness for vertical rails; horizontal callers retain their defaults.
+    opticalShellExtentDp: Float? = null,
+    indicatorScaleTransformProvider: (() -> BottomBarIndicatorLayerTransform)? = null,
     indicatorAlignment: Alignment = Alignment.CenterStart,
     interactionModifier: Modifier = Modifier,
     wobblePosition: (() -> Float)? = null,
@@ -519,6 +526,8 @@ internal fun BoxScope.BottomBarMatchedLiquidIndicator(
         bottomBarMotionSpec = bottomBarMotionSpec,
         isDarkTheme = isDarkTheme,
         swapMotionAxes = orientation == BottomBarLiquidOrientation.VERTICAL,
+        opticalShellExtentDp = opticalShellExtentDp,
+        indicatorScaleTransformProvider = indicatorScaleTransformProvider,
         indicatorAlignment = indicatorAlignment,
         interactionModifier = interactionModifier,
         wobblePosition = wobblePosition,

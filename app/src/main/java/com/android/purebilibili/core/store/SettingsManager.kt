@@ -868,7 +868,8 @@ enum class HomeHeaderCollapseMode(
     SEARCH_ONLY(0, "仅搜索", "浏览下方内容时只收起搜索框", true, false),
     TABS_ONLY(1, "仅标签", "浏览下方内容时只收起分类栏", false, true),
     BOTH(2, "都收起", "浏览下方内容时，搜索框和分类栏都收起", true, true),
-    OFF(3, "始终显示", "搜索框和分类栏始终显示", false, false);
+    OFF(3, "始终显示", "搜索框和分类栏始终显示", false, false),
+    SHOW_AT_TOP_ONLY(4, "仅回顶显示", "浏览下方内容时收起搜索框和分类栏，仅回到列表顶部时恢复", true, true);
 
     val hasAnyCollapse: Boolean
         get() = collapseSearch || collapseTabs
@@ -957,11 +958,11 @@ enum class DanmakuPanelWidthMode(val value: Int, val label: String, val widthFra
 
 enum class PortraitDanmakuDisplayAreaMode(val value: Int, val label: String) {
     VIDEO_VIEWPORT(0, "视频画面"),
-    SCREEN_TOP(1, "屏幕顶部");
+    SCREEN_TOP(1, "视频上方");
 
     companion object {
         fun fromValue(value: Int): PortraitDanmakuDisplayAreaMode =
-            entries.find { it.value == value } ?: VIDEO_VIEWPORT
+            entries.find { it.value == value } ?: SCREEN_TOP
     }
 }
 
@@ -1042,7 +1043,7 @@ data class DanmakuSettings(
     val blockAttentionCommands: Boolean = false,
     val smartOcclusion: Boolean = false,
     val portraitDisplayAreaMode: PortraitDanmakuDisplayAreaMode =
-        PortraitDanmakuDisplayAreaMode.VIDEO_VIEWPORT,
+        PortraitDanmakuDisplayAreaMode.SCREEN_TOP,
     val fullscreenPanelWidthMode: DanmakuPanelWidthMode = DanmakuPanelWidthMode.THIRD,
     val blockRulesRaw: String = "",
     val blockRules: List<String> = emptyList()
@@ -2194,6 +2195,26 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     }
 
     // --- Auto Play Next ---
+    private val KEY_RESILIENT_VIDEO_BUFFER = booleanPreferencesKey("resilient_video_buffer")
+    private const val CACHE_KEY_RESILIENT_VIDEO_BUFFER = "resilient_video_buffer"
+
+    fun getResilientVideoBuffer(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { it[KEY_RESILIENT_VIDEO_BUFFER] ?: false }
+        .onEach { enabled ->
+            context.getSharedPreferences("auto_play_cache", Context.MODE_PRIVATE)
+                .edit().putBoolean(CACHE_KEY_RESILIENT_VIDEO_BUFFER, enabled).apply()
+        }
+
+    suspend fun setResilientVideoBuffer(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { it[KEY_RESILIENT_VIDEO_BUFFER] = enabled }
+        context.getSharedPreferences("auto_play_cache", Context.MODE_PRIVATE)
+            .edit().putBoolean(CACHE_KEY_RESILIENT_VIDEO_BUFFER, enabled).apply()
+    }
+
+    fun getResilientVideoBufferSync(context: Context): Boolean =
+        context.getSharedPreferences("auto_play_cache", Context.MODE_PRIVATE)
+            .getBoolean(CACHE_KEY_RESILIENT_VIDEO_BUFFER, false)
+
     private val KEY_EXTERNAL_PLAYLIST_AUTO_CONTINUE =
         booleanPreferencesKey("external_playlist_auto_continue")
     private const val CACHE_KEY_EXTERNAL_PLAYLIST_AUTO_CONTINUE = "external_playlist_auto_continue"
@@ -4508,7 +4529,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
     
-    // 首页顶栏保存收起范围；当前首页把旧收起模式解释为仅搜索，分类栏保留且允许反向拖动恢复。
+    // 首页顶栏保存收起范围及仅回顶恢复策略，保留旧模式数值。
     fun getHomeHeaderCollapseMode(context: Context): Flow<HomeHeaderCollapseMode> =
         context.settingsDataStore.data.map { preferences ->
             preferences[KEY_HOME_HEADER_COLLAPSE_MODE]
@@ -5321,7 +5342,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             // at the renderer, so preserve it for portrait fullscreen's shared profile.
             portraitDisplayAreaMode = PortraitDanmakuDisplayAreaMode.fromValue(
                 preferences[keyDanmakuPortraitDisplayAreaMode()]
-                    ?: PortraitDanmakuDisplayAreaMode.VIDEO_VIEWPORT.value
+                    ?: PortraitDanmakuDisplayAreaMode.SCREEN_TOP.value
             ),
             fullscreenPanelWidthMode = normalizeDanmakuFullscreenPanelWidthMode(
                 DanmakuPanelWidthMode.fromValue(
@@ -7052,7 +7073,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     }
 
     /**
-     * 「听视频」音乐氛围。数据取自音频输出链路的 PCM（无录音权限），
+     * 「听视频」封面律动。数据取自音频输出链路的 PCM（无录音权限），
      * 默认关闭；公共 AudioSink 按缓冲读取开关，已有 PCM 播放会话内即可生效。
      */
     fun getAudioSpectrumEnabled(context: Context): Flow<Boolean> =
@@ -8044,7 +8065,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     }
 
     fun getShowProfileEditButton(context: Context): Flow<Boolean> = context.settingsDataStore.data
-        .map { preferences -> preferences[KEY_SHOW_PROFILE_EDIT_BUTTON] ?: false }
+        .map { preferences -> preferences[KEY_SHOW_PROFILE_EDIT_BUTTON] ?: true }
 
     suspend fun setShowProfileEditButton(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -8809,6 +8830,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             BooleanShareablePreferenceDefinition(KEY_LIVE_AUTO_MINI_PLAYER_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_NEXT_WATCH_HINT_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_AUTO_PLAY, SettingsShareSection.PLAYBACK),
+            BooleanShareablePreferenceDefinition(KEY_RESILIENT_VIDEO_BUFFER, SettingsShareSection.PLAYBACK),
             IntShareablePreferenceDefinition(KEY_PLAYBACK_COMPLETION_BEHAVIOR, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_HW_DECODE, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_BG_PLAY, SettingsShareSection.PLAYBACK),
@@ -9158,6 +9180,11 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
         if (playbackSpeedChanged) {
             PlayerSettingsStore.syncPlaybackSpeedCache(context, updated)
+        }
+        if (KEY_RESILIENT_VIDEO_BUFFER.name in appliedKeys) {
+            context.getSharedPreferences("auto_play_cache", Context.MODE_PRIVATE).edit()
+                .putBoolean(CACHE_KEY_RESILIENT_VIDEO_BUFFER, updated[KEY_RESILIENT_VIDEO_BUFFER] ?: false)
+                .apply()
         }
 
         return SettingsShareApplyResult(

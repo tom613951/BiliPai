@@ -43,6 +43,8 @@ import com.android.purebilibili.core.ui.rememberAppDownloadIcon
 import com.android.purebilibili.core.ui.rememberAppShareIcon
 import com.android.purebilibili.core.ui.rememberAppWatchLaterIcon
 import com.android.purebilibili.core.util.FormatUtils
+import com.android.purebilibili.feature.video.ui.components.FavoriteFolderMenuControl
+import com.android.purebilibili.feature.video.ui.components.favoriteFolderMenuSource
 import com.android.purebilibili.core.util.HapticType
 import com.android.purebilibili.core.util.rememberHapticFeedback
 import com.android.purebilibili.data.model.response.ViewInfo
@@ -314,7 +316,7 @@ fun ActionButtonsRow(
                         onFavoriteLongClick()
                     },
                     horizontalPadding = buttonHorizontalPadding,
-                    modifier = Modifier.favoriteActionAnchor()
+                    modifier = Modifier.favoriteFolderMenuSource(FavoriteFolderMenuControl.DETAIL).favoriteActionAnchor()
                 )
             }
 
@@ -706,7 +708,7 @@ fun TripleProgressIcon(
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun BiliActionButton(
+internal fun BiliActionButton(
     icon: ImageVector,
     text: String,
     isActive: Boolean,
@@ -714,7 +716,8 @@ private fun BiliActionButton(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null, // [New] Long click support
     enableActivePulse: Boolean = false,
-    horizontalPadding: Dp = 4.dp
+    horizontalPadding: Dp = 4.dp,
+    enabled: Boolean = true,
 ) {
     val feedbackClick = appActionWithFeedback(com.android.purebilibili.core.ui.AppHapticScene.VIDEO_ACTIONS, onClick)
     val interactionSource = remember { MutableInteractionSource() }
@@ -753,12 +756,13 @@ private fun BiliActionButton(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .appElasticPress(dragEnabled = onLongClick == null)
+            .appElasticPress(enabled = enabled, dragEnabled = onLongClick == null)
             .graphicsLayer {
                 scaleX = pulseScale
                 scaleY = pulseScale
             }
             .combinedClickable(
+                enabled = enabled,
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = feedbackClick,

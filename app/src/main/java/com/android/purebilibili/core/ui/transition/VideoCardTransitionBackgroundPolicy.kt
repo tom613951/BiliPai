@@ -1315,6 +1315,11 @@ internal fun Modifier.videoCardTransitionBackgroundEffect(
         liveRecordingActive = liveRecordingActive,
     )
 
+    // 无模糊时隔离实时内容的绘制指令：外层遮罩更新不重新执行列表绘制，
+    // 图片、数据和来源卡显隐仍按自身失效信号更新，不冻结为整页快照。
+    // 模糊路径继续直接录制来源，避免冻结层持有随实时内容变化的子图层。
+    val isolateLiveContent = motionTier == MotionTier.Reduced ||
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !realtimeBlurEnabledProvider()
     return this.drawWithContent {
         val activePhase = phaseProvider()
         val activeExposure = exposureProvider()
@@ -1528,7 +1533,7 @@ internal fun Modifier.videoCardTransitionBackgroundEffect(
             }
             drawRect(scrimColor.copy(alpha = frame.scrimAlpha))
         }
-    }
+    }.then(if (isolateLiveContent) Modifier.graphicsLayer() else Modifier)
 }
 
 /** Match both renderers' visibility boundary before recording or resolving a blur frame. */

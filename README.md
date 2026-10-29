@@ -8,7 +8,7 @@
 
 <p>
   <a href="https://github.com/tom613951/BiliPai/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v0.6.4--personal-007AFF?style=for-the-badge&logo=github" alt="最新 Release" />
+    <img src="https://img.shields.io/badge/Source-v0.6.7-007AFF?style=for-the-badge&logo=github" alt="源码版本" />
   </a>
   <a href="https://github.com/jay3-yy/BiliPai">
     <img src="https://img.shields.io/badge/Upstream-jay3--yy%2FBiliPai-FF9500?style=for-the-badge&logo=github" alt="官方 Upstream" />
@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁。
 
-当前基于官方 **v0.6.4**（`80866cae2`，versionCode 519）源码。**只同步代码，不提供预编译包。**
+当前基于官方 **v0.6.7**（`25ce80f0f`，versionCode 529）源码。**只同步代码，不提供预编译包。**
 
 ---
 
@@ -40,7 +40,7 @@
 
 ## 📦 获取安装包
 
-> ⚠️ **自 v0.6.4 起，本仓库不再提供预编译 APK**，请自行构建（见下方「自行构建」）。
+> ⚠️ **本仓库不提供预编译 APK**，请自行构建（见下方「自行构建」）。
 > 历史版本仍可在 [Releases 页面](https://github.com/tom613951/BiliPai/releases) 下载。
 
 本仓库只跟随上游同步源码并叠加个人补丁，构建由使用者自行完成。
@@ -54,7 +54,7 @@
 | `dev` | 同 release，包名带 `.dev` 后缀，用于并存测试 |
 
 > ⚠️ 自行构建的 APK 与官方版应用 ID 相同，**安装前需先卸载官方版本**。
-> 若你之前安装过本仓库的预编译包（v0.6.4 及更早），自行构建时请沿用同一密钥库，
+> 若你之前安装过本仓库的历史预编译包（v0.6.4 及更早），自行构建时请沿用同一密钥库，
 > 否则需先卸载再安装，否则会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
 
 > 🔑 历史预编译包（v0.5.5 ~ v0.6.4）使用密钥库 `CN=BiliPai Personal`

@@ -585,9 +585,9 @@ object CommentRepository {
                     CoreDataLog.w("CommentRepo", "getComments REST failed with code ${finalResponse.code}, restoring valid gRPC payload")
                     return@withContext fallbackGrpcResult
                 }
-                val errorMsg = resolveCommentReadErrorMessage(finalResponse.code)
+                val error = CommentReadException(finalResponse.code, finalResponse.message)
                 android.util.Log.e("CommentRepo", " getComments failed: oid=$oid, type=$type, ${finalResponse.code} - ${finalResponse.message}")
-                Result.failure(Exception(errorMsg))
+                Result.failure(error)
             }
         } catch (e: Exception) {
             if (fallbackGrpcResult != null) {
@@ -684,7 +684,7 @@ object CommentRepository {
                 response = fetchCommentEmptySuccessFallback(plan, oid, type, page, ps, mode, null)
             }
             currentCoroutineContext().ensureActive()
-            if (response.code != 0) return Result.failure(Exception(resolveCommentReadErrorMessage(response.code)))
+            if (response.code != 0) return Result.failure(CommentReadException(response.code, response.message))
             val rawData = response.data ?: return Result.failure(Exception("评论响应缺少数据，请重试"))
             require(continuation == null || continuation.route == mobileRestCommentRoute(rawData)) {
                 "评论分页接口发生变化，请刷新后重试"
@@ -709,7 +709,7 @@ object CommentRepository {
             if (response.code == 0) {
                 Result.success(response.data?.count ?: 0)
             } else {
-                Result.failure(Exception(resolveCommentReadErrorMessage(response.code)))
+                Result.failure(CommentReadException(response.code, response.message))
             }
         } catch (e: Exception) {
             Result.failure(e)
@@ -915,9 +915,7 @@ object CommentRepository {
                     return@withContext fallbackGrpcResult
                 }
                 android.util.Log.e("CommentRepo", " getSubComments failed: oid=$oid, type=$type, ${finalResponse.code} - ${finalResponse.message}")
-                val errorMsg = resolveCommentReadErrorMessage(finalResponse.code)
-                    .replace("评论", "回复")
-                Result.failure(Exception(errorMsg))
+                Result.failure(CommentReadException(finalResponse.code, finalResponse.message))
             }
         } catch (e: Exception) {
             if (fallbackGrpcResult != null) {
@@ -1031,6 +1029,8 @@ object CommentRepository {
                 }
                 Result.failure(Exception(errorMsg))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             CoreDataLog.e("CommentRepo", "searchMentionUsers exception: keyword=$keyword", e)
             Result.failure(e)
@@ -1130,13 +1130,15 @@ object CommentRepository {
     suspend fun uploadCommentImage(
         fileName: String,
         mimeType: String,
-        bytes: ByteArray
+        bytes: ByteArray,
+        biz: String = "new_dyn",
     ): Result<ReplyPicture> = withContext(Dispatchers.IO) {
         val mediaType = mimeType.toMediaType()
         uploadCommentImagePart(
             fileName = fileName.ifBlank { "comment_image.jpg" },
             mimeType = mimeType,
-            fileBody = bytes.toRequestBody(mediaType)
+            fileBody = bytes.toRequestBody(mediaType),
+            biz = biz,
         )
     }
 
@@ -1149,7 +1151,8 @@ object CommentRepository {
         fileName: String,
         mimeType: String,
         resolver: ContentResolver,
-        uri: Uri
+        uri: Uri,
+        biz: String = "new_dyn",
     ): Result<ReplyPicture> = withContext(Dispatchers.IO) {
         val size = queryContentImageSize(resolver, uri)
         if (size == null) {
@@ -1162,7 +1165,8 @@ object CommentRepository {
             uploadCommentImage(
                 fileName = fileName,
                 mimeType = mimeType,
-                bytes = bytes
+                bytes = bytes,
+                biz = biz,
             )
         } else {
             if (size <= 0L) return@withContext Result.failure(Exception("图片内容为空"))
@@ -1177,7 +1181,8 @@ object CommentRepository {
                     uri = uri,
                     mediaType = mimeType.toMediaType(),
                     contentLength = size
-                )
+                ),
+                biz = biz,
             )
         }
     }
@@ -1185,7 +1190,8 @@ object CommentRepository {
     private suspend fun uploadCommentImagePart(
         fileName: String,
         mimeType: String,
-        fileBody: RequestBody
+        fileBody: RequestBody,
+        biz: String,
     ): Result<ReplyPicture> = withContext(Dispatchers.IO) {
         try {
             val csrf = com.android.purebilibili.core.store.TokenManager.csrfCache
@@ -1200,7 +1206,7 @@ object CommentRepository {
             )
             val textMedia = "text/plain".toMediaType()
             val categoryBody = "daily".toRequestBody(textMedia)
-            val bizBody = "new_dyn".toRequestBody(textMedia)
+            val bizBody = biz.toRequestBody(textMedia)
             val csrfBody = csrf.toRequestBody(textMedia)
 
             val response = api.uploadCommentImage(

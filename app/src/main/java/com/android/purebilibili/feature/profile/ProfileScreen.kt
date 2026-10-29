@@ -1,5 +1,6 @@
 package com.android.purebilibili.feature.profile
 
+import com.android.purebilibili.navigation.tabIndicatorPosition
 import com.android.purebilibili.data.model.AccountLedgerKind
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
@@ -16,6 +17,7 @@ import coil3.request.placeholder
 import com.android.purebilibili.core.ui.resolveFilledButtonContainerColor
 import com.android.purebilibili.core.ui.resolveFilledButtonContentColor
 import com.android.purebilibili.core.ui.components.AppIcon
+import com.android.purebilibili.core.ui.components.appGentleActionClickable
 import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 import com.android.purebilibili.core.ui.AppSpacingTokens
@@ -53,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -114,6 +117,8 @@ import com.android.purebilibili.feature.home.UserState
 import com.android.purebilibili.feature.dynamic.components.ImagePreviewDialog
 import com.android.purebilibili.feature.dynamic.components.isImagePreviewSourceHidden
 import com.android.purebilibili.feature.dynamic.components.prepareImagePreviewSourceTransition
+import com.android.purebilibili.feature.dynamic.components.rememberImagePreviewSourceRect
+import com.android.purebilibili.feature.dynamic.components.imagePreviewSourceBounds
 import com.android.purebilibili.feature.dynamic.components.resolveImagePreviewPlaceholderCacheKey
 import com.android.purebilibili.feature.dynamic.components.ImagePreviewTextContent
 import com.android.purebilibili.core.ui.AppAlertDialog
@@ -140,9 +145,8 @@ import com.android.purebilibili.core.ui.AppTopBar
 import com.android.purebilibili.core.ui.AppTopBarStyle
 import com.android.purebilibili.feature.home.components.BiliPaiImmersiveTopBar
 import com.android.purebilibili.feature.home.components.shouldUseBiliPaiProgressiveTopBlur
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import com.android.purebilibili.core.ui.blur.ChromeBackdropSource
+import com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource
 import com.android.purebilibili.core.ui.AppSplitLayout
 import com.android.purebilibili.core.ui.TopReadabilityChrome
 import com.android.purebilibili.core.ui.globalWallpaperAwareBackground
@@ -150,7 +154,6 @@ import com.android.purebilibili.core.ui.LocalBottomBarContentPadding
 import com.android.purebilibili.core.ui.rememberAppBackIcon
 import com.android.purebilibili.core.ui.rememberAppBookmarkIcon
 import com.android.purebilibili.core.ui.rememberAppChevronDownIcon
-import com.android.purebilibili.core.ui.rememberAppChevronUpIcon
 import com.android.purebilibili.core.ui.rememberAppDownloadIcon
 import com.android.purebilibili.core.ui.rememberAppFolderIcon
 import com.android.purebilibili.core.ui.rememberAppHistoryIcon
@@ -684,6 +687,7 @@ private fun ProfileScreenContent(
         is ProfileUiState.Error -> {
             // 🔧 [新增] 离线/错误状态 - 显示错误信息并提供重试和离线缓存入口
             AppScaffold(
+                topBarIconBackdropSource = profileProgressiveChrome.source,
                 containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
                     BiliPaiImmersiveTopBar(
@@ -724,7 +728,7 @@ private fun ProfileScreenContent(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .profileProgressiveBackdrop(profileProgressiveChrome.backdrop)
+                        .profileProgressiveBackdrop(profileProgressiveChrome)
                         .globalWallpaperAwareBackground(MaterialTheme.colorScheme.background)
                         .padding(padding)
                         .padding(32.dp),
@@ -799,6 +803,7 @@ private fun ProfileScreenContent(
             }
 
             AppScaffold(
+                topBarIconBackdropSource = profileProgressiveChrome.source,
                 modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
                 containerColor = MaterialTheme.colorScheme.background,
                 // [Immersive] Mobile hides default TopBar, Tablet keeps it
@@ -860,7 +865,7 @@ private fun ProfileScreenContent(
                         .fillMaxSize()
                         .then(
                             if (windowSizeClass.shouldUseSplitLayout) {
-                                Modifier.profileProgressiveBackdrop(profileProgressiveChrome.backdrop)
+                                Modifier.profileProgressiveBackdrop(profileProgressiveChrome)
                             } else {
                                 Modifier
                             }
@@ -880,6 +885,7 @@ private fun ProfileScreenContent(
                     ProfileSpaceContent(
                         viewModel = viewModel,
                         user = decoratedUser,
+                        accountFace = currentUiState.user.face,
                         space = currentUiState.space,
                         editableAccount = currentUiState.editableAccount,
                         favoriteFolderShortcuts = favoriteFolderShortcuts,
@@ -1139,6 +1145,7 @@ private fun ProfileSkinVideoBackground(
 private fun ProfileSpaceContent(
     viewModel: ProfileViewModel,
     user: UserState,
+    accountFace: String,
     space: ProfileSpaceUiState,
     editableAccount: ProfileEditableAccountState,
     favoriteFolderShortcuts: List<ProfileFavoriteFolderShortcut>,
@@ -1176,6 +1183,20 @@ private fun ProfileSpaceContent(
     captureBackground: @Composable BoxScope.() -> Unit = {},
 ) {
     var showEditDialog by remember { mutableStateOf(false) }
+    var avatarPreview by remember(user.mid) { mutableStateOf<String?>(null) }
+    val avatarSourceRect = rememberImagePreviewSourceRect()
+    val openAvatarPreview: () -> Unit = {
+        if (user.face.isNotBlank()) {
+            prepareImagePreviewSourceTransition(avatarSourceRect.value)
+            avatarPreview = user.face
+        }
+    }
+    var accountAvatarPickerMid by rememberSaveable { mutableStateOf<Long?>(null) }
+    var accountAvatarCrop by rememberSaveable(user.mid) { mutableStateOf<String?>(null) }
+    var accountAvatarConfirmation by rememberSaveable(user.mid) { mutableStateOf<String?>(null) }
+    var editingAccountField by remember(user.mid) { mutableStateOf<ProfileAccountField?>(null) }
+    var showAccountSignDialog by remember(user.mid) { mutableStateOf(false) }
+    var showAccountSexDialog by remember(user.mid) { mutableStateOf(false) }
     var showAdjustmentSheet by remember { mutableStateOf(false) }
     var tempSelectedUri by remember { mutableStateOf<Uri?>(null) }
     val customBackgroundUri by viewModel.getProfileBgUri().collectAsStateWithLifecycle(initialValue = null
@@ -1191,6 +1212,17 @@ private fun ProfileSpaceContent(
             showAdjustmentSheet = true
         }
     }
+    val accountAvatarPicker = rememberLauncherForActivityResult(contract = PickGalleryVisualMedia()) { uri: Uri? ->
+        val mid = accountAvatarPickerMid
+        accountAvatarPickerMid = null
+        if (uri != null && mid == user.mid) {
+            if (context.contentResolver.getType(uri)?.equals("image/gif", ignoreCase = true) == true) {
+                Toast.makeText(context, "不能选择 GIF 头像", Toast.LENGTH_SHORT).show()
+            } else {
+                accountAvatarCrop = uri.toString()
+            }
+        }
+    }
     var showWallpaperSheet by remember { mutableStateOf(false) }
     var showPhotoPickerDialog by remember { mutableStateOf(false) }
     var showWallpaperActionSheet by remember { mutableStateOf(false) }
@@ -1198,9 +1230,76 @@ private fun ProfileSpaceContent(
     if (showEditDialog) {
         ProfileEditAccountDialog(
             state = editableAccount,
+            mid = user.mid,
+            accountFace = accountFace,
             isSaving = space.isSavingSign,
             onDismiss = { showEditDialog = false },
-            onSaveSign = onSignSave
+            onEditSign = { showEditDialog = false; showAccountSignDialog = true },
+            // 子编辑流程（昵称/生日、性别、头像）叠加在编辑资料之上，返回时回到编辑资料。
+            onEditField = { field -> editingAccountField = field },
+            onEditSex = { showAccountSexDialog = true },
+            onEditAvatar = {
+                accountAvatarPickerMid = user.mid
+                accountAvatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }
+        )
+    }
+    avatarPreview?.let { image ->
+        val density = LocalDensity.current
+        val radius = avatarSourceRect.value?.let { with(density) { (minOf(it.width, it.height) / 2f).toDp().value } } ?: 0f
+        ImagePreviewDialog(images = listOf(image), initialIndex = 0, sourceRect = avatarSourceRect.value,
+            sourceCornerRadiusDp = radius, onDismiss = { avatarPreview = null })
+    }
+    accountAvatarCrop?.let { source ->
+        com.android.purebilibili.feature.dynamic.components.DynamicImageCropDialog(
+            source = source,
+            onDismiss = { accountAvatarCrop = null },
+            onCropped = { cropped ->
+                accountAvatarCrop = null
+                accountAvatarConfirmation = cropped
+            }
+        )
+    }
+    if (showAccountSignDialog) {
+        ProfileAccountSignDialog(
+            initialValue = editableAccount.sign,
+            onDismiss = { showAccountSignDialog = false },
+            onSave = { sign -> showAccountSignDialog = false; onSignSave(sign) },
+        )
+    }
+    editingAccountField?.let { field ->
+        ProfileAccountFieldDialog(
+            field = field,
+            initialValue = if (field == ProfileAccountField.NAME) editableAccount.name else editableAccount.birthday,
+            onDismiss = { editingAccountField = null },
+            onSubmit = { value ->
+                editingAccountField = null
+                viewModel.updateAccountField(field, value)
+            }
+        )
+    }
+    if (showAccountSexDialog) {
+        AppAlertDialog(
+            onDismissRequest = { showAccountSexDialog = false },
+            title = { AppText("修改账号性别") },
+            text = {
+                Column {
+                    listOf("男" to "1", "女" to "2", "保密" to "0").forEach { (label, value) ->
+                        AppTextButton(onClick = {
+                            showAccountSexDialog = false
+                            viewModel.updateAccountField(ProfileAccountField.SEX, value)
+                        }) { AppText(label) }
+                    }
+                }
+            },
+            confirmButton = { AppTextButton(onClick = { showAccountSexDialog = false }) { AppText("取消") } }
+        )
+    }
+    accountAvatarConfirmation?.let { image ->
+        ProfileAvatarConfirmDialog(
+            image = image,
+            onDismiss = { accountAvatarConfirmation = null },
+            onConfirm = { accountAvatarConfirmation = null; viewModel.updateAccountAvatar(Uri.parse(image)) },
         )
     }
     if (showAdjustmentSheet && tempSelectedUri != null) {
@@ -1417,6 +1516,8 @@ private fun ProfileSpaceContent(
                     ProfileSpaceHeader(
                         user = user,
                         editableAccount = editableAccount,
+                        onAvatarClick = openAvatarPreview,
+                        avatarSourceRect = avatarSourceRect,
                         compact = true,
                         heroChrome = heroChrome,
                         showWallpaperAction = true,
@@ -1475,7 +1576,7 @@ private fun ProfileSpaceContent(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .profileProgressiveBackdrop(progressiveTopChrome.backdrop)
+                    .profileProgressiveBackdrop(progressiveTopChrome)
                     .then(if (hazeState != null) Modifier.hazeSourceCompat(hazeState) else Modifier)
                     .globalWallpaperAwareBackground(colorScheme.surface),
             ) {
@@ -1540,6 +1641,8 @@ private fun ProfileSpaceContent(
                     ProfileSpaceHeroHeader(
                         user = user,
                         editableAccount = editableAccount,
+                        onAvatarClick = openAvatarPreview,
+                        avatarSourceRect = avatarSourceRect,
                         heroChrome = heroChrome,
                         layoutTokens = layoutTokens,
                         showWallpaperAction = false,
@@ -1655,7 +1758,8 @@ private fun ProfileSpaceContent(
                 },
                 listState = mobileListState,
                 flingBehavior = profileHeaderFling,
-                onAvatarClick = { showEditDialog = true },
+                onAvatarClick = openAvatarPreview,
+                avatarSourceRect = avatarSourceRect,
                 photoState = photoState.takeIf { photoExpansionEnabled },
                 photoFractionProvider = photoFractionProvider,
                 photoBottomProvider = photoBottomProvider,
@@ -1761,10 +1865,10 @@ private fun ProfilePinnedSpaceTopBar(
                 listOf(
                     AppWindowAction(label = "搜索", onClick = onSearchClick),
                     AppWindowAction(label = "消息", onClick = onInboxClick),
+                    AppWindowAction(label = "编辑资料", onClick = onEditClick),
                     AppWindowAction(
-                        label = "账号与资料",
+                        label = "账号与资产",
                         children = listOf(
-                            AppWindowAction(label = "编辑资料", onClick = onEditClick),
                             AppWindowAction(label = "切换账号", onClick = onAccountManageClick),
                         ) + ledgerMenuActions(openLedger),
                     ),
@@ -2044,6 +2148,8 @@ private fun ProfileQuickAccessDashboard(
 private fun ProfileSpaceHeroHeader(
     user: UserState,
     editableAccount: ProfileEditableAccountState,
+    onAvatarClick: () -> Unit,
+    avatarSourceRect: androidx.compose.runtime.MutableState<Rect?>,
     heroChrome: ProfileHeroChrome,
     layoutTokens: ProfileLayoutTokens,
     showWallpaperAction: Boolean,
@@ -2094,6 +2200,8 @@ private fun ProfileSpaceHeroHeader(
         ProfileSpaceHeader(
             user = user,
             editableAccount = editableAccount,
+            onAvatarClick = onAvatarClick,
+            avatarSourceRect = avatarSourceRect,
             compact = false,
             showIdentity = showIdentity,
             heroChrome = statisticsChrome,
@@ -2139,6 +2247,8 @@ private fun ProfileContentSheet(
 private fun ProfileSpaceHeader(
     user: UserState,
     editableAccount: ProfileEditableAccountState,
+    onAvatarClick: () -> Unit,
+    avatarSourceRect: androidx.compose.runtime.MutableState<Rect?>,
     compact: Boolean,
     heroChrome: ProfileHeroChrome,
     showWallpaperAction: Boolean,
@@ -2180,13 +2290,15 @@ private fun ProfileSpaceHeader(
             ) {
                 AsyncImage(
                     model = user.face,
-                    contentDescription = "${user.name}的头像",
+                    contentDescription = "${user.name}的头像，查看大图",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .size(96.dp)
+                        .imagePreviewSourceBounds(avatarSourceRect)
+                        .alpha(if (isImagePreviewSourceHidden(avatarSourceRect.value)) 0f else 1f)
                         .clip(CircleShape)
                         .border(2.dp, heroChrome.avatarBorderColor, CircleShape)
-                        .clickable(onClick = onEditClick),
+                        .clickable(onClick = onAvatarClick),
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2215,12 +2327,23 @@ private fun ProfileSpaceHeader(
             ProfileSpaceStat("动态", user.dynamic, textColor, onClick = onDynamicsClick)
             ProfileSpaceStat("关注", user.following, textColor, onClick = onFollowingClick)
             ProfileSpaceStat("粉丝", user.follower, textColor, onClick = onFansClick)
+            val identityMotionEnabled = com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
+                !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+            val identityArrowRotation = androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (identityExpanded) 180f else 0f,
+                animationSpec = if (identityMotionEnabled) androidx.compose.animation.core.spring(
+                    dampingRatio = 1f, stiffness = 700f,
+                ) else androidx.compose.animation.core.snap(),
+                label = "profileIdentityArrow",
+            )
             AppIconButton(onClick = { identityExpanded = !identityExpanded }) {
                 AppIcon(
-                    imageVector = if (identityExpanded) rememberAppChevronUpIcon() else rememberAppChevronDownIcon(),
+                    imageVector = rememberAppChevronDownIcon(),
                     contentDescription = if (identityExpanded) "收起个人资料" else "展开个人资料",
                     tint = secondaryColor,
-                    modifier = Modifier.size(20.dp),
+                    modifier = Modifier
+                        .size(20.dp)
+                        .graphicsLayer { rotationZ = identityArrowRotation.value },
                 )
             }
         }
@@ -2391,13 +2514,24 @@ private fun ProfileSpaceMetaChip(
 }
 
 @Composable
-private fun ProfileSpaceStat(label: String, value: Int, color: Color, onClick: (() -> Unit)? = null) {
+private fun ProfileSpaceStat(
+    label: String,
+    value: Int,
+    color: Color,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
     val width = if (LocalConfiguration.current.screenWidthDp < 360) 60.dp else 72.dp
     Column(
-        modifier = Modifier
+        modifier = modifier
             .width(width)
             .heightIn(min = 48.dp)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(
+                if (onClick != null) Modifier.appGentleActionClickable(
+                    shape = AppShapes.container(ContainerLevel.Card),
+                    onClick = onClick,
+                ) else Modifier,
+            ),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         AppText(
@@ -2427,7 +2561,7 @@ private fun ProfileSpaceTabs(
         options = tabs.map { AppSegmentOption(it.tab, it.title) },
         selectedValue = tabs[selectedIndex].tab,
         onSelectionChange = onTabSelected,
-        indicatorPositionProvider = { pagerState.currentPage + pagerState.currentPageOffsetFraction },
+        indicatorPositionProvider = { pagerState.tabIndicatorPosition },
         isScrollInProgressProvider = { pagerState.isScrollInProgress },
         scrollable = false,
         dragSelectionEnabled = tabs.size > 1,
@@ -3471,52 +3605,214 @@ private fun ProfileSpaceEmpty(text: String) {
 @Composable
 private fun ProfileEditAccountDialog(
     state: ProfileEditableAccountState,
+    mid: Long,
+    accountFace: String,
     isSaving: Boolean,
     onDismiss: () -> Unit,
-    onSaveSign: (String) -> Unit
+    onEditSign: () -> Unit,
+    onEditField: (ProfileAccountField) -> Unit,
+    onEditSex: () -> Unit,
+    onEditAvatar: () -> Unit
 ) {
-    var sign by remember(state.sign) { mutableStateOf(state.sign) }
-    val signError = validateProfileSign(sign)
+    val context = LocalContext.current
     AppAlertDialog(
         onDismissRequest = onDismiss,
         title = { AppText("编辑资料") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ProfileReadonlyAccountField("昵称", state.name)
-                ProfileReadonlyAccountField("生日", state.birthday.ifBlank { "未展示" })
-                ProfileReadonlyAccountField("性别", state.sex.ifBlank { "未展示" })
-                AppOutlinedTextField(
-                    value = sign,
-                    onValueChange = { sign = it },
-                    label = { AppText("签名") },
-                    minLines = 3,
-                    maxLines = 4,
-                    isError = signError != null,
-                    supportingText = { AppText(signError ?: "${sign.length}/70") },
-                    modifier = Modifier.fillMaxWidth()
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                AppText("B 站账号资料", color = AppContentColors.secondaryText(), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 12.dp, bottom = 4.dp))
+                ProfileAccountEditRow("头像", "", avatar = accountFace, enabled = !isSaving, onClick = onEditAvatar)
+                ProfileAccountEditRow("昵称", state.name.ifBlank { "未展示" }, enabled = !isSaving) {
+                    onEditField(ProfileAccountField.NAME)
+                }
+                ProfileAccountEditRow("性别", state.sex.ifBlank { "未展示" }, enabled = !isSaving, onClick = onEditSex)
+                ProfileAccountEditRow("生日", state.birthday.ifBlank { "未展示" }, enabled = !isSaving) {
+                    onEditField(ProfileAccountField.BIRTHDAY)
+                }
+                ProfileAccountEditRow("签名", state.sign.ifBlank { "未设置" }, enabled = !isSaving, onClick = onEditSign)
+                ProfileAccountEditRow("UID", mid.toString(), onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("UID", mid.toString()))
+                    Toast.makeText(context, "UID 已复制", Toast.LENGTH_SHORT).show()
+                })
+                listOf(
+                    "头像挂件" to "https://www.bilibili.com/h5/mall/pendant/home",
+                    "哔哩哔哩认证" to "https://account.bilibili.com/official/mobile/home"
+                ).forEach { (label, url) ->
+                    ProfileAccountEditRow(label, "", onClick = {
+                        try {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            Toast.makeText(context, "无法打开链接", Toast.LENGTH_SHORT).show()
+                        }
+                    })
+                }
+            }
+        },
+        confirmButton = { AppTextButton(onClick = onDismiss) { AppText("关闭") } },
+    )
+}
+
+@Composable
+private fun ProfileAccountEditRow(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    avatar: String? = null,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        AppText(title, color = AppContentColors.primaryText(), style = MaterialTheme.typography.bodyLarge)
+        if (!avatar.isNullOrBlank()) {
+            // 头像行与其他行一致：头像与右箭头右对齐，标题保持居左。
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AsyncImage(model = avatar, contentDescription = "B 站账号头像", contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(36.dp).clip(CircleShape))
+                Spacer(Modifier.width(4.dp))
+                AppIcon(com.android.purebilibili.core.ui.resolveAppChevronForwardIcon(), contentDescription = null,
+                    tint = AppContentColors.secondaryText(), modifier = Modifier.size(20.dp))
+            }
+        } else {
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (value.isNotBlank()) {
+                    AppText(
+                        text = value,
+                        color = AppContentColors.secondaryText(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
+                AppIcon(com.android.purebilibili.core.ui.resolveAppChevronForwardIcon(), contentDescription = null,
+                    tint = AppContentColors.secondaryText(), modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileAvatarConfirmDialog(
+    image: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { AppText("预览头像") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AsyncImage(
+                    model = image,
+                    contentDescription = "裁剪后的头像预览",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(144.dp).clip(CircleShape),
+                )
+                AppText(
+                    "确认后将提交到 B 站账号。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppContentColors.secondaryText(),
                 )
             }
         },
-        confirmButton = {
-            AppButton(
-                onClick = { onSaveSign(sign) },
-                enabled = !isSaving && signError == null
-            ) {
-                AppText(if (isSaving) "保存中" else "保存签名")
+        confirmButton = { AppButton(onClick = onConfirm) { AppText("提交头像") } },
+        dismissButton = { AppTextButton(onClick = onDismiss) { AppText("取消") } },
+    )
+}
+
+@Composable
+private fun ProfileAccountSignDialog(
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var sign by remember(initialValue) { mutableStateOf(initialValue) }
+    val error = validateProfileSign(sign)
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { AppText("修改账号签名") },
+        text = {
+            AppOutlinedTextField(
+                value = sign,
+                onValueChange = { sign = it.take(70) },
+                label = { AppText("签名") },
+                minLines = 3,
+                maxLines = 4,
+                isError = error != null,
+                supportingText = { AppText(error ?: "${sign.length}/70") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = { AppButton(onClick = { onSave(sign) }, enabled = error == null && sign != initialValue) { AppText("提交") } },
+        dismissButton = { AppTextButton(onClick = onDismiss) { AppText("取消") } },
+    )
+}
+
+@Composable
+private fun ProfileAccountFieldDialog(
+    field: ProfileAccountField,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Unit
+) {
+    var value by remember(field, initialValue) { mutableStateOf(initialValue) }
+    val isName = field == ProfileAccountField.NAME
+    val trimmed = value.trim()
+    val valid = if (isName) {
+        trimmed.isNotEmpty() && trimmed.length <= 16 && trimmed != initialValue
+    } else {
+        val date = runCatching { java.time.LocalDate.parse(trimmed) }.getOrNull()
+        date != null && !date.isAfter(java.time.LocalDate.now()) && trimmed != initialValue
+    }
+    AppAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { AppText(if (isName) "修改账号昵称" else "修改账号生日") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AppOutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.take(if (isName) 16 else 10) },
+                    label = { AppText(if (isName) "昵称" else "生日（YYYY-MM-DD）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                AppText(
+                    if (isName) "改名可能需要消耗 6 枚硬币，实际费用和限制以 B 站返回为准。确认后将提交账号修改。"
+                    else "请输入有效日期，提交后会修改 B 站账号生日。",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         },
-        dismissButton = {
-            AppTextButton(onClick = onDismiss) {
-                AppText("取消")
-            }
-        }
+        confirmButton = { AppButton(onClick = { onSubmit(trimmed) }, enabled = valid) { AppText("确认修改") } },
+        dismissButton = { AppTextButton(onClick = onDismiss) { AppText("取消") } }
     )
 }
 
 private data class ProfileProgressiveTopChrome(
-    val backdrop: LayerBackdrop?,
+    val source: ChromeBackdropSource?,
     val enabled: Boolean,
-)
+) {
+    val backdrop: top.yukonga.miuix.kmp.blur.Backdrop?
+        get() = source?.takeIf { it.isReady }?.backdrop
+}
 
 @Composable
 private fun rememberProfileProgressiveTopChrome(): ProfileProgressiveTopChrome {
@@ -3525,22 +3821,14 @@ private fun rememberProfileProgressiveTopChrome(): ProfileProgressiveTopChrome {
         enabled = themeConfig.progressiveTopBlurEnabled,
         hasBackdrop = true,
     ) && !isLowBlurBudgetForced()
-    val backdrop = if (enabled) rememberLayerBackdrop() else null
-    return remember(backdrop, enabled) { ProfileProgressiveTopChrome(backdrop, enabled) }
+    val source = if (enabled) rememberChromeBackdropSource() else null
+    return remember(source, enabled) { ProfileProgressiveTopChrome(source, enabled) }
 }
 
-private fun Modifier.profileProgressiveBackdrop(backdrop: LayerBackdrop?): Modifier {
-    return if (backdrop != null) then(Modifier.layerBackdrop(backdrop)) else this
+private fun Modifier.profileProgressiveBackdrop(chrome: ProfileProgressiveTopChrome): Modifier {
+    // 录制不依赖就绪状态，消费者只在首次录制完成后读取背景。
+    return then(chrome.source?.modifier ?: Modifier)
 }
-
-@Composable
-private fun ProfileReadonlyAccountField(label: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        AppText(text = label, style = MaterialTheme.typography.labelMedium, color = AppContentColors.secondaryText())
-        AppText(text = value, style = MaterialTheme.typography.bodyMedium, color = AppContentColors.primaryText())
-    }
-}
-
 
 @Composable
 fun TabletProfileContent(
@@ -3847,7 +4135,7 @@ private fun MobileProfileContent(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .profileProgressiveBackdrop(progressiveTopChrome.backdrop)
+                    .profileProgressiveBackdrop(progressiveTopChrome)
                     .then(if (hazeState != null) Modifier.hazeSourceCompat(hazeState) else Modifier)
                     .globalWallpaperAwareBackground(MaterialTheme.colorScheme.surface),
             ) {
@@ -4131,7 +4419,10 @@ private fun ProfileWallpaperMenuButton(
         modifier = modifier
             .size(48.dp)
             .clip(shape)
-            .clickable(onClick = onClick),
+            .appGentleActionClickable(
+                shape = shape,
+                onClick = onClick,
+            ),
         shape = shape,
         color = Color.Transparent,
         border = BorderStroke(1.dp, borderColor),
@@ -5108,7 +5399,10 @@ private fun ProfileFavoriteFolderShortcutChip(
             .heightIn(min = if (compact) 42.dp else 48.dp)
             .clip(AppShapes.container(ContainerLevel.Card))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = if (compact) 0.22f else 0.28f))
-            .clickable(onClick = onClick)
+            .appGentleActionClickable(
+                shape = AppShapes.container(ContainerLevel.Card),
+                onClick = onClick,
+            )
             .padding(horizontal = if (compact) 9.dp else 10.dp, vertical = if (compact) 7.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -5150,7 +5444,10 @@ private fun ProfileFavoriteFolderMoreChip(
             .heightIn(min = 42.dp)
             .clip(AppShapes.container(ContainerLevel.Card))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.18f))
-            .clickable(onClick = onClick)
+            .appGentleActionClickable(
+                shape = AppShapes.container(ContainerLevel.Card),
+                onClick = onClick,
+            )
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {

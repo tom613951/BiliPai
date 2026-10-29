@@ -1,6 +1,7 @@
 // 文件路径: feature/dynamic/components/ImagePreviewDialog.kt
 package com.android.purebilibili.feature.dynamic.components
 
+import kotlinx.coroutines.ensureActive
 import com.android.purebilibili.core.ui.AppContentColors
 
 import coil3.network.NetworkHeaders
@@ -78,7 +79,6 @@ import coil3.Image
 import coil3.imageLoader
 import com.android.purebilibili.core.util.originalBiliImage
 import coil3.request.ImageRequest
-import coil3.request.SuccessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -585,8 +585,8 @@ private fun ImagePreviewOverlayContent(
         )
     }
 
-    // 已通过「查看原图」切换为高分辨率安全采样的页（按页索引记录）。
-    var originalQualityPages by remember { mutableStateOf(setOf<Int>()) }
+    // 图片身份变化后不沿用上一组图片的原图模式。
+    var originalQualityPages by remember(images) { mutableStateOf(setOf<Int>()) }
 
     LaunchedEffect(pagerState.currentPage) {
         activeZoomScale = 1f
@@ -1181,6 +1181,7 @@ private fun ImagePreviewOverlayContent(
                             ImageRequest.Builder(context)
                                 .data(imageUrl)
                                 .originalBiliImage()
+                                .diskCacheKey(imageUrl)
                                 // 预览必须采样解码，避免超大原图超过 Canvas 单位图绘制上限。
                                 .size(decodeSize.widthPx, decodeSize.heightPx)
                                 .placeholderMemoryCacheKey(placeholderCacheKey)
@@ -1208,6 +1209,9 @@ private fun ImagePreviewOverlayContent(
 
                         ZoomableImage(
                             model = previewRequest,
+                            originalImageUrl = imageUrl,
+                            originalQuality = page in originalQualityPages,
+                            publicContent = publicContent,
                             contentDescription = null,
                             imageLoader = gifImageLoader,  //  使用 GIF 加载器
                             modifier = Modifier.fillMaxSize(),
@@ -1290,8 +1294,7 @@ private fun ImagePreviewOverlayContent(
                                 }
                             },
                             onExtremeAspectRatioDetected = {
-                                // 长条图在 4096 方形采样档下短边像素不足，放大后仍会发糊。
-                                // 自动提升到现有原图解码档；极端长宽比下实际内存远低于方形上限。
+                                // 长条图自动启用原图区域解码，放大和滚动时按视口补充高清内容。
                                 originalQualityPages = originalQualityPages + page
                             },
                             onVerticalDismissDragCancel = {
@@ -1594,7 +1597,7 @@ private fun ImagePreviewOverlayContent(
                     val isOriginalQuality = currentPage in originalQualityPages
                     ImagePreviewCommentTopBar(
                         label = if (isOriginalQuality) {
-                            "原图已加载"
+                            "原图模式"
                         } else {
                             commentContext.originalSizeLabels.getOrNull(currentPage)
                                 ?: resolveCommentImageOriginalSizeLabel(null)
@@ -1605,8 +1608,7 @@ private fun ImagePreviewOverlayContent(
                         onDismiss = { triggerDismiss() },
                         onShare = { requestShareCurrentImage(currentImageUrl) },
                         onViewOriginal = {
-                            // 按 API 文档：去掉 @ 尺寸参数即为原图 URL（预览已用该 URL），
-                            // 此处切换为全分辨率解码重新加载，突破预览采样限制。
+                            // 原图保留安全的整图底图，高清细节由可见区域解码提供。
                             originalQualityPages = originalQualityPages + currentPage
                         },
                         modifier = Modifier
@@ -2319,6 +2321,7 @@ private fun ImagePreviewCommentActionButton(
  */
 internal fun normalizeImageUrl(rawSrc: String): String {
     val trimmed = rawSrc.trim()
+    if (trimmed.startsWith("file://") || trimmed.startsWith("content://")) return trimmed
     var result = when {
         trimmed.startsWith("https://") -> trimmed
         trimmed.startsWith("http://") -> trimmed.replace("http://", "https://")
@@ -2338,6 +2341,7 @@ internal fun normalizeImageUrl(rawSrc: String): String {
 /** Stable cache identity shared by a source thumbnail and its preview placeholder. */
 internal fun resolveImagePreviewPlaceholderCacheKey(rawSrc: String): String? {
     val trimmed = rawSrc.trim()
+    if (trimmed.startsWith("file://") || trimmed.startsWith("content://")) return trimmed
     val normalized = when {
         trimmed.startsWith("https://") -> trimmed
         trimmed.startsWith("http://") -> trimmed.replace("http://", "https://")
@@ -2371,7 +2375,17 @@ private fun resolveImageShareExtension(mimeType: String): String = when (mimeTyp
 suspend fun shareImageFromPreview(context: Context, imageUrl: String, publicContent: Boolean = false): Boolean {
     val normalizedUrl = normalizeImageUrl(imageUrl)
     if (normalizedUrl.isEmpty()) return false
-    val mimeType = resolveImageShareMimeType(normalizedUrl)
+    val mimeType = withContext(Dispatchers.IO) {
+        if (normalizedUrl.startsWith("file://") || normalizedUrl.startsWith("content://")) {
+            val uri = android.net.Uri.parse(normalizedUrl)
+            val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            val providerMime = try {
+                context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, options) }
+                context.contentResolver.getType(uri)
+            } catch (_: Exception) { null }
+            options.outMimeType ?: providerMime ?: "image/jpeg"
+        } else resolveImageShareMimeType(normalizedUrl)
+    }
     val sharedFile = withContext(Dispatchers.IO) {
         createImagePreviewShareFile(context, normalizedUrl, mimeType, publicContent)
     } ?: return false
@@ -2416,6 +2430,11 @@ private fun createImagePreviewShareFile(
         cleanupImagePreviewShareCache(cacheDir)
         val extension = resolveImageShareExtension(mimeType)
         val outputFile = File(cacheDir, "BiliPai_${System.currentTimeMillis()}.$extension")
+        if (imageUrl.startsWith("file://") || imageUrl.startsWith("content://")) {
+            val input = context.contentResolver.openInputStream(android.net.Uri.parse(imageUrl)) ?: return null
+            input.use { source -> outputFile.outputStream().use { source.copyTo(it) } }
+            return outputFile
+        }
         if (publicContent) {
             com.android.purebilibili.core.plugin.feed.downloadPublicContentToFile(imageUrl, outputFile)
             return outputFile
@@ -2452,147 +2471,19 @@ private fun cleanupImagePreviewShareCache(cacheDir: File) {
     }
 }
 
-/**
- *  保存图片到相册 - 支持 GIF/WebP 等格式保留
- */
+/** 保存原始图片文件，保留长图分辨率、动图帧和编码格式。 */
 suspend fun saveImageToGallery(context: android.content.Context, imageUrl: String, publicContent: Boolean = false): Boolean {
-    return withContext(Dispatchers.IO) {
-        try {
-            //  检测图片格式
-            val isGif = imageUrl.contains(".gif", ignoreCase = true)
-            val isWebp = imageUrl.contains(".webp", ignoreCase = true)
-            val isPng = imageUrl.contains(".png", ignoreCase = true)
-
-            //  对于 GIF/WebP，直接下载原始字节流保留动画
-            if (isGif || isWebp) {
-                val tempFile = File.createTempFile("bilipai_save_", ".bin", context.cacheDir)
-                if (publicContent) {
-                    com.android.purebilibili.core.plugin.feed.downloadPublicContentToFile(imageUrl, tempFile)
-                } else {
-                    val url = java.net.URL(imageUrl)
-                    val connection = url.openConnection() as java.net.HttpURLConnection
-                    connection.setRequestProperty("Referer", "https://www.bilibili.com/")
-                    connection.connect()
-
-                    if (connection.responseCode != 200) {
-                        Log.e("ImagePreview", "Failed to download: ${connection.responseCode}")
-                        return@withContext false
-                    }
-
-                    // 先把下载流落到临时文件，再分发给保存目标，避免整块字节驻留 Java 堆。
-                    try {
-                        connection.inputStream.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
-                        }
-                    } catch (e: Exception) {
-                        tempFile.delete()
-                        throw e
-                    }
-                    connection.disconnect()
-                }
-                // 生成文件名
-                val extension = when {
-                    isGif -> "gif"
-                    isWebp -> "webp"
-                    else -> "jpg"
-                }
-                val mimeType = when {
-                    isGif -> "image/gif"
-                    isWebp -> "image/webp"
-                    else -> "image/jpeg"
-                }
-                val fileName = "BiliPai_${System.currentTimeMillis()}.$extension"
-
-                val savedToCustomDirectory = tempFile.inputStream().use { input ->
-                    saveStreamToCustomImageSaveDirectory(context, input, fileName, mimeType)
-                }
-                if (savedToCustomDirectory) {
-                    tempFile.delete()
-                    Log.d("ImagePreview", "Image saved to custom directory: $fileName")
-                    return@withContext true
-                }
-
-                // 使用 MediaStore 保存
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                    put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        put(MediaStore.Images.Media.RELATIVE_PATH, resolveDefaultImageMediaStoreRelativePath())
-                        put(MediaStore.Images.Media.IS_PENDING, 1)
-                    }
-                }
-
-                val uri = context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                )
-                if (uri == null) {
-                    tempFile.delete()
-                    return@withContext false
-                }
-
-                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                    tempFile.inputStream().use { input -> input.copyTo(outputStream, 64 * 1024) }
-                }
-                tempFile.delete()
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    contentValues.clear()
-                    contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    context.contentResolver.update(uri, contentValues, null, null)
-                }
-
-                Log.d("ImagePreview", "Image saved successfully: $fileName")
-                return@withContext true
-            }
-
-            //  对于 JPEG/PNG 等静态图片，使用 Coil 下载并转换
-            val imageLoader = if (publicContent) com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.get(context) else context.imageLoader
-            val request = ImageRequest.Builder(context)
-                .data(imageUrl)
-                .originalBiliImage()
-                // B 站图片需要固定 Referer；公开内容（RSS 正文）改由匿名图片链路按图片站点补 Referer。
-                .apply {
-                    if (!publicContent) {
-                        httpHeaders(NetworkHeaders.Builder().set("Referer", "https://www.bilibili.com/").build())
-                    }
-                }
-                .build()
-
-            val result = imageLoader.execute(request)
-            if (result !is SuccessResult) {
-                Log.e("ImagePreview", "Failed to download image: $imageUrl")
-                return@withContext false
-            }
-
-            val bitmap = (result.image as? coil3.BitmapImage)?.bitmap
-            if (bitmap == null) {
-                Log.e("ImagePreview", "Failed to convert drawable to bitmap")
-                return@withContext false
-            }
-
-            // 生成文件名
-            val extension = if (isPng) "png" else "jpg"
-            val mimeType = if (isPng) "image/png" else "image/jpeg"
+    return try {
+        withOriginalImageFile(context, imageUrl, publicContent) { file ->
+            val mimeType = originalImageMimeType(file)
+            val extension = originalImageExtension(mimeType)
             val fileName = "BiliPai_${System.currentTimeMillis()}.$extension"
-            val format = if (isPng) android.graphics.Bitmap.CompressFormat.PNG else android.graphics.Bitmap.CompressFormat.JPEG
+            if (file.inputStream().use { input ->
+                    saveStreamToCustomImageSaveDirectory(context, input, fileName, mimeType)
+                }) return@withOriginalImageFile true
 
-            if (
-                saveBitmapToCustomImageSaveDirectory(
-                    context = context,
-                    bitmap = bitmap,
-                    fileName = fileName,
-                    format = format,
-                    quality = 95,
-                    mimeType = mimeType
-                )
-            ) {
-                Log.d("ImagePreview", "Image saved to custom directory: $fileName")
-                return@withContext true
-            }
-
-            // 使用 MediaStore 保存图片
-            val contentValues = ContentValues().apply {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                 put(MediaStore.Images.Media.MIME_TYPE, mimeType)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -2600,29 +2491,29 @@ suspend fun saveImageToGallery(context: android.content.Context, imageUrl: Strin
                     put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
             }
-
-            val uri = context.contentResolver.insert(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                contentValues
-            ) ?: return@withContext false
-
-            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                bitmap.compress(format, 95, outputStream)
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return@withOriginalImageFile false
+            var saved = false
+            try {
+                val output = resolver.openOutputStream(uri) ?: return@withOriginalImageFile false
+                output.use { sink -> file.inputStream().use { it.copyTo(sink, 64 * 1024) } }
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    check(resolver.update(uri, values, null, null) > 0)
+                }
+                saved = true
+                true
+            } finally {
+                if (!saved) resolver.delete(uri, null, null)
             }
-
-            // 标记保存完成
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                contentValues.clear()
-                contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
-                context.contentResolver.update(uri, contentValues, null, null)
-            }
-
-            Log.d("ImagePreview", "Image saved successfully: $fileName")
-            true
-        } catch (e: Exception) {
-            Log.e("ImagePreview", "Error saving image", e)
-            false
         }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        Log.e("ImagePreview", "Error saving original image", error)
+        false
     }
 }
 

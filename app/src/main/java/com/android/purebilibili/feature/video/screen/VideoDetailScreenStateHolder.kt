@@ -121,6 +121,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.android.purebilibili.data.model.response.BgmInfo
 import com.android.purebilibili.data.model.CommentFraudStatus
+import com.android.purebilibili.data.repository.VideoRepository
 import com.android.purebilibili.data.repository.resolveCommentFraudLightMessage
 import com.android.purebilibili.data.repository.shouldShowCommentFraudResultDialog
 import androidx.core.view.WindowInsetsCompat
@@ -606,7 +607,9 @@ internal fun VideoDetailScreenStateHolder(
     )
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val shareInfo = (uiState as? VideoPlaybackUiState.Success)?.info
+    val favoriteFolderMenuAnchor = com.android.purebilibili.feature.video.ui.components.rememberFavoriteFolderMenuAnchor()
     androidx.compose.runtime.CompositionLocalProvider(
+        com.android.purebilibili.feature.video.ui.components.LocalFavoriteFolderMenuAnchor provides favoriteFolderMenuAnchor,
         com.android.purebilibili.feature.share.LocalReplyShareContext provides shareInfo?.let {
             com.android.purebilibili.feature.share.ReplyShareContext(
                 url = "https://www.bilibili.com/video/${it.bvid}", title = it.title, cover = it.pic,
@@ -1003,6 +1006,9 @@ internal fun VideoDetailScreenStateHolder(
                             targetCid = resolvedCid,
                         ),
                         startInFullscreen = relatedNavStartInFullscreen.value,
+                        // 相关推荐列表加载时已预热过判定，这里同步取缓存，
+                        // 让新详情页首帧直接进入正确布局，不再先铺横屏。
+                        isVertical = VideoRepository.getCachedVerticalFlag(targetBvid),
                     )
 
                     // 先摘掉父详情壳 sharedBounds，再 push，避免相关卡嵌套在父壳内吃不到 morph。
@@ -2158,6 +2164,7 @@ internal fun VideoDetailScreenStateHolder(
         fallbackResumePositionMs = resumePositionMsFromRoute,
         startPaused = isPortraitFullscreen && !useSharedPortraitPlayer,
         entryTransitionFinished = entryPlaybackReady,
+        relatedPublicationAllowed = entryTransitionFinished,
         playbackSessionActive = playbackSessionActiveForMorph,
     )
     LaunchedEffect(isFullscreenMode) {
@@ -3685,6 +3692,7 @@ internal fun VideoDetailScreenStateHolder(
             subtitleDisplayModePreferenceOverride = subtitleDisplayModeOverride,
             onSubtitleDisplayModePreferenceOverrideChange = { subtitleDisplayModeOverride = it },
             fullscreenExtras = ContinuousPlayerFullscreenExtras(
+                commentStateHandle = commentStateHandle,
                 danmakuComposerVisible = showDanmakuDialog && isFullscreenMode,
                 onDismissDanmakuComposer = viewModel::hideDanmakuSendDialog,
                 onSendDanmakuComposer = viewModel::sendDanmaku,
@@ -3731,10 +3739,8 @@ internal fun VideoDetailScreenStateHolder(
                 onTriple = engagementViewModel::doTripleAction,
                 onRelatedVideoClick = navigateToRelatedVideo,
                 onPageSelect = playbackActions.switchPage,
-                hasFavoritePlaylist = isExternalPlaylist &&
-                    externalPlaylistSource == ExternalPlaylistSource.FAVORITE &&
-                    playlistItems.size > 1,
-                onFavoritePlaylistClick = { showExternalPlaylistQueueSheet = true },
+                hasExternalPlaylist = shouldShowExternalPlaylistQueueBar,
+                onExternalPlaylistClick = { showExternalPlaylistQueueSheet = true },
                 onLandscapeCommentClick = {
                     landscapeCommentPanelVisible = !landscapeCommentPanelVisible
                 },
@@ -3795,15 +3801,17 @@ internal fun VideoDetailScreenStateHolder(
                         },
                     )
                 } else {
-                    continuousPlayerContent(
-                        ContinuousPlayerHostLayout(
-                            modifier = Modifier.fillMaxSize(),
-                            viewportWidth = configuration.screenWidthDp.dp,
-                            alpha = continuousPlayerUnitState,
-                            scale = continuousPlayerUnitState,
-                            isFullscreen = true,
+                    BoxWithConstraints(Modifier.fillMaxSize()) {
+                        continuousPlayerContent(
+                            ContinuousPlayerHostLayout(
+                                modifier = Modifier.fillMaxSize(),
+                                viewportWidth = maxWidth,
+                                alpha = continuousPlayerUnitState,
+                                scale = continuousPlayerUnitState,
+                                isFullscreen = true,
+                            )
                         )
-                    )
+                    }
                 }
                 val success = uiState as? VideoPlaybackUiState.Success
                 if (canShowLandscapeComments && landscapeCommentPanelVisible && success != null) {
@@ -4229,12 +4237,14 @@ internal fun VideoDetailScreenStateHolder(
                         }
                         val standardCollapsedViewportHeight = when {
                             useOfficialInlinePortraitDetailExperience -> collapsedPortraitInlineSpec.heightDp.dp
-                            portraitPlayerCollapseMode != PortraitPlayerCollapseMode.OFF -> 56.dp
+                            portraitPlayerCollapseMode != PortraitPlayerCollapseMode.OFF ||
+                                (hidePausedPlayerForComments && !isVerticalVideo) -> 56.dp
                             else -> 0.dp
                         }
                         val collapsedViewportHeight = resolveInlinePlayerCollapsedViewportHeightDp(
                             standardCollapsedHeightDp = standardCollapsedViewportHeight.value,
                             hidePausedPlayerForComments = hidePausedPlayerForComments,
+                            retainPlayToolbar = !isVerticalVideo,
                         ).dp
                         // 两种竖屏内联体验共用同一套位移语义：手势范围始终等于
                         // “展开高度 - 当前折叠终点”，高度才能只由共享位移推导且保持连续。
@@ -5858,7 +5868,13 @@ internal fun VideoDetailScreenStateHolder(
     // 导致视频被拉伸；因此窗口内全屏仍使用正常布局，由播放器按视频比例适配窗口。
     val rootCardTransition = com.android.purebilibili.core.ui.transition
         .LocalMiuixVideoCardTransitionState.current
-    androidx.compose.runtime.CompositionLocalProvider(LocalPlaybackResumeFeedback provides playbackEventState) {
+    val relatedVideoCardLayout = remember(homeSettings.homeFeedCardStyle) {
+        com.android.purebilibili.feature.home.resolveHomeFeedCardLayout(homeSettings.homeFeedCardStyle)
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalPlaybackResumeFeedback provides playbackEventState,
+        com.android.purebilibili.feature.video.ui.components.LocalRelatedVideoCardLayout provides relatedVideoCardLayout,
+    ) {
     VideoDetailScreenContent(
         transitionState = transitionState,
         routeSheetMotion = routeSheetMotion,

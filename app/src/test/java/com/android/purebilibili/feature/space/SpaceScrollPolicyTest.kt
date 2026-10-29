@@ -14,12 +14,15 @@ class SpaceScrollPolicyTest {
 
     @Test
     fun `tabs approach toolbar naturally and stop below its actual inset`() {
-        assertEquals(0, resolveSpaceTabsPinOffsetPx(240, 96, 96))
-        assertEquals(0, resolveSpaceTabsPinOffsetPx(0, 96, 96))
-        assertEquals(40, resolveSpaceTabsPinOffsetPx(-40, 96, 96))
-        // stickyHeader pins at the viewport edge, before the grid's leading padding.
-        assertEquals(96, resolveSpaceTabsPinOffsetPx(-96, 96, 96))
-        assertEquals(144, resolveSpaceTabsPinOffsetPx(-144, 144, 144))
+        assertFalse(shouldShowSpacePinnedTabs(240, 96, 96, 0))
+        assertFalse(shouldShowSpacePinnedTabs(1, 96, 96, 0))
+        assertTrue(shouldShowSpacePinnedTabs(0, 96, 96, 1))
+        assertTrue(shouldShowSpacePinnedTabs(-40, 96, 96, 1))
+        assertFalse(shouldShowSpacePinnedTabs(0, 144, 96, 1))
+        assertFalse(shouldShowSpacePinnedTabs(null, 96, 96, 0))
+        assertTrue(shouldShowSpacePinnedTabs(null, 96, 96, 2))
+        // 回滚后原标签重新进入视口，顶层副本应撤回。
+        assertFalse(shouldShowSpacePinnedTabs(40, 96, 96, 0))
     }
 
     @Test
@@ -32,27 +35,4 @@ class SpaceScrollPolicyTest {
         assertEquals(0.5f, resolveSpaceHeaderClosingFraction(84f, 168f))
     }
 
-    @Test
-    fun `floating summary follows distance and reverses continuously without snapping`() {
-        val state = SpaceFloatingSummaryState().apply { heightPx = 48f }
-        state.scrollBy(-300f)
-        assertEquals(0f, state.exposedHeightPx)
-        state.scrollBy(18f)
-        assertEquals(18f, state.exposedHeightPx)
-        state.scrollBy(-7f)
-        assertEquals(11f, state.exposedHeightPx)
-        state.scrollBy(300f)
-        assertEquals(48f, state.exposedHeightPx)
-        state.scrollBy(-12f)
-        assertEquals(36f, state.exposedHeightPx)
-        state.reset()
-        assertEquals(0f, state.exposedHeightPx)
-    }
-
-    @Test
-    fun `floating summary remains hidden until measured`() {
-        val state = SpaceFloatingSummaryState()
-        state.scrollBy(100f)
-        assertEquals(0f, state.exposedHeightPx)
-    }
 }
