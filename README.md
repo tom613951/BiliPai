@@ -19,7 +19,7 @@
 
 ---
 
-## 📌 说明
+## 项目说明
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁。
 
@@ -27,7 +27,7 @@
 
 ---
 
-## 🛠️ 个人定制修改
+## 个人定制改动
 
 1. **评论区二级回复遮罩与交互优化**
    - 移除展开二级回复时的灰色背景遮罩层：`resolveVideoCommentSheetHostScrimAlpha` 峰值透明度固定为 `0f`，播放器上方不再出现灰色蒙层。
@@ -38,9 +38,9 @@
 
 ---
 
-## 📦 获取安装包
+## 安装包获取
 
-> ⚠️ **本仓库不提供预编译 APK**，请自行构建（见下方「自行构建」）。
+> **注意**：本仓库不提供预编译 APK，请自行构建（见下方「自行构建」）。
 > 历史版本仍可在 [Releases 页面](https://github.com/tom613951/BiliPai/releases) 下载。
 
 本仓库只跟随上游同步源码并叠加个人补丁，构建由使用者自行完成。
@@ -53,17 +53,17 @@
 | `smooth` | 继承 release 语义，`isDebuggable=false`，跳过 R8，用于本地快速验证 |
 | `dev` | 同 release，包名带 `.dev` 后缀，用于并存测试 |
 
-> ⚠️ 自行构建的 APK 与官方版应用 ID 相同，**安装前需先卸载官方版本**。
+> **注意**：自行构建的 APK 与官方版应用 ID 相同，**安装前需先卸载官方版本**。
 > 若你之前安装过本仓库的历史预编译包（v0.6.4 及更早），自行构建时请沿用同一密钥库，
 > 否则需先卸载再安装，否则会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
 
-> 🔑 历史预编译包（v0.5.5 ~ v0.6.4）使用密钥库 `CN=BiliPai Personal`
+> **说明**：历史预编译包（v0.5.5 ~ v0.6.4）使用密钥库 `CN=BiliPai Personal`
 > （SHA-256 `44:B5:F2:B9:...:4B`，有效期至 2054）。v0.3.9-personal 及更早版本
 > 使用不同签名，从那些版本升级**必须先卸载**。
 
 ---
 
-## 🔧 自行构建
+## 自行构建
 
 前置条件：JDK 21、Android SDK。
 
@@ -83,7 +83,7 @@ keyAlias=<别名>
 keyPassword=<密码>
 ```
 
-> ⚠️ **Windows 路径必须用正斜杠 `/` 或双反斜杠 `\\`**，不能写单反斜杠。
+> **注意**：Windows 路径必须用正斜杠 `/` 或双反斜杠 `\\`**，不能写单反斜杠。
 > `java.util.Properties` 会把 `\` 当转义符，`C:\Users\...\release.jks` 会被解析成
 > `C:Users...release.jks`（路径不成立），`hasReleaseKeystore` 随之为 `false`，
 > release 变体**静默回退成未签名 APK**，`assembleRelease` 不报错但产物装不上。
@@ -106,27 +106,27 @@ keytool -genkeypair -v -keystore release.jks -alias bilipai \
 
 产物位于 `app/build/outputs/bilipai/release/BiliPai-<version>.apk`（上游自 0.4.x 起改由 export task 输出规范名）。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
 
-> 💡 只想要一个能用的包、不在意 R8 压缩？用 `./gradlew :app:assembleSmooth`
+> **提示**：只想要一个能用的包、不在意 R8 压缩？用 `./gradlew :app:assembleSmooth`
 > 跳过 R8，构建时间约为 release 的一半，产物在 `outputs/bilipai/smooth/`。
 
-> 💡 内存吃紧时，`gradle.properties` 已配置为单 JVM 构建
+> **提示**：内存吃紧时，`gradle.properties` 已配置为单 JVM 构建
 > （`kotlin.compiler.execution.strategy=in-process` + `-Xmx8g`），
 > 实测峰值约 8.7GB。若物理内存不足 16GB，把 `org.gradle.jvmargs` 的 `-Xmx8g`
 > 降到 `-Xmx6g`、`org.gradle.workers.max` 从 8 降到 4。
 
-> ⚠️ 项目路径**不能包含非 ASCII 字符**（含中文的目录会导致 AGP 直接拒绝构建）。
+> **限制**：项目路径不能包含非 ASCII 字符（含中文的目录会导致 AGP 直接拒绝构建）。
 
 ---
 
-## 🤝 向官方提交的修复
+## 上游缺陷修复与贡献
 
 构建本仓库时发现并修复了上游的问题，**均已合入官方仓库**：
 
 | 编号 | 类型 | 标题 | 状态 |
 | --- | --- | --- | --- |
-| [#882](https://github.com/jay3-yy/BiliPai/issues/882) | Issue | 干净 clone 无法构建：`.gitignore` 的 `**/build/` 静默排除了插件源码包 `com.android.purebilibili.build` | ✅ CLOSED |
-| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | 补齐缺失的 `ComposeDetachedOwnerGuard` 插件源码 | ✅ MERGED |
-| [#885](https://github.com/jay3-yy/BiliPai/pull/885) | PR | 让该插件在全新 CI runner（无 Gradle 缓存）上也能工作 | ✅ MERGED |
+| [#882](https://github.com/jay3-yy/BiliPai/issues/882) | Issue | 干净 clone 无法构建：`.gitignore` 的 `**/build/` 静默排除了插件源码包 `com.android.purebilibili.build` | CLOSED |
+| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | 补齐缺失的 `ComposeDetachedOwnerGuard` 插件源码 | MERGED |
+| [#885](https://github.com/jay3-yy/BiliPai/pull/885) | PR | 让该插件在全新 CI runner（无 Gradle 缓存）上也能工作 | MERGED |
 
 ### #882 / #884
 
@@ -169,14 +169,14 @@ components.onVariants(components.selector().all(), (Action<Variant>) variant -> 
 
 ---
 
-## 🔗 相关链接
+## 相关链接
 
 - **官方上游**：[jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai)
 - **本 Fork**：[tom613951/BiliPai](https://github.com/tom613951/BiliPai)
 
 ---
 
-## ⚖️ 许可与归属
+## 许可与归属
 
 本项目基于官方开源项目二次构建，**全部核心功能与实现均归 [jay3-yy](https://github.com/jay3-yy/BiliPai) 及上游贡献者所有**，本仓库仅包含少量个人定制补丁，不改动任何核心业务逻辑。
 
