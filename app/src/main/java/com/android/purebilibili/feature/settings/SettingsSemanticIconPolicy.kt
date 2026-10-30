@@ -33,6 +33,8 @@ internal enum class SettingsIconRole {
     DOWNLOAD_PATH,
     IMAGE_SAVE_PATH,
     CLEAR_CACHE,
+    AUTO_CLEAR_CACHE,
+    CACHE_CAPACITY_LIMIT,
     PLUGINS,
     NEARBY_HANDOFF,
     EXPORT_LOGS,
@@ -87,6 +89,10 @@ internal enum class SettingsIconRole {
     STARTUP_RESUME,
     NEXT_VIDEO_HINT,
     VIDEO_CONTENT_NOTICE,
+    DYNAMIC_CONTENT_NOTICE,
+    MEMBER_SHOP,
+    BLOCK_GOODS_DYNAMIC,
+    BLOCK_GOODS_REPLY,
     COMMENT_EXACT_TIME,
     COMMENT_AVATAR_PUSH,
     VERTICAL_RECOMMENDATIONS,
@@ -98,6 +104,7 @@ internal enum class SettingsIconRole {
     RETURN_GESTURE_TRANSLATION,
     SKELETON_BREATHING,
     PROGRESSIVE_TOP_BLUR,
+    PROGRESSIVE_BLUR_RENDERER,
     PROGRESSIVE_TOP_FADE,
     KEEP_TOP_SEARCH,
     LINKED_DOCK_MERGE,
@@ -183,6 +190,9 @@ internal enum class SettingsIconRole {
     FOLLOW_BUTTON,
     PRIVACY_HISTORY,
     PRIVACY_SEARCH_RECOMMENDATION,
+    SEARCH_HOT_SECTION,
+    SEARCH_HISTORY_SECTION,
+    SEARCH_DISCOVER_SECTION,
     PERSONAL_RECAP,
     CUSTOM_MD3_COLOR,
     THEME_LIGHT_BACKGROUND,
@@ -270,6 +280,8 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.DOWNLOAD_PATH -> R.drawable.ms_folder_24
     SettingsIconRole.IMAGE_SAVE_PATH -> R.drawable.ms_photo_24
     SettingsIconRole.CLEAR_CACHE -> R.drawable.ms_delete_outline_24
+    SettingsIconRole.AUTO_CLEAR_CACHE -> R.drawable.ms_auto_delete_24
+    SettingsIconRole.CACHE_CAPACITY_LIMIT -> R.drawable.ms_storage_fill_24
     SettingsIconRole.PLUGINS -> R.drawable.ms_extension_24
     SettingsIconRole.NEARBY_HANDOFF -> R.drawable.ic_settings_nearby_handoff_24
     SettingsIconRole.EXPORT_LOGS -> R.drawable.ms_article_24
@@ -324,6 +336,10 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.STARTUP_RESUME -> R.drawable.ms_resume_24
     SettingsIconRole.NEXT_VIDEO_HINT -> R.drawable.ms_preview_24
     SettingsIconRole.VIDEO_CONTENT_NOTICE -> R.drawable.ms_report_24
+    SettingsIconRole.MEMBER_SHOP -> R.drawable.ic_settings_member_shop_24
+    SettingsIconRole.DYNAMIC_CONTENT_NOTICE -> R.drawable.ic_settings_dynamic_warning_24
+    SettingsIconRole.BLOCK_GOODS_DYNAMIC -> R.drawable.ic_settings_block_goods_dynamic_24
+    SettingsIconRole.BLOCK_GOODS_REPLY -> R.drawable.ic_settings_block_goods_reply_24
     SettingsIconRole.COMMENT_EXACT_TIME -> R.drawable.ms_calendar_clock_24
     SettingsIconRole.COMMENT_AVATAR_PUSH -> R.drawable.ic_settings_comment_avatar_push_24
     SettingsIconRole.VERTICAL_RECOMMENDATIONS -> R.drawable.ms_view_stream_24
@@ -335,6 +351,7 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.RETURN_GESTURE_TRANSLATION -> R.drawable.ms_drag_indicator_24
     SettingsIconRole.SKELETON_BREATHING -> R.drawable.ic_settings_skeleton_breathing_24
     SettingsIconRole.PROGRESSIVE_TOP_BLUR -> R.drawable.ic_settings_progressive_top_blur_24
+    SettingsIconRole.PROGRESSIVE_BLUR_RENDERER -> R.drawable.ic_settings_progressive_blur_renderer_24
     SettingsIconRole.PROGRESSIVE_TOP_FADE -> R.drawable.ic_settings_progressive_top_fade_24
     SettingsIconRole.KEEP_TOP_SEARCH -> R.drawable.ic_settings_top_search_24
     SettingsIconRole.BOTTOM_BAR_SCROLL_COMPACT -> R.drawable.ic_settings_bottom_bar_compact_24
@@ -418,6 +435,9 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.UI_ENTRANCE_ANIMATION -> R.drawable.ms_motion_photos_on_24
     SettingsIconRole.FULLSCREEN_SWIPE_BACK -> R.drawable.ms_swipe_right_24
     SettingsIconRole.FOLLOW_BUTTON -> R.drawable.ms_person_add_24
+    SettingsIconRole.SEARCH_HOT_SECTION -> R.drawable.ms_trending_up_24
+    SettingsIconRole.SEARCH_HISTORY_SECTION -> R.drawable.ms_history_24
+    SettingsIconRole.SEARCH_DISCOVER_SECTION -> R.drawable.ms_manage_search_24
     SettingsIconRole.PRIVACY_SEARCH_RECOMMENDATION -> R.drawable.ms_search_24
     SettingsIconRole.PERSONAL_RECAP -> R.drawable.ms_query_stats_24
     SettingsIconRole.PRIVACY_HISTORY -> R.drawable.ms_history_toggle_off_24

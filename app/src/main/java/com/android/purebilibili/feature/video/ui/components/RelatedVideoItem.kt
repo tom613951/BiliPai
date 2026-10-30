@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +31,7 @@ import com.android.purebilibili.core.ui.components.AppGlassMenuSource
 import com.android.purebilibili.core.ui.components.appGlassMenuSource
 import com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,10 +62,7 @@ import com.android.purebilibili.core.store.TodayWatchFeedbackStore
 import com.android.purebilibili.core.store.withDislikedVideoFeedback
 import com.android.purebilibili.core.ui.AppAlertDialog
 import com.android.purebilibili.core.ui.AppDialogAction
-import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.AppSpacingTokens
-import com.android.purebilibili.core.ui.AppSurfaceTokens
-import com.android.purebilibili.core.ui.ContainerLevel
 import com.android.purebilibili.core.ui.LocalAnimatedVisibilityScope
 import com.android.purebilibili.core.ui.LocalSharedTransitionEnabled
 import com.android.purebilibili.core.ui.videoCardTitleMaxLines
@@ -101,7 +100,6 @@ import com.android.purebilibili.navigation.VideoRoute
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
 
 /**
  * PiliPlus horizontal cards use a 16:10 cover.
@@ -189,7 +187,8 @@ internal val LocalRelatedVideoCardLayout = androidx.compose.runtime.staticCompos
 
 internal const val RELATED_VIDEO_SKELETON_ROW_COUNT = 3
 
-
+/** 点击前同步读取父页的跳转锁，避免被拒绝的连点先覆盖来源卡片快照。 */
+internal val LocalRelatedVideoNavigationAllowed = compositionLocalOf<() -> Boolean> { { true } }
 
 /**
  * 相关推荐单列横卡：点击时冻结来源标识、几何与 chrome，供整卡 Morph 及逐层返回。
@@ -251,8 +250,12 @@ fun RelatedVideoItem(
     val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(
         video.bvid, enabled = sharedTransitionEnabled,
     )
-    val cardShape = AppShapes.container(ContainerLevel.Card)
-    val cardCornerRadiusDp = AppShapes.containerCornerDp(ContainerLevel.Card).value.roundToInt()
+    // 透明横卡只由封面自身裁剪圆角；整行及共享转场外框不能再切掉封面左侧。
+    val cardShape = androidx.compose.ui.graphics.RectangleShape
+    val cardCornerRadiusDp = 0
+    val coverCornerDp = com.android.purebilibili.core.ui.AppShapes.mediaCoverCornerDp(
+        com.android.purebilibili.core.ui.ContainerLevel.MediaCover,
+    )
     val context = LocalContext.current
     // Keep the request stable and skip image crossfade during the Miuix page transition.
     val stationaryCoverUrl = remember(video.pic) {
@@ -266,7 +269,9 @@ fun RelatedVideoItem(
             .diskCacheKey(stationaryCoverUrl)
             .build()
     }
-    val triggerRelatedVideoClick = {
+    val relatedVideoNavigationAllowed = LocalRelatedVideoNavigationAllowed.current
+    val triggerRelatedVideoClick = relatedClick@{
+        if (!relatedVideoNavigationAllowed()) return@relatedClick
         cardCoordinatesRef.value
             ?.takeIf { it.isAttached }
             ?.videoCardSourceBoundsInRoot()
@@ -307,6 +312,7 @@ fun RelatedVideoItem(
                                 showOverflowMenu = onMoreClick != null,
                             ),
                         coverPresentation = VideoCardSourceCoverPresentation(
+                            cornerRadiusDp = coverCornerDp.value,
                             showDurationOnCover = true,
                         ),
                         coverUrl = stationaryCoverUrl,
@@ -341,12 +347,13 @@ fun RelatedVideoItem(
             )
             .then(nativeCardSnapshot.modifier)
             .clip(cardShape)
-            .background(AppSurfaceTokens.cardContainer())
             .clickable(onClick = triggerRelatedVideoClick)
     ) {
         HorizontalVideoCardFrame(
+            plainHorizontal = true,
             coverAspectRatio = coverAspectRatio,
             stacked = stacked,
+            fillInfoHeight = true,
             coverModifier = Modifier.onGloballyPositioned { coordinates ->
                 coverCoordinatesRef.value = coordinates
             },
@@ -374,11 +381,14 @@ fun RelatedVideoItem(
                     text = video.title,
                     style = contentTypography.title,
                     maxLines = videoCardTitleMaxLines(),
-                    minLines = 1,
+                    minLines = if (stacked) 1 else minOf(2, videoCardTitleMaxLines()),
                     overflow = videoCardTitleOverflow(),
                     color = AppContentColors.primaryText(),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (!stacked) {
+                    Spacer(Modifier.weight(1f))
+                }
                 Column(verticalArrangement = Arrangement.spacedBy(AppSpacingTokens.ExtraSmall)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -511,7 +521,10 @@ internal fun RelatedVideoGridRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = cardLayout.outerPaddingDp.dp, vertical = 2.dp)
+            .padding(
+                horizontal = cardLayout.outerPaddingDp.dp,
+                vertical = if (cardPresentation == RelatedVideoCardLayout.HORIZONTAL) 1.dp else 2.dp,
+            )
     ) {
         videos.firstOrNull()?.let { video ->
             RelatedVideoItem(

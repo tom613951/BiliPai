@@ -471,9 +471,20 @@ internal sealed interface BiliPaiNavKey : NavKey {
     }
 
     @Serializable
+    data class ArticleCollection(
+        val collectionId: Long,
+        val title: String = "",
+        val currentArticleId: Long = 0L,
+    ) : BiliPaiNavKey {
+        override val routeBase: String = "article_collection"
+    }
+
+    @Serializable
     data class ArticleDetail(
         val articleId: Long,
-        val title: String = ""
+        val title: String = "",
+        val commentRootRpid: Long = 0L,
+        val commentTargetRpid: Long = 0L,
     ) : BiliPaiNavKey {
         override val routeBase: String = "article"
     }
@@ -482,7 +493,8 @@ internal sealed interface BiliPaiNavKey : NavKey {
     data class DynamicDetail(
         val dynamicId: String,
         val commentRootRpid: Long = 0L,
-        val commentTargetRpid: Long = 0L
+        val commentTargetRpid: Long = 0L,
+        val openComments: Boolean = false,
     ) : BiliPaiNavKey {
         override val routeBase: String = "dynamic_detail"
     }

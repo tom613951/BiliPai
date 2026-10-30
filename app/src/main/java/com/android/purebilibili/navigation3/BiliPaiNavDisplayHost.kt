@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.getValue
@@ -145,6 +146,7 @@ internal fun BiliPaiNavDisplayHost(
     programmaticBackDispatcher: BiliPaiProgrammaticBackDispatcher,
     preferWholeCardReturn: Boolean = false,
     onBack: () -> Unit,
+    onOpenCardContainer: (BiliPaiNavKey) -> Unit = { backStack.add(it) },
     onPrepareVideoCardSharedReturn: () -> Boolean = { false },
     pendingRelatedReturnCount: Int = 0,
     relatedReturnRequestId: Long = 0L,
@@ -184,14 +186,15 @@ internal fun BiliPaiNavDisplayHost(
     val settingsPersistentPanes = settingsHasPersistentPanes()
     val settingsContainerSources = remember { com.android.purebilibili.feature.settings.SettingsContainerSources() }
     val settingsContainerEnabled = settingsContainerMorphEnabled && !settingsPersistentPanes && !reduceMotion
-    val settingsContainerPageColor = AppSurfaceTokens.groupedListContainer()
+    // 颜色按当前主题读取，不能以调色动画的每一帧重建容器转场。
+    val settingsContainerPageColor = rememberUpdatedState(AppSurfaceTokens.groupedListContainer())
     val settingsContainerSnapshot = settingsContainerSources.sources.toMap()
     val availableSettingsContainerTransitions = remember(
-        settingsContainerSnapshot, settingsContainerPageColor, settingsContainerRealtimeBlurEnabled, navBlurMotionTierProvider,
+        settingsContainerSnapshot, settingsContainerRealtimeBlurEnabled, navBlurMotionTierProvider,
     ) {
         settingsContainerSnapshot.mapValues { (_, source) ->
             SettingsContainerTransition(
-                source, settingsContainerPageColor,
+                source, pageColor = { settingsContainerPageColor.value },
                 realtimeBlurEnabled = settingsContainerRealtimeBlurEnabled,
                 blurMotionTierProvider = navBlurMotionTierProvider,
             )
@@ -214,26 +217,44 @@ internal fun BiliPaiNavDisplayHost(
     val liveContainerEnabled = cardTransitionEnabled && !reduceMotion &&
         com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current
     val liveContainerSnapshot = liveContainerSources.sources.toMap()
-    val liveContainerPageColor = com.android.purebilibili.feature.live.resolveLiveBiliPaiRoomColorTokens().baseBackgroundColor
+    val liveContainerPageColor = rememberUpdatedState(
+        com.android.purebilibili.feature.live.resolveLiveBiliPaiRoomColorTokens().baseBackgroundColor,
+    )
+    val webContainerPageColor = rememberUpdatedState(androidx.compose.material3.MaterialTheme.colorScheme.surface)
+    val articleContainerPageColor = rememberUpdatedState(androidx.compose.material3.MaterialTheme.colorScheme.background)
+    val liveContainerIsLightBackground = rememberUpdatedState(isLightBackground)
     val availableLiveContainerTransitions = remember(
-        liveContainerSnapshot, liveContainerPageColor, videoSharedTransitionDurationMillis,
-        videoTransitionRealtimeBlurEnabled, isLightBackground, navBlurMotionTierProvider,
+        liveContainerSnapshot, videoSharedTransitionDurationMillis,
+        videoTransitionRealtimeBlurEnabled, settingsContainerRealtimeBlurEnabled, navBlurMotionTierProvider,
     ) {
-        liveContainerSnapshot.mapValues { (_, source) ->
+        liveContainerSnapshot.mapValues { (target, source) ->
+            val articleTarget = target is BiliPaiNavKey.ArticleDetail || target is BiliPaiNavKey.DynamicDetail
+            val generalContainer = target is BiliPaiNavKey.Web || target is BiliPaiNavKey.Space || target is BiliPaiNavKey.BangumiDetail
             SettingsContainerTransition(
                 source = source,
-                pageColor = liveContainerPageColor,
-                durationMillis = videoSharedTransitionDurationMillis.coerceAtLeast(1),
-                cardBackgroundEffectsEnabled = true,
-                realtimeBlurEnabled = videoTransitionRealtimeBlurEnabled,
-                isLightBackground = isLightBackground,
+                pageColor = { when {
+                    target is BiliPaiNavKey.BangumiPlayer -> androidx.compose.ui.graphics.Color.Black
+                    articleTarget -> articleContainerPageColor.value
+                    generalContainer -> webContainerPageColor.value
+                    else -> liveContainerPageColor.value
+                } },
+                durationMillis = if (generalContainer) SETTINGS_CONTAINER_DURATION_MILLIS
+                    else videoSharedTransitionDurationMillis.coerceAtLeast(1),
+                // 专栏使用视频卡片的导航时钟、曲线与景深，正文仍保持自己的页面底色。
+                videoCardMotionEnabled = articleTarget,
+                cardBackgroundEffectsEnabled = articleTarget || target is BiliPaiNavKey.Live || target is BiliPaiNavKey.LiveAreaDetail,
+                isolateContentDrawing = target is BiliPaiNavKey.Live,
+                useSharedSnapshotBlur = target is BiliPaiNavKey.Live,
+                realtimeBlurEnabled = if (generalContainer) settingsContainerRealtimeBlurEnabled
+                    else videoTransitionRealtimeBlurEnabled,
+                isLightBackground = { liveContainerIsLightBackground.value },
                 blurMotionTierProvider = navBlurMotionTierProvider,
             )
         }
     }
     val liveContainerTransitions = if (!liveContainerEnabled) emptyMap() else
         availableLiveContainerTransitions.filterKeys { target ->
-            (target is BiliPaiNavKey.Live || target is BiliPaiNavKey.LiveAreaDetail) && isSettingsContainerBoundary(
+            (target is BiliPaiNavKey.BangumiPlayer || target is BiliPaiNavKey.Live || target is BiliPaiNavKey.LiveAreaDetail || target is BiliPaiNavKey.ArticleDetail || target is BiliPaiNavKey.DynamicDetail || target is BiliPaiNavKey.Web || target is BiliPaiNavKey.Space || target is BiliPaiNavKey.BangumiDetail) && isSettingsContainerBoundary(
                 enabled = true,
                 backStack = stackSnapshot,
                 target = target,
@@ -665,7 +686,11 @@ internal fun BiliPaiNavDisplayHost(
         }
     }
     LaunchedEffect(effectiveVideoCardExposure) {
-        if (shouldReleaseHostOwnedDepthLayer(effectiveVideoCardExposure)) {
+        // 新点击可在旧 Idle effect 执行前同步开启会话，不能清空刚接手的背景层。
+        if (shouldReleaseHostOwnedDepthLayer(effectiveVideoCardExposure) &&
+            shouldReleaseHostOwnedDepthLayer(videoCardExposureProvider()) &&
+            videoCardClock.phase == VideoCardTransitionBackgroundPhase.IDLE
+        ) {
             videoCardSnapshotHandle.releaseSession()
         }
     }
@@ -919,6 +944,18 @@ internal fun BiliPaiNavDisplayHost(
                 videoCardTransition = videoCardTransition,
                 fullscreenVideoCardTransition = fullscreenVideoCardTransition,
             ) { key ->
+                // 返回尚未落位时可开始另一张卡片的转场。旧 entry 保留自身的文字、
+                // 几何和进度驱动，不能因同样来自首页而接收新卡片的快照。
+                var retainedCardTransition by remember(key) {
+                    mutableStateOf(MiuixVideoCardTransitionState())
+                }
+                val entryCardTransitionState = resolveVideoCardEntryTransitionState(
+                    key = key,
+                    source = sourceMetadata,
+                    current = miuixCardTransitionState,
+                    retained = retainedCardTransition,
+                )
+                SideEffect { retainedCardTransition = entryCardTransitionState }
                 // Freeze this per entry so popping the key cannot remove its backing during exit.
                 val opaqueVideoChild = remember(key) {
                     shouldUseOpaqueVideoChildBackground(key, stackSnapshot)
@@ -930,6 +967,10 @@ internal fun BiliPaiNavDisplayHost(
                     onBack = performBack,
                 ) {
                     CompositionLocalProvider(
+                        com.android.purebilibili.core.ui.LocalNativeCardNavigate provides onOpenCardContainer,
+                        com.android.purebilibili.core.ui.LocalNativeArticleCardMotionEnabled provides liveContainerEnabled,
+                        com.android.purebilibili.feature.space.LocalShopContainerMotionEnabled provides
+                            (liveContainerEnabled && settingsContainerMorphEnabled),
                         com.android.purebilibili.feature.live.LocalLiveCardContainerSources provides
                             (if (liveContainerEnabled) liveContainerSources else null),
                         com.android.purebilibili.feature.live.LocalLiveCardContainerOwner provides key,
@@ -948,7 +989,7 @@ internal fun BiliPaiNavDisplayHost(
                         LocalVideoCardSharedElementSourceRoute provides key.toLegacyRoute(),
                         LocalVideoCardTransitionClock provides videoCardClock,
                         LocalVideoCardTransitionBackgroundState provides transitionBackgroundState,
-                        LocalMiuixVideoCardTransitionState provides miuixCardTransitionState,
+                        LocalMiuixVideoCardTransitionState provides entryCardTransitionState,
                         LocalPredictiveBackBackgroundState provides predictiveBackBackgroundState,
                         LocalClickToPlayEnabled provides clickToPlayEnabled,
                         LocalDynamicImagePreviewTextVisible provides dynamicImagePreviewTextVisible,

@@ -1189,7 +1189,30 @@ object VideoRepository {
             targetQn = qn,
             audioLang = audioLang,
             requestKind = PlayUrlRequestKind.EXPLICIT
-        )?.data
+        )?.data?.withPreferredCdnTracks()
+    }
+
+    /**
+     * 下载场景专用的播放地址查询。
+     *
+     * 下载只是要一份「当前账号可用的画质列表」，并不要求精确切到某个画质；
+     * 用 EXPLICIT 会把「请求 8K、服务端只能给 4K」当成失败返回 null，导致
+     * 离线缓存直接报「无法获取视频下载画质」。这里用 INITIAL 的宽松判定：
+     * 只要服务端返回了可播放的流就接受，降级由下载对话框列出实际可用画质。
+     */
+    suspend fun getPlayUrlDataForDownload(
+        bvid: String,
+        cid: Long,
+        qn: Int = 127,
+        audioLang: String? = null
+    ): PlayUrlData? = withContext(Dispatchers.IO) {
+        fetchPlaybackUrl(
+            bvid = bvid,
+            cid = cid,
+            targetQn = qn,
+            audioLang = audioLang,
+            requestKind = PlayUrlRequestKind.INITIAL
+        )?.data?.withPreferredCdnTracks()
     }
 
     /**
@@ -1205,6 +1228,7 @@ object VideoRepository {
         audioLang: String? = null
     ): PlayUrlData? = withContext(Dispatchers.IO) {
         getInitialPlayUrlData(bvid, cid, targetQuality = qn, audioLang = audioLang)
+            ?.withPreferredCdnTracks()
     }
 
     /** 自动升级只查询目标高级画质，沿用当前播放账号的 Web Cookie。 */
@@ -1224,7 +1248,46 @@ object VideoRepository {
             null
         } ?: return@withContext null
         payload.takeIf { hasExactPlayableRequestedTrack(targetQn, it.dash?.video.orEmpty()) }
+            ?.withPreferredCdnTracks()
     }
+
+    /**
+     * 把 DASH 轨的地址过一次选线。
+     *
+     * 这些入口（画质升级、听视频、Story、下载兜底、分 P 切换）都是独立 fetch 的，
+     * 不经过播放器的 applyPlaybackCdnPreference，B 站下发 PCDN 地址时会解析失败，
+     * 表现为「播放地址未应用」或直接卡住。
+     */
+    internal fun PlayUrlData.withPreferredCdnTracks(): PlayUrlData {
+        val dash = dash ?: return this
+        return copy(
+            dash = dash.copy(
+                video = dash.video.map { track ->
+                    track.copy(baseUrl = pickNonPcdnUrl(track.baseUrl, track.backupUrl))
+                },
+                audio = dash.audio?.map { track ->
+                    track.copy(baseUrl = pickNonPcdnUrl(track.baseUrl, track.backupUrl))
+                },
+            )
+        )
+    }
+
+    /** 从 baseUrl + backupUrl 里挑一个可用的地址，全 PCDN 时换成常规 CDN 域名。 */
+    private fun pickNonPcdnUrl(baseUrl: String, backupUrl: List<String>?): String {
+        val candidates = (listOf(baseUrl) + backupUrl.orEmpty()).filter { it.isNotEmpty() }
+        candidates.firstOrNull { candidate ->
+            !com.android.purebilibili.feature.plugin.isRiskyCdnHost(
+                com.android.purebilibili.feature.plugin.hostFromCdnUrl(candidate)
+            )
+        }?.let { return it }
+        val pcdn = candidates.firstOrNull() ?: return baseUrl
+        return com.android.purebilibili.feature.plugin.rewriteBilivideoHost(
+            pcdn,
+            PREMIUM_UPGRADE_FALLBACK_CDN_HOST,
+        ) ?: pcdn
+    }
+
+    private const val PREMIUM_UPGRADE_FALLBACK_CDN_HOST = "upos-sz-mirrorali.bilivideo.com"
 
     suspend fun getTvCastPlayData(
         aid: Long,

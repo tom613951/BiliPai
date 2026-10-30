@@ -1095,6 +1095,7 @@ fun FeedApiSection(
     homeRefreshCount: Int,
     onHomeRefreshCountChange: (Int) -> Unit
 ) {
+    ContentDisplayPreferences()
     val siblingTints = rememberSettingsSiblingIconTints(10, paletteOffset = 1)
     val feedIcon = rememberSettingsSemanticIcon(SettingsIconRole.FEED_API)
     val refreshIcon = rememberSettingsSemanticIcon(SettingsIconRole.REFRESH_COUNT)
@@ -1386,7 +1387,29 @@ fun PrivacySection(
         SettingsIconRole.PRIVACY_CONTENT_AUTHENTICATION,
     )
 
+    val showHotControl by SettingsManager.getSearchLandingSectionVisible(context, 0).collectAsStateWithLifecycle(initialValue = true)
+    val showHistoryControl by SettingsManager.getSearchLandingSectionVisible(context, 1).collectAsStateWithLifecycle(initialValue = true)
+    val showDiscoverControl by SettingsManager.getSearchLandingSectionVisible(context, 2).collectAsStateWithLifecycle(initialValue = true)
+
     SettingsCardGroup {
+        listOf(
+            Triple("privacy.search_hot_control", showHotControl, SettingsIconRole.SEARCH_HOT_SECTION),
+            Triple("privacy.search_history_control", showHistoryControl, SettingsIconRole.SEARCH_HISTORY_SECTION),
+            Triple("privacy.search_discover_control", showDiscoverControl, SettingsIconRole.SEARCH_DISCOVER_SECTION),
+        ).forEachIndexed { index, (id, visible, iconRole) ->
+            SettingsItemAnchor(id) {
+                SettingSwitchItem(
+                    icon = rememberSettingsSemanticIcon(iconRole),
+                    title = settingItemTitle(id),
+                    subtitle = if (index == 1) "关闭后隐藏搜索历史，记录设置和已有历史不变" else "关闭后隐藏搜索页对应分区",
+                    checked = visible,
+                    onCheckedChange = { enabled ->
+                        scope.launch { SettingsManager.setSearchLandingSectionVisible(context, index, enabled) }
+                    },
+                )
+            }
+            SettingsAdaptiveDivider()
+        }
         SettingSwitchItem(
             icon = rememberSettingsSemanticIcon(SettingsIconRole.HOME_SEARCH_GLASS),
             title = "搜索框推荐词",
@@ -1510,6 +1533,8 @@ fun DataStorageSection(
     val downloadPathVisual = rememberSettingsEntryVisual(SettingsSearchTarget.DOWNLOAD_PATH)
     val imageSavePathVisual = rememberSettingsEntryVisual(SettingsSearchTarget.IMAGE_SAVE_PATH)
     val clearCacheVisual = rememberSettingsEntryVisual(SettingsSearchTarget.CLEAR_CACHE)
+    val autoClearCacheIcon = rememberSettingsSemanticIcon(SettingsIconRole.AUTO_CLEAR_CACHE)
+    val cacheCapacityIcon = rememberSettingsSemanticIcon(SettingsIconRole.CACHE_CAPACITY_LIMIT)
     val siblingTints = rememberSettingsSiblingIconTints(7, paletteOffset = 2)
     val showExplicitActionChevron =
         rememberAdaptiveListVisualCapabilities().showExplicitActionChevron
@@ -1574,13 +1599,13 @@ fun DataStorageSection(
                 )
             },
             selectedValue = autoCacheClearInterval,
-            icon = clearCacheVisual.icon,
+            icon = autoClearCacheIcon,
             iconTint = siblingTints[5],
             onSelectionChange = onAutoCacheClearIntervalChange
         )
         SettingsAdaptiveDivider()
         SettingSliderItem(
-            icon = clearCacheVisual.icon,
+            icon = cacheCapacityIcon,
             title = "缓存容量上限",
             subtitle = "缓存超过设定容量后，在应用启动时自动清理；默认 5 GB",
             value = autoCacheClearThresholdGb.toFloat(),
@@ -2287,6 +2312,21 @@ internal val AboutDevelopers = listOf(
         name = "converk",
         githubLogin = "converk",
         avatarUrl = "https://avatars.githubusercontent.com/u/34793421?v=4"
+    ),
+    AboutDeveloper(
+        name = "Hikari0618",
+        githubLogin = "Hikari0618",
+        avatarUrl = "https://avatars.githubusercontent.com/u/90288898?v=4"
+    ),
+    AboutDeveloper(
+        name = "ajax-prog",
+        githubLogin = "ajax-prog",
+        avatarUrl = "https://avatars.githubusercontent.com/u/175576147?v=4"
+    ),
+    AboutDeveloper(
+        name = "bugrsix",
+        githubLogin = "bugrsix",
+        avatarUrl = "https://avatars.githubusercontent.com/u/104134191?v=4"
     )
 )
 

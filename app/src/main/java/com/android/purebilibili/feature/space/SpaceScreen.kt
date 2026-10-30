@@ -1,6 +1,7 @@
 package com.android.purebilibili.feature.space
 
 import com.android.purebilibili.navigation.tabIndicatorPosition
+import com.android.purebilibili.navigation.isTabSelectionInProgress
 import com.android.purebilibili.feature.home.effectiveGridColumnCount
 import com.android.purebilibili.feature.home.effectiveGridColumnCountCompact
 import com.android.purebilibili.feature.home.gridColumnPinchEnabled
@@ -22,8 +23,6 @@ import coil3.request.crossfade
 import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import com.android.purebilibili.core.ui.common.contentTabPagerGestures
 import com.android.purebilibili.core.ui.common.rememberContentTabPager
 import com.android.purebilibili.core.ui.common.stationaryPagerHeader
@@ -83,6 +82,8 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.overscroll
+import androidx.compose.foundation.withoutVisualEffect
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -135,6 +136,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -383,7 +386,13 @@ fun SpaceScreen(
     var repostDynamicId by remember { mutableStateOf<String?>(null) }
     val spaceThemeConfig = LocalAppThemeConfig.current
     // 交互以用户开关为边界，不跟随模糊性能降级切换，避免滚动过程中改变吸顶规则。
-    val pinContentTabs = shouldPinSpaceContentTabs(spaceThemeConfig.progressiveTopBlurEnabled)
+    // 顶栏磨砂、渐进模糊与纯色渐变共用连续滚动布局；全部关闭时保留原有折叠路径。
+    // 此处只决定页面滚动，不改变玻璃、MD3 或 Miuix 的材质参数。
+    val pinContentTabs = shouldPinSpaceContentTabs(
+        progressiveTopBlurEnabled = spaceThemeConfig.progressiveTopBlurEnabled,
+        headerBlurEnabled = spaceThemeConfig.headerBlurEnabled,
+        progressiveTopFadeEnabled = spaceThemeConfig.progressiveTopFadeEnabled,
+    )
     val spaceDensity = LocalDensity.current
     val hazeState = if (
         spaceThemeConfig.headerBlurEnabled &&
@@ -1329,12 +1338,36 @@ private fun SpaceContent(
     val homeSettings by com.android.purebilibili.core.store.SettingsManager
         .getHomeSettings(context)
         .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.core.store.HomeSettings())
+    val sharedTabsCoroutineScope = rememberCoroutineScope()
+    // 外边距由卡片风格决定，不依赖各分页的网格列数；共享主栏与分页使用同一来源。
+    val outerPaddingDp = maxOf(16, resolveHomeFeedCardLayout(
+        style = homeSettings.homeFeedCardStyle,
+        widthSizeClass = windowSizeClass.widthSizeClass,
+    ).outerPaddingDp).dp
     val selectedMainTab = state.tabShellState.selectedTab
     // 各标签页各自持有头部，但轮播页码属于同一个用户空间。
     var sharedBannerPage by remember(state.userInfo.mid) { mutableStateOf(0) }
     val contentDensity = LocalDensity.current
+    val shopContext = LocalContext.current
+    val showMemberShop by remember(shopContext) {
+        com.android.purebilibili.core.store.ContentDisplaySettings.observe(
+            shopContext, com.android.purebilibili.core.store.ContentDisplaySettings.SHOW_MEMBER_SHOP
+        )
+    }.collectAsStateWithLifecycle(initialValue = true)
+    LaunchedEffect(showMemberShop, selectedMainTab) {
+        if (!showMemberShop && selectedMainTab == SpaceMainTab.SHOP) onMainTabSelected(SpaceMainTab.HOME)
+    }
+    var shopReload by remember(state.userInfo.mid) { mutableIntStateOf(0) }
+    val shopResult by produceState<Result<com.android.purebilibili.data.repository.SpaceShopPage>?>(
+        null, state.userInfo.mid, selectedMainTab == SpaceMainTab.SHOP && showMemberShop, shopReload,
+    ) {
+        if (selectedMainTab == SpaceMainTab.SHOP && showMemberShop) {
+            value = null
+            value = com.android.purebilibili.data.repository.SpaceShopRepository.load(state.userInfo.mid)
+        }
+    }
     val displayedMainTabs = resolveSpaceDisplayedMainTabs(
-        tabs = state.mainTabs,
+        tabs = state.mainTabs.filter { showMemberShop || it.tab != SpaceMainTab.SHOP },
         selectedTab = selectedMainTab,
         hasCheese = state.hasCheeseTab || state.cheeseItems.isNotEmpty(),
     )
@@ -1493,62 +1526,7 @@ private fun SpaceContent(
                 (if (state.isSearchMode && currentSearchScope == SpaceSearchScope.VIDEO) 1 else 0)
         }
     }
-    LaunchedEffect(
-        state.pendingLocateBvid,
-        selectedMainTab,
-        selectedContributionTab,
-        contributionVideoItemStartIndex,
-        state.videos,
-        state.hasMoreVideos,
-        state.videoPageLoadCompletionVersion,
-    ) {
-        val targetBvid = state.pendingLocateBvid ?: return@LaunchedEffect
-        if (
-            selectedMainTab == SpaceMainTab.CONTRIBUTION &&
-            selectedContributionTab.subTab == SpaceSubTab.VIDEO
-        ) {
-            val targetVideoIndex = when (
-                val action = resolveSpaceLocateTargetPageAction(
-                    targetBvid = targetBvid,
-                    videos = state.videos,
-                    isLoading = state.isLoadingMore,
-                    hasMore = state.hasMoreVideos,
-                    lastLoadFailed = state.lastVideoPageLoadFailed,
-                )
-            ) {
-                is SpaceLocateTargetPageAction.Found -> action.index
-                SpaceLocateTargetPageAction.Wait -> return@LaunchedEffect
-                SpaceLocateTargetPageAction.LoadMore -> {
-                    onLoadMoreVideos()
-                    return@LaunchedEffect
-                }
-                SpaceLocateTargetPageAction.LoadFailed -> {
-                    onLocateTargetLoadFailed(targetBvid)
-                    return@LaunchedEffect
-                }
-                SpaceLocateTargetPageAction.Missing -> {
-                    onLocateTargetMissing(targetBvid)
-                    return@LaunchedEffect
-                }
-            }
 
-            gridState.animateScrollToItem(
-                contributionVideoItemStartIndex + targetVideoIndex,
-                scrollOffset = if (pinContentTabs) {
-                    -gridState.measureSpacePinnedTabsHeightPx()
-                } else 0,
-            )
-            highlightedLocateBvid = targetBvid
-            repeat(3) {
-                isLocateHighlightVisible = true
-                kotlinx.coroutines.delay(220)
-                isLocateHighlightVisible = false
-                kotlinx.coroutines.delay(140)
-            }
-            highlightedLocateBvid = null
-            onLocateTargetConsumed(targetBvid)
-        }
-    }
 
     // 遮挡铰链时整页内容落入最大安全区，软折痕允许跨越（与首页/动态/搜索一致）。
     com.android.purebilibili.core.ui.adaptive.AppHingeSafeContent(
@@ -1562,6 +1540,73 @@ private fun SpaceContent(
     ) {
         // 手势边界在回调中读取测量值，不让滚动逐帧触发组合。
         val pinnedTabsHeights = remember { mutableMapOf<SpaceMainTab, Int>() }
+        val sharedGlassTabs = LocalAppThemeConfig.current.liquidGlassEnabled
+        // 玻璃主栏位于列表外，回弹必须作用于二者的共同父层，避免列表拉伸而 dock 原地漂浮。
+        // 原生 MD3/Miuix 仍由各页网格绘制回弹；标签吸顶模式继续禁用回弹。
+        val sharedSpaceOverscrollEffect = rememberOverscrollEffect()
+        val sharedGridOverscrollEffect = remember(sharedSpaceOverscrollEffect) {
+            sharedSpaceOverscrollEffect?.withoutVisualEffect()
+        }
+        val pagerDragSource = remember(pagerState) {
+            androidx.compose.foundation.interaction.MutableInteractionSource()
+        }
+        val pagerDragging by pagerDragSource.collectIsDraggedAsState()
+        com.android.purebilibili.core.ui.AdaptivePullToRefreshBox(
+            isRefreshing = selectedMainTab == SpaceMainTab.SHOP && shopResult == null,
+            onRefresh = { shopReload++ },
+            enabled = selectedMainTab == SpaceMainTab.SHOP,
+            indicatorTopInset = chromeTopInset,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+        SpaceMainTabsHost(
+            sharedGlassTabs = sharedGlassTabs,
+            modifier = if (sharedGlassTabs && !pinContentTabs) {
+                Modifier.overscroll(sharedSpaceOverscrollEffect)
+            } else Modifier,
+            position = {
+                val currentGrid = pageGridStates.getValue(displayedMainTabs[pagerState.currentPage].tab)
+                val info = currentGrid.layoutInfo
+                val item = info.visibleItemsInfo.firstOrNull { it.key == "space_tabs" }
+                val chromeBottom = with(contentDensity) { chromeTopInset.roundToPx() }
+                val pinned = pinContentTabs && shouldShowSpacePinnedTabs(
+                    tabsOffsetPx = item?.offset?.y,
+                    beforeContentPaddingPx = info.beforeContentPadding,
+                    chromeBottomPx = chromeBottom,
+                    firstVisibleItemIndex = currentGrid.firstVisibleItemIndex,
+                )
+                when {
+                    isInitialLoading -> null
+                    pinned -> androidx.compose.ui.unit.IntOffset(0, chromeBottom)
+                    item != null -> androidx.compose.ui.unit.IntOffset(0, item.offset.y + info.beforeContentPadding)
+                    else -> null
+                }
+            },
+            tabs = {
+                SpaceMainTabRow(
+                    tabs = displayedMainTabs,
+                    selectedTab = resolveSpacePrimaryTab(selectedMainTab),
+                    onSelect = { tab ->
+                        if (pinContentTabs && tab == resolveSpacePrimaryTab(selectedMainTab)) {
+                            val grid = pageGridStates.getValue(tab)
+                            if (grid.firstVisibleItemIndex > 0) {
+                                sharedTabsCoroutineScope.launch { grid.animateScrollToItem(1) }
+                            }
+                        } else onMainTabSelected(tab)
+                    },
+                    modifier = Modifier
+                        .padding(horizontal = outerPaddingDp)
+                        .scrollable(
+                            state = pageGridStates.getValue(displayedMainTabs[pagerState.currentPage].tab),
+                            orientation = Orientation.Vertical,
+                            reverseDirection = true,
+                        ),
+                    indicatorPositionProvider = { pagerState.tabIndicatorPosition },
+                    isScrollInProgressProvider = { pagerState.isScrollInProgress || pagerState.isTabSelectionInProgress },
+                    isPagerDraggingProvider = { pagerDragging },
+                    pagerTargetPositionProvider = { pagerState.targetPage.toFloat() },
+                )
+            },
+        ) { mainTabsSlot ->
         HorizontalPager(
             state = pagerState,
             userScrollEnabled = false,
@@ -1569,6 +1614,7 @@ private fun SpaceContent(
             modifier = Modifier.fillMaxSize().contentTabPagerGestures(
                 pager = pagerState,
                 enabled = !isInitialLoading,
+                dragInteractionSource = if (sharedGlassTabs) pagerDragSource else null,
                 contentTopPx = {
                     val info = pageGridStates.getValue(displayedMainTabs[pagerState.currentPage].tab).layoutInfo
                     val tabs = info.visibleItemsInfo.firstOrNull { it.key == "space_tabs" }
@@ -1657,6 +1703,68 @@ private fun SpaceContent(
         } else {
             effectivePreferredColumns
         }
+        LaunchedEffect(
+            state.pendingLocateBvid,
+            selectedMainTab,
+            selectedContributionTab,
+            contributionVideoItemStartIndex,
+            state.videos,
+            state.hasMoreVideos,
+            state.videoPageLoadCompletionVersion,
+            gridColumns,
+            contributionVideoLayoutMode,
+            homeSettings.showFullVideoCardContent,
+        ) {
+            val targetBvid = state.pendingLocateBvid ?: return@LaunchedEffect
+            if (
+                selectedMainTab == SpaceMainTab.CONTRIBUTION &&
+                selectedContributionTab.subTab == SpaceSubTab.VIDEO
+            ) {
+                val targetVideoIndex = when (
+                    val action = resolveSpaceLocateTargetPageAction(
+                        targetBvid = targetBvid,
+                        videos = state.videos,
+                        isLoading = state.isLoadingMore,
+                        hasMore = state.hasMoreVideos,
+                        lastLoadFailed = state.lastVideoPageLoadFailed,
+                    )
+                ) {
+                    is SpaceLocateTargetPageAction.Found -> action.index
+                    SpaceLocateTargetPageAction.Wait -> return@LaunchedEffect
+                    SpaceLocateTargetPageAction.LoadMore -> {
+                        onLoadMoreVideos()
+                        return@LaunchedEffect
+                    }
+                    SpaceLocateTargetPageAction.LoadFailed -> {
+                        onLocateTargetLoadFailed(targetBvid)
+                        return@LaunchedEffect
+                    }
+                    SpaceLocateTargetPageAction.Missing -> {
+                        onLocateTargetMissing(targetBvid)
+                        return@LaunchedEffect
+                    }
+                }
+
+                gridState.animateScrollToItem(
+                    contributionVideoItemStartIndex + if (
+                        contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID &&
+                        gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                    ) targetVideoIndex / gridColumns else targetVideoIndex,
+                    scrollOffset = if (pinContentTabs) {
+                        -gridState.measureSpacePinnedTabsHeightPx()
+                    } else 0,
+                )
+                highlightedLocateBvid = targetBvid
+                repeat(3) {
+                    isLocateHighlightVisible = true
+                    kotlinx.coroutines.delay(220)
+                    isLocateHighlightVisible = false
+                    kotlinx.coroutines.delay(140)
+                }
+                highlightedLocateBvid = null
+                onLocateTargetConsumed(targetBvid)
+            }
+        }
         val pinchColumnBounds = remember(windowSizeClass.widthSizeClass, windowWidthDp) {
             resolveHomeFeedPinchColumnBounds(
                 widthSizeClass = windowSizeClass.widthSizeClass,
@@ -1669,7 +1777,6 @@ private fun SpaceContent(
             widthSizeClass = windowSizeClass.widthSizeClass,
         )
         val spaceFeedCoverAspectRatio = spaceFeedCardLayout.coverAspectRatio
-        val outerPaddingDp = maxOf(16, spaceFeedCardLayout.outerPaddingDp).dp
         // 首屏骨架与真实卡片共用同一个网格、同一种排版：色块用固定色（不呼吸），
         // 骨架只负责占位，数据到达时是 item 原地替换而不是整棵网格重建。
         val spaceSkeletonBlockColor = rememberStaticSkeletonBlockColor()
@@ -1726,6 +1833,7 @@ private fun SpaceContent(
                     },
                     pagerState = pagerState,
                     page = page,
+                    mainTabsSlot = mainTabsSlot,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (selectedMainTab == SpaceMainTab.CONTRIBUTION &&
@@ -1746,7 +1854,11 @@ private fun SpaceContent(
         LazyVerticalStaggeredGrid(
             columns = StaggeredGridCells.Fixed(gridColumns),
             state = gridState,
-            overscrollEffect = if (pinContentTabs) null else spaceOverscrollEffect,
+            overscrollEffect = when {
+                pinContentTabs -> null
+                sharedGlassTabs -> sharedGridOverscrollEffect
+                else -> spaceOverscrollEffect
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .homeFeedPinchZoom(
@@ -1852,6 +1964,7 @@ private fun SpaceContent(
                         onContributionTabSelected = onContributionTabSelected,
                         pagerState = pagerState,
                         page = page,
+                        mainTabsSlot = mainTabsSlot,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -1916,10 +2029,15 @@ private fun SpaceContent(
                             }
                         )
                     }
-                    items(state.videos.take(4), key = { "home_video_${it.bvid}" }) { video ->
+                    val homeVideos = state.videos.take(4)
+                    val homeVideoKeys = homeVideos.map { "home_video_${it.bvid}" }
+                    val alignHomeVideos = gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                    val renderHomeVideo: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                        val video = homeVideos[index]
                         val localProgressMs = videoProgressLookup(video.bvid)
                         SpaceHomeVideoCard(
                             video = video,
+                            modifier = cardModifier,
                             progressState = resolveSpaceVideoProgressState(
                                 video = video,
                                 localPositionMs = localProgressMs,
@@ -1931,6 +2049,25 @@ private fun SpaceContent(
                             sharedTransitionScope = lazyGridSharedTransitionScope,
                             animatedVisibilityScope = lazyGridAnimatedVisibilityScope
                         )
+                    }
+                    if (!alignHomeVideos) {
+                        itemsIndexed(homeVideos, key = { index, _ -> homeVideoKeys[index] }) { index, _ ->
+                            renderHomeVideo(index, Modifier)
+                        }
+                    } else {
+                        com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(homeVideos.size, gridColumns)
+                            .forEach { row ->
+                                item(key = "space_home_video_row_${homeVideoKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                    com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                        indices = row,
+                                        itemKeys = homeVideoKeys,
+                                        columns = gridColumns,
+                                        horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        content = renderHomeVideo,
+                                    )
+                                }
+                            }
                     }
                 }
 
@@ -1981,14 +2118,14 @@ private fun SpaceContent(
                             }
                         )
                     }
-                    itemsIndexed(
-                        items = state.homeCoinVideos.take(2),
-                        key = { index, item ->
-                            resolveSpaceAggregateLazyItemKey("coin", index, item)
-                        }
-                    ) { _, item ->
+                    val aggregateItems = state.homeCoinVideos.take(2)
+                    val aggregateKeys = aggregateItems.mapIndexed { index, item -> resolveSpaceAggregateLazyItemKey("coin", index, item) }
+                    val alignAggregate = gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                    val renderAggregate: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                        val item = aggregateItems[index]
                         SpaceAggregateMediaCard(
                             item = item,
+                            modifier = cardModifier,
                             onClick = {
                                 handleAggregateArchiveClick(
                                     item = item,
@@ -2002,6 +2139,25 @@ private fun SpaceContent(
                             sharedTransitionScope = lazyGridSharedTransitionScope,
                             animatedVisibilityScope = lazyGridAnimatedVisibilityScope
                         )
+                    }
+                    if (!alignAggregate) {
+                        itemsIndexed(aggregateItems, key = { index, _ -> aggregateKeys[index] }) { index, _ ->
+                            renderAggregate(index, Modifier)
+                        }
+                    } else {
+                        com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(aggregateItems.size, gridColumns)
+                            .forEach { row ->
+                                item(key = "space_coin_row_${aggregateKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                    com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                        indices = row,
+                                        itemKeys = aggregateKeys,
+                                        columns = gridColumns,
+                                        horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        content = renderAggregate,
+                                    )
+                                }
+                            }
                     }
                 }
 
@@ -2026,14 +2182,14 @@ private fun SpaceContent(
                             }
                         )
                     }
-                    itemsIndexed(
-                        items = state.homeLikeVideos.take(2),
-                        key = { index, item ->
-                            resolveSpaceAggregateLazyItemKey("like", index, item)
-                        }
-                    ) { _, item ->
+                    val aggregateItems = state.homeLikeVideos.take(2)
+                    val aggregateKeys = aggregateItems.mapIndexed { index, item -> resolveSpaceAggregateLazyItemKey("like", index, item) }
+                    val alignAggregate = gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                    val renderAggregate: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                        val item = aggregateItems[index]
                         SpaceAggregateMediaCard(
                             item = item,
+                            modifier = cardModifier,
                             onClick = {
                                 handleAggregateArchiveClick(
                                     item = item,
@@ -2047,6 +2203,25 @@ private fun SpaceContent(
                             sharedTransitionScope = lazyGridSharedTransitionScope,
                             animatedVisibilityScope = lazyGridAnimatedVisibilityScope
                         )
+                    }
+                    if (!alignAggregate) {
+                        itemsIndexed(aggregateItems, key = { index, _ -> aggregateKeys[index] }) { index, _ ->
+                            renderAggregate(index, Modifier)
+                        }
+                    } else {
+                        com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(aggregateItems.size, gridColumns)
+                            .forEach { row ->
+                                item(key = "space_like_row_${aggregateKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                    com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                        indices = row,
+                                        itemKeys = aggregateKeys,
+                                        columns = gridColumns,
+                                        horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        content = renderAggregate,
+                                    )
+                                }
+                            }
                     }
                 }
 
@@ -2297,6 +2472,8 @@ private fun SpaceContent(
             SpaceMainTab.CONTRIBUTION -> {
                 when (selectedContributionTab.subTab) {
                     SpaceSubTab.VIDEO, SpaceSubTab.CHARGING_VIDEO -> {
+                        // 开启渐进模糊时，数量与排序只属于列表，滚出后不创建顶栏悬浮副本。
+                        // 关闭时仍由吸顶标签区域承接，玻璃、MD3 与 Miuix 共用此边界。
                         if ((!pinContentTabs || state.isSearchMode) && (state.videos.isNotEmpty() || state.totalVideos > 0)) {
                             item(key = "space_video_summary_bar", span = StaggeredGridItemSpan.FullLine) {
                                 SpaceContributionVideoSummaryBar(
@@ -2316,29 +2493,20 @@ private fun SpaceContent(
                             }
                         }
 
-                        items(
-                            items = state.videos,
-                            key = {
-                                resolveSpaceContributionVideoItemKey(
-                                    layoutMode = contributionVideoLayoutMode,
-                                    bvid = it.bvid,
-                                    aid = it.aid
-                                )
-                            },
-                            span = {
-                                if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) {
-                                    StaggeredGridItemSpan.SingleLane
-                                } else {
-                                    StaggeredGridItemSpan.FullLine
-                                }
-                            }
-                        ) { video ->
+                        val contributionVideoKeys = state.videos.map {
+                            resolveSpaceContributionVideoItemKey(contributionVideoLayoutMode, it.bvid, it.aid)
+                        }
+                        val alignContributionVideos = contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID &&
+                            gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                        val renderContributionVideo: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                            val video = state.videos[index]
                             val localProgressMs = videoProgressLookup(video.bvid)
-                            AnimatedVideoListItem(modifier = videoListItemModifier(enabled = homeSettings.cardAnimationEnabled), enabled = homeSettings.cardAnimationEnabled) {
+                            AnimatedVideoListItem(modifier = cardModifier, enabled = homeSettings.cardAnimationEnabled) {
                                 when (contributionVideoLayoutMode) {
                                     SpaceContributionVideoLayoutMode.GRID -> {
                                         SpaceHomeVideoCard(
                                             video = video,
+                                            modifier = if (alignContributionVideos) Modifier.fillMaxHeight() else Modifier,
                                             progressState = resolveSpaceVideoProgressState(
                                                 video = video,
                                                 localPositionMs = localProgressMs,
@@ -2378,6 +2546,29 @@ private fun SpaceContent(
                                     }
                                 }
                             }
+                        }
+                        if (!alignContributionVideos) {
+                            itemsIndexed(
+                                state.videos,
+                                key = { index, _ -> contributionVideoKeys[index] },
+                                span = { _, _ -> if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) StaggeredGridItemSpan.SingleLane else StaggeredGridItemSpan.FullLine },
+                            ) { index, _ ->
+                                renderContributionVideo(index, videoListItemModifier(enabled = homeSettings.cardAnimationEnabled))
+                            }
+                        } else {
+                            com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(state.videos.size, gridColumns)
+                                .forEach { row ->
+                                    item(key = "space_contribution_row_${contributionVideoKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                        com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                            indices = row,
+                                            itemKeys = contributionVideoKeys,
+                                            columns = gridColumns,
+                                            horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                            modifier = videoListItemModifier(enabled = homeSettings.cardAnimationEnabled).fillMaxWidth(),
+                                            content = renderContributionVideo,
+                                        )
+                                    }
+                                }
                         }
 
                         if (state.isLoadingMore) {
@@ -2490,19 +2681,14 @@ private fun SpaceContent(
                                 )
                             }
                         }
-                        items(
-                            items = archives,
-                            key = { "season_video_${it.aid}_${it.bvid}" },
-                            span = {
-                                if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) {
-                                    StaggeredGridItemSpan.SingleLane
-                                } else {
-                                    StaggeredGridItemSpan.FullLine
-                                }
-                            }
-                        ) { archive ->
+                        val archiveKeys = archives.map { "season_video_${it.aid}_${it.bvid}" }
+                        val alignArchives = contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID &&
+                            gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                        val renderArchive: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                            val archive = archives[index]
                             SpaceContributionArchiveVideoItem(
                                 video = archive.toSpaceVideoItem(),
+                                modifier = cardModifier,
                                 layoutMode = contributionVideoLayoutMode,
                                 coverAspectRatio = spaceFeedCoverAspectRatio,
                                 boundedListModifier = boundedListModifier,
@@ -2511,6 +2697,27 @@ private fun SpaceContent(
                                 sharedTransitionScope = lazyGridSharedTransitionScope,
                                 animatedVisibilityScope = lazyGridAnimatedVisibilityScope,
                             )
+                        }
+                        if (!alignArchives) {
+                            itemsIndexed(
+                                archives,
+                                key = { index, _ -> archiveKeys[index] },
+                                span = { _, _ -> if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) StaggeredGridItemSpan.SingleLane else StaggeredGridItemSpan.FullLine },
+                            ) { index, _ -> renderArchive(index, Modifier) }
+                        } else {
+                            com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(archives.size, gridColumns)
+                                .forEach { row ->
+                                    item(key = "space_season_row_${archiveKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                        com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                            indices = row,
+                                            itemKeys = archiveKeys,
+                                            columns = gridColumns,
+                                            horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            content = renderArchive,
+                                        )
+                                    }
+                                }
                         }
                     }
 
@@ -2543,19 +2750,14 @@ private fun SpaceContent(
                                 )
                             }
                         }
-                        items(
-                            items = archives,
-                            key = { "series_video_${it.aid}_${it.bvid}" },
-                            span = {
-                                if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) {
-                                    StaggeredGridItemSpan.SingleLane
-                                } else {
-                                    StaggeredGridItemSpan.FullLine
-                                }
-                            }
-                        ) { archive ->
+                        val archiveKeys = archives.map { "series_video_${it.aid}_${it.bvid}" }
+                        val alignArchives = contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID &&
+                            gridColumns > 1 && !homeSettings.showFullVideoCardContent
+                        val renderArchive: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                            val archive = archives[index]
                             SpaceContributionArchiveVideoItem(
                                 video = archive.toSpaceVideoItem(),
+                                modifier = cardModifier,
                                 layoutMode = contributionVideoLayoutMode,
                                 coverAspectRatio = spaceFeedCoverAspectRatio,
                                 boundedListModifier = boundedListModifier,
@@ -2564,6 +2766,27 @@ private fun SpaceContent(
                                 sharedTransitionScope = lazyGridSharedTransitionScope,
                                 animatedVisibilityScope = lazyGridAnimatedVisibilityScope,
                             )
+                        }
+                        if (!alignArchives) {
+                            itemsIndexed(
+                                archives,
+                                key = { index, _ -> archiveKeys[index] },
+                                span = { _, _ -> if (contributionVideoLayoutMode == SpaceContributionVideoLayoutMode.GRID) StaggeredGridItemSpan.SingleLane else StaggeredGridItemSpan.FullLine },
+                            ) { index, _ -> renderArchive(index, Modifier) }
+                        } else {
+                            com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(archives.size, gridColumns)
+                                .forEach { row ->
+                                    item(key = "space_series_row_${archiveKeys[row.first]}", span = StaggeredGridItemSpan.FullLine) {
+                                        com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                            indices = row,
+                                            itemKeys = archiveKeys,
+                                            columns = gridColumns,
+                                            horizontalArrangement = Arrangement.spacedBy(spaceFeedCardLayout.itemSpacingDp.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            content = renderArchive,
+                                        )
+                                    }
+                                }
                         }
                     }
 
@@ -2818,6 +3041,31 @@ private fun SpaceContent(
                 }
             }
 
+            SpaceMainTab.SHOP -> {
+                val page = shopResult?.getOrNull()
+                if (page == null) {
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        Column(Modifier.fillMaxWidth().padding(24.dp)) {
+                            AppText(if (shopResult == null) "正在加载小店…" else shopResult?.exceptionOrNull()?.message ?: "小店加载失败")
+                            if (shopResult != null) com.android.purebilibili.core.ui.components.AppTextButton(onClick = { shopReload++ }) { AppText("重试") }
+                        }
+                    }
+                } else {
+                    items(page.products.size) { index -> SpaceShopCard(page.products[index], onWebClick) }
+                    item(span = StaggeredGridItemSpan.FullLine) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            if (page.products.isEmpty()) AppText("小店暂无商品")
+                            com.android.purebilibili.core.ui.components.AppTextButton(onClick = { shopReload++ }) { AppText("刷新小店") }
+                            page.moreUrl?.let { url ->
+                                com.android.purebilibili.core.ui.components.AppButton(onClick = { onWebClick(url, "小店") }) { AppText(page.moreLabel) }
+                            }
+                        }
+                    }
+                }
+            }
             SpaceMainTab.CHEESE -> {
                 if (state.isLoadingCheese && state.cheeseItems.isEmpty()) {
                     // 骨架行与真实行同 span、同 contentType，并各自挂 animateItem：
@@ -2933,46 +3181,6 @@ private fun SpaceContent(
             }
         }
 
-        // 投稿统计条滚走后，仅保留独立的排序工具条，固定在顶部导航栏下方。
-        val isContributionVideoTab = selectedMainTab == SpaceMainTab.CONTRIBUTION &&
-            selectedContributionTab.subTab in setOf(SpaceSubTab.VIDEO, SpaceSubTab.CHARGING_VIDEO)
-        val isContributionSummaryScrolledAway by remember(gridState) {
-            derivedStateOf {
-                val info = gridState.layoutInfo
-                val summary = info.visibleItemsInfo.firstOrNull { it.key == "space_video_summary_bar" }
-                if (summary != null) summary.offset.y <= 0
-                else gridState.firstVisibleItemIndex > 2
-            }
-        }
-        if (!pinContentTabs && isContributionVideoTab && !state.isSearchMode &&
-            (state.videos.isNotEmpty() || state.totalVideos > 0)
-        ) {
-            AnimatedVisibility(
-                visible = isContributionSummaryScrolledAway,
-                enter = EnterTransition.None,
-                exit = ExitTransition.None,
-                modifier = Modifier.align(Alignment.TopCenter),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = chromeTopInset)
-                        .background(
-                            com.android.purebilibili.core.ui.globalWallpaperAwareChromeColor(
-                                MaterialTheme.colorScheme.surface
-                            ).let { if (it.alpha < 0.97f) it.copy(alpha = 0.97f) else it }
-                        )
-                ) {
-                    SpaceContributionVideoSummaryBar(
-                        modifier = Modifier.padding(horizontal = outerPaddingDp),
-                        totalCount = state.totalVideos.takeIf { it > 0 } ?: state.videos.size,
-                        currentOrder = state.sortOrder,
-                        onSelectSortOrder = onSelectSortOrder,
-                    )
-                }
-            }
-        }
-
         // [新增] 双指缩放切换网格列数 HUD 胶囊 (自适应 MD3 / MIUIX)
         GridPinchColumnHudPill(
             visible = isPinchPillVisible,
@@ -2984,6 +3192,8 @@ private fun SpaceContent(
         )
         } // 每页内容及吸顶层
         } // HorizontalPager
+        } // SpaceMainTabsHost
+        } // 小店刷新容器
 
 
     }
@@ -3287,6 +3497,43 @@ private fun SpaceHeader(
                         modifier = Modifier.align(Alignment.BottomEnd),
                         badgeSize = 20.dp,
                     )
+
+                    val liveRoom = userInfo.liveRoom
+                    val liveRoomId = liveRoom?.roomId?.takeIf { it > 0L }
+                        ?: liveRoom?.url?.substringBefore('?')?.trimEnd('/')
+                            ?.substringAfterLast('/')?.toLongOrNull()
+                    if (liveRoom?.liveStatus == 1 && liveRoomId != null && liveRoomId > 0L) {
+                        val headerVisible by remember(collapseFractionProvider) {
+                            derivedStateOf { collapseFractionProvider() < 1f }
+                        }
+                        // 头像预览、隐藏的 Pager 页与完全折叠的头部不运行音柱。
+                        // 音柱组件另行统一控制视口、窗口焦点、前台生命周期与减少动态效果。
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .size(28.dp)
+                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                                .clip(CircleShape)
+                                .appActionClickable(enabled = !avatarHidden) {
+                                    onLiveClick(
+                                        liveRoomId,
+                                        liveRoom.title.ifBlank { userInfo.name },
+                                        userInfo.name,
+                                    )
+                                }
+                                .padding(7.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            com.android.purebilibili.core.ui.components.PlaybackBarsIndicator(
+                                isPlaying = bannerPageActive && !contentPageMoving &&
+                                    headerVisible && !avatarHidden && !topPhotoHidden,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                contentDescription = "正在直播，点击进入直播间",
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.width(16.dp))
@@ -3295,7 +3542,6 @@ private fun SpaceHeader(
                     SpaceHeaderIdentityInfo(
                         userInfo = userInfo,
                         officialBadge = officialBadge,
-                        onLiveClick = onLiveClick,
                         modifier = Modifier
                             .weight(1f)
                             .graphicsLayer { alpha = 1f - collapseFractionProvider() }
@@ -3365,7 +3611,6 @@ private fun SpaceHeader(
             SpaceHeaderIdentityInfo(
                 userInfo = userInfo,
                 officialBadge = officialBadge,
-                onLiveClick = onLiveClick,
                 modifier = Modifier
                     .fillMaxWidth()
                     .graphicsLayer { alpha = 1f - collapseFractionProvider() }
@@ -3396,7 +3641,6 @@ private fun SpaceHeader(
 private fun SpaceHeaderIdentityInfo(
     userInfo: SpaceUserInfo,
     officialBadge: OfficialVerifyBadgeSpec?,
-    onLiveClick: (Long, String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // 信息区：名字 + 等级 + VIP 标识。
@@ -3432,36 +3676,6 @@ private fun SpaceHeaderIdentityInfo(
                                 vipType = userInfo.vip.type,
                             ),
                         compact = true,
-                    )
-                }
-            }
-
-            val liveRoom = userInfo.liveRoom
-            if (liveRoom?.liveStatus == 1 && liveRoom.url.isNotBlank()) {
-                FlowRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    SpaceBadgeChip(
-                        text = "直播中",
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        onClick = {
-                            val roomId = liveRoom.roomId.takeIf { it > 0L }
-                                ?: liveRoom.url
-                                    .substringAfterLast('/')
-                                    .substringBefore('?')
-                                    .toLongOrNull()
-                                ?: 0L
-                            onLiveClick(
-                                roomId,
-                                liveRoom.title.ifBlank { userInfo.name },
-                                userInfo.name
-                            )
-                        }
                     )
                 }
             }
@@ -3595,6 +3809,7 @@ private fun SpaceContentTabs(
     pagerState: PagerState,
     page: Int,
     onMainTabReselected: (() -> Unit)? = null,
+    mainTabsSlot: (@Composable () -> Unit)? = null,
 ) {
     val selectedMainTab = state.tabShellState.selectedTab
     val hasCheese = state.hasCheeseTab || state.cheeseItems.isNotEmpty()
@@ -3639,7 +3854,7 @@ private fun SpaceContentTabs(
         }
     }
     Column(modifier = modifier) {
-        SpaceMainTabRow(
+        if (mainTabsSlot != null) mainTabsSlot() else SpaceMainTabRow(
             tabs = displayedMainTabs,
             selectedTab = resolveSpacePrimaryTab(selectedMainTab),
             onSelect = { tab ->
@@ -3720,6 +3935,8 @@ private fun SpaceMainTabRow(
     modifier: Modifier = Modifier,
     indicatorPositionProvider: () -> Float,
     isScrollInProgressProvider: () -> Boolean,
+    isPagerDraggingProvider: (() -> Boolean)? = null,
+    pagerTargetPositionProvider: (() -> Float)? = null,
 ) {
     val liquidGlassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
     val miuixNonGlass = com.android.purebilibili.core.ui.isMiuixNonGlassEnabled()
@@ -3741,6 +3958,9 @@ private fun SpaceMainTabRow(
             onSelectionChange = onSelect,
             indicatorPositionProvider = indicatorPositionProvider,
             isScrollInProgressProvider = isScrollInProgressProvider,
+            // 仅玻璃主栏提供分页交互身份；原生 MD3 / Miuix 保留既有动画路径。
+            isPagerDraggingProvider = if (liquidGlassEnabled) isPagerDraggingProvider else null,
+            pagerTargetPositionProvider = if (liquidGlassEnabled) pagerTargetPositionProvider else null,
             // 玻璃保留独立间距；非玻璃 Miuix 主导航放得下时均匀居中，
             // 空间不足时仍按完整文字宽度滚动。
             centerContent = liquidGlassEnabled || miuixNonGlass,
@@ -4274,6 +4494,7 @@ private fun SpaceHomeVideoCard(
 private fun SpaceAggregateMediaCard(
     item: SpaceAggregateArchiveItem,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     sharedTransitionKey: String? = null,
     sharedTransitionScope: SharedTransitionScope? = null,
     animatedVisibilityScope: AnimatedVisibilityScope? = null
@@ -4315,7 +4536,7 @@ private fun SpaceAggregateMediaCard(
     )
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .padding(horizontal = 8.dp)
             .then(nativeCardSnapshot.modifier)
             .clip(coverShape)
@@ -4512,6 +4733,7 @@ private fun contributionLayoutToggleAction(
 @Composable
 private fun SpaceContributionArchiveVideoItem(
     video: SpaceVideoItem,
+    modifier: Modifier = Modifier,
     layoutMode: SpaceContributionVideoLayoutMode,
     coverAspectRatio: Float,
     boundedListModifier: Modifier,
@@ -4524,6 +4746,7 @@ private fun SpaceContributionArchiveVideoItem(
         SpaceContributionVideoLayoutMode.GRID -> {
             SpaceHomeVideoCard(
                 video = video,
+                modifier = modifier,
                 progressState = resolveSpaceVideoProgressState(
                     video = video,
                     localPositionMs = 0L,
@@ -4663,6 +4886,7 @@ private fun SpaceArchiveListItemRow(
     )
 
     HorizontalVideoCardFrame(
+        horizontalCoverMaxWidthDp = com.android.purebilibili.feature.home.components.cards.WIDE_LIST_COVER_MAX_WIDTH_DP,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
@@ -4897,18 +5121,26 @@ private fun SpaceArticleListItem(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val target = when (val action = resolveSpaceArticleClickAction(article)) {
+        is SpaceDynamicClickAction.OpenArticle -> com.android.purebilibili.navigation3.BiliPaiNavKey.ArticleDetail(action.articleId, action.title)
+        is SpaceDynamicClickAction.OpenDynamicDetail -> com.android.purebilibili.navigation3.BiliPaiNavKey.DynamicDetail(action.dynamicId)
+        else -> null
+    }
+    val container = target?.let { com.android.purebilibili.core.ui.rememberNativeCardContainerTransition(it, onClick) }
+    val openCard = container?.onClick ?: onClick
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
+            .then(container?.modifier ?: Modifier)
             .clip(AppShapes.container(ContainerLevel.Card))
-            .appActionClickable { onClick() }
+            .appActionClickable { openCard() }
             .padding(vertical = 6.dp)
     ) {
         RichTextContent(
             desc = remember(article.title) { DynamicDesc(text = article.title) },
             onUserClick = {},
-            onBlankTap = onClick,
+            onBlankTap = openCard,
             fontSize = MaterialTheme.typography.titleMedium.fontSize,
             fontWeight = FontWeight.SemiBold,
             lineHeight = MaterialTheme.typography.titleMedium.lineHeight,

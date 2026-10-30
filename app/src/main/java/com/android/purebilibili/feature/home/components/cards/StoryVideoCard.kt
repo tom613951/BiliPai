@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,7 +87,6 @@ import com.android.purebilibili.core.ui.transition.videoCardShellSharedBoundsOrE
 import com.android.purebilibili.feature.home.HomeCoverRequestSpec
 import com.android.purebilibili.feature.home.resolveHomeCoverImageSource
 import com.android.purebilibili.feature.home.resolveHomeCardEnterAnimationEnabledAtMount
-import com.android.purebilibili.feature.video.ui.section.resolveCompactPublishTimeRowText
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import kotlin.math.roundToInt
@@ -184,13 +184,7 @@ internal fun StoryVideoCard(
     var measuredCoverSize by remember(coverCacheKey) {
         mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
     }
-    val publishTimeRowText = remember(showPublishTime, video.pubdate) {
-        if (!showPublishTime) {
-            ""
-        } else {
-            resolveCompactPublishTimeRowText(pubdate = video.pubdate)
-        }
-    }
+    val publishTimeRowText = rememberVideoCardPublishTimeText(video, showPublishTime, cardVisibleInWindow)
     val emphasizePublishTime = false
 
     //  [新增] 长按删除菜单状态
@@ -321,10 +315,13 @@ internal fun StoryVideoCard(
 
     val cardShellShape = cardShape
     val homeCardScrolling = LocalHomeCardScrolling.current
+    val homeCardTransitionAtMount = LocalHomeCardTransitionRunning.current
     val enterAnimationEnabledAtMount = remember(video.bvid) {
         resolveHomeCardEnterAnimationEnabledAtMount(
             baseAnimationEnabled = animationEnabled,
-            isReturningFromDetail = isReturningFromVideoDetail,
+            // Mount-only sampling must not subscribe every neighboring card to transition changes.
+            isReturningFromDetail = isReturningFromVideoDetail ||
+                Snapshot.withoutReadObservation { homeCardTransitionAtMount?.value == true },
             isSwitchingCategory = CardPositionManager.isSwitchingCategory,
             // Sample once; a card mounted while scrolling stays visible after settling.
             isScrollInProgress = scrollLiteModeEnabled || homeCardScrolling?.value == true
@@ -461,8 +458,6 @@ internal fun StoryVideoCard(
                 isQuickReturnFromDetail = isQuickReturningFromVideoDetail,
             )
         ) {
-        Spacer(modifier = Modifier.weight(1f))
-
         AppText(
             text = video.title,
             color = AppContentColors.primaryText(),

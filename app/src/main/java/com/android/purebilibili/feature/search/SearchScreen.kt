@@ -143,6 +143,7 @@ import androidx.activity.compose.BackHandler
 import com.android.purebilibili.R
 import com.android.purebilibili.core.ui.AppScaffold
 import com.android.purebilibili.core.ui.AppShapes
+import com.android.purebilibili.feature.live.rememberLiveCardContainerTransition
 import com.android.purebilibili.core.ui.ContainerLevel
 import com.android.purebilibili.core.ui.AppSurfaceTokens
 import com.android.purebilibili.core.theme.LocalAppUiStyle
@@ -686,7 +687,6 @@ fun SearchScreen(
     onVideoDetailReturnAnimationConsumed: () -> Unit = {},
     onUpResultClick: ((Long, String) -> Unit)? = null,
     onBangumiResultClick: ((Long, String) -> Unit)? = null,
-    onArticleResultClick: ((Long, String, String) -> Unit)? = null,
     backEnabled: Boolean = true,
 ) {
     val topChromePolicy = rememberAppTopChromePolicy()
@@ -696,6 +696,8 @@ fun SearchScreen(
     val searchChromeSpec = remember(topChromePolicy) { resolveSearchChromeVisualSpec(topChromePolicy) }
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val listLayout = rememberVideoListLayoutControl()
+    // Entry-scoped: consuming the initial keyword or returning from a detail must not add a landing.
+    val openedWithKeyword = rememberSaveable { initialKeyword.isNotBlank() }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -819,6 +821,9 @@ fun SearchScreen(
     val compactVideoStatsOnCover by SettingsManager
         .getCompactVideoStatsOnCover(context)
         .collectAsStateWithLifecycle(initialValue = false)
+    val showHotSection by SettingsManager.getSearchLandingSectionVisible(context, 0).collectAsStateWithLifecycle(initialValue = true)
+    val showHistorySection by SettingsManager.getSearchLandingSectionVisible(context, 1).collectAsStateWithLifecycle(initialValue = true)
+    val showDiscoverSection by SettingsManager.getSearchLandingSectionVisible(context, 2).collectAsStateWithLifecycle(initialValue = true)
     val hotSearchEnabled by SettingsManager.getSearchHotSectionEnabled(context).collectAsStateWithLifecycle(initialValue = true)
     val discoverSectionEnabled by SettingsManager.getSearchDiscoverSectionEnabled(context).collectAsStateWithLifecycle(initialValue = true)
     val appThemeConfig = com.android.purebilibili.core.ui.LocalAppThemeConfig.current
@@ -1176,7 +1181,8 @@ fun SearchScreen(
             resolveSearchBackAction(
                 showResults = state.showResults,
                 suggestionsVisible = state.suggestions.isNotEmpty(),
-                searchFieldFocused = searchFieldFocused
+                searchFieldFocused = searchFieldFocused,
+                openedWithKeyword = openedWithKeyword,
             )
         ) {
             SearchBackAction.RETURN_TO_LANDING -> {
@@ -1731,9 +1737,7 @@ fun SearchScreen(
                             LaunchedEffect(activePageGridState, state.searchSessionId) {
                                 snapshotFlow {
                                     val current = latestVideoPage
-                                    val itemCount = current.searchResults.size + if (targetSearchType == SearchType.ALL) {
-                                        current.upResults.size + current.bangumiResults.size
-                                    } else 0
+                                    val itemCount = activePageGridState.layoutInfo.totalItemsCount
                                     current.currentPage to shouldLoadMoreSearchVideos(
                                         itemCount = itemCount,
                                         lastVisibleItemIndex = activePageGridState.layoutInfo
@@ -1942,6 +1946,7 @@ fun SearchScreen(
                                             }
                                         )
                                         .then(if (searchHazeEnabled) Modifier.hazeSourceCompat(state = hazeState) else Modifier)
+                                val showFullCardContent = com.android.purebilibili.core.ui.LocalFullVideoCardContentVisible.current
                                 LazyVerticalStaggeredGrid(
                                     columns = StaggeredGridCells.Fixed(effectiveSearchGridColumns),
                                     state = activePageGridState,
@@ -2064,22 +2069,44 @@ fun SearchScreen(
                                         }
                                     }
                                 }
-                                itemsIndexed(
-                                    pageResultState.searchResults,
-                                    key = { index, video ->
-                                        resolveSearchResultLazyItemKey(
-                                            searchType = targetSearchType,
-                                            index = index,
-                                            textKey = video.bvid,
-                                            numericKey = video.id
+                                val searchVideoKeys = pageResultState.searchResults.mapIndexed { index, video ->
+                                    resolveSearchResultLazyItemKey(targetSearchType, index, video.bvid, video.id)
+                                }
+                                val renderSearchVideo: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
+                                        val video = pageResultState.searchResults[index]
+                                        // 直播卡片和历史页/直播区走同一套容器转场
+                                        // （rememberLiveCardContainerTransition），
+                                        // 之前这里直接 pushNavigation3Key，所以是旧动画。
+                                        val cardCornerRadius = AppShapes.resolveContainerCornerDp(
+                                            level = ContainerLevel.Card,
+                                            uiStyle = LocalAppUiStyle.current,
                                         )
-                                    },
-                                    contentType = { _, video -> "search_video_${video.contentType}" }
-                                ) { index, video ->
-                                        AnimatedVideoListItem(modifier = videoListItemModifier(enabled = cardAnimationEnabled), enabled = cardAnimationEnabled) {
+                                        val liveContainerTransition =
+                                            if (video.contentType == "live_room") {
+                                                rememberLiveCardContainerTransition(
+                                                    roomId = video.id,
+                                                    title = video.title,
+                                                    hostName = video.owner.name,
+                                                    color = AppSurfaceTokens.cardContainer(),
+                                                    cornerRadius = cardCornerRadius,
+                                                    onClick = {
+                                                        onLiveClick(
+                                                            video.id,
+                                                            video.title,
+                                                            video.owner.name
+                                                        )
+                                                    },
+                                                    enabled = effectiveCardTransitionEnabled,
+                                                )
+                                            } else {
+                                                null
+                                            }
+                                        AnimatedVideoListItem(modifier = cardModifier, enabled = cardAnimationEnabled) {
                                             val highlightedTitle = rememberSearchHighlightedTitle(video)
                                             ElegantVideoCard(
                                                 video = video,
+                                                modifier = (if (!showFullCardContent && effectiveSearchGridColumns > 1) Modifier.fillMaxHeight() else Modifier)
+                                                    .then(liveContainerTransition?.modifier ?: Modifier),
                                                 singleColumn = effectiveSearchGridColumns == 1,
                                                 index = index,
                                                 animationEnabled = false, // The stable item wrapper owns column-switch motion.
@@ -2108,12 +2135,19 @@ fun SearchScreen(
                                                 },
                                                 onUpClick = onUpClick,
                                                 onClick = { _, _ ->
-                                                    when (
+                                                    // 直播项走转场包装的点击（内部会调传入的导航），
+                                                    // 其余沿用原来的目标解析。
+                                                    val liveHandler = liveContainerTransition
+                                                    if (liveHandler != null) {
+                                                        liveHandler.onClick()
+                                                    } else when (
                                                         val target = resolveVideoSearchNavigationTarget(
                                                             bvid = video.bvid,
                                                             contentType = video.contentType,
                                                             navigationUrl = video.navigationUrl,
-                                                            title = video.title
+                                                            title = video.title,
+                                                            videoId = video.id,
+                                                            ownerName = video.owner.name
                                                         )
                                                     ) {
                                                         is SearchResultNavigationTarget.Video -> {
@@ -2129,6 +2163,8 @@ fun SearchScreen(
                                                         }
                                                         is SearchResultNavigationTarget.Web ->
                                                             onWebClick(target.url, target.title)
+                                                        is SearchResultNavigationTarget.LiveRoom ->
+                                                            onLiveClick(target.roomId, target.title, target.uname)
                                                         else -> Unit
                                                     }
                                                 }
@@ -2136,6 +2172,34 @@ fun SearchScreen(
 
                                         }
                                     }
+                                if (showFullCardContent || effectiveSearchGridColumns == 1) {
+                                    itemsIndexed(
+                                        pageResultState.searchResults,
+                                        key = { index, _ -> searchVideoKeys[index] },
+                                        contentType = { _, video -> "search_video_${video.contentType}" },
+                                    ) { index, _ ->
+                                        renderSearchVideo(index, videoListItemModifier(enabled = cardAnimationEnabled))
+                                    }
+                                } else {
+                                    com.android.purebilibili.feature.home.resolveHomeFeedAlignedRows(
+                                        pageResultState.searchResults.size, effectiveSearchGridColumns,
+                                    ).forEach { row ->
+                                        item(
+                                            key = row.joinToString(prefix = "search_video_row_", separator = "_") { searchVideoKeys[it] },
+                                            contentType = "search_video_row",
+                                            span = StaggeredGridItemSpan.FullLine,
+                                        ) {
+                                            com.android.purebilibili.feature.home.HomeAlignedVideoRow(
+                                                indices = row,
+                                                itemKeys = searchVideoKeys,
+                                                columns = effectiveSearchGridColumns,
+                                                horizontalArrangement = searchGridHorizontalArrangement,
+                                                modifier = videoListItemModifier(enabled = cardAnimationEnabled).fillMaxWidth(),
+                                                content = renderSearchVideo,
+                                            )
+                                        }
+                                    }
+                                }
 
                                     // [新增] 空状态提示 (提示可能被屏蔽)
                                     if (!pageResultState.isSearching && pageResultState.totalCount == 0 && pageResultState.error == null && pageEmptyStateCopy != null) {
@@ -2522,9 +2586,6 @@ fun SearchScreen(
                                             item = articleItem,
                                             appearance = genericResultCardAppearance,
                                             onClick = { onArticleClick(articleItem.id, articleItem.title) },
-                                            onTransitionClick = onArticleResultClick?.let { openResult ->
-                                                { key -> openResult(articleItem.id, articleItem.title, key) }
-                                            },
                                         )
                                         if (targetSearchType == state.searchType && index == pageResultState.articleResults.size - 3 && pageResultState.hasMoreResults && !pageResultState.isLoadingMore) {
                                             LaunchedEffect(pageResultState.currentPage, targetSearchType) {
@@ -2685,6 +2746,9 @@ fun SearchScreen(
                     recordSearchHistory = state.recordSearchHistory,
                     globalPrivacyMode = state.globalPrivacyMode,
                     onToggleHistoryRecording = viewModel::toggleSearchHistoryRecording,
+                    showHotSection = showHotSection,
+                    showHistorySection = showHistorySection,
+                    showDiscoverSection = showDiscoverSection,
                     hotSearchEnabled = hotSearchEnabled,
                     discoverSectionEnabled = discoverSectionEnabled,
                     onToggleHotSearch = {
@@ -4342,17 +4406,14 @@ internal fun UpSearchResultCard(
 ) {
     val useMiuixPresentation = LocalAppUiStyle.current == AppUiStyle.MIUIX
     val cleanedItem = remember(upItem) { upItem.cleanupFields() }
-    val transitionKey = rememberSaveable(upItem.mid) {
-        "${searchUpContainerKey(upItem.mid)}:${java.util.UUID.randomUUID()}"
-    }
-
-    val sharedTransitionScope = LocalSharedTransitionScope.current
-    val animatedVisibilityScope = LocalAnimatedVisibilityScope.current
+    val container = com.android.purebilibili.core.ui.rememberNativeCardContainerTransition(
+        com.android.purebilibili.navigation3.BiliPaiNavKey.Space(upItem.mid), onClick,
+    )
 
     SearchResultCardSurface(
         appearance = appearance,
-        onClick = { onTransitionClick?.invoke(transitionKey) ?: onClick() },
-        modifier = Modifier.fillMaxWidth().searchResultContainerBounds(transitionKey)
+        onClick = container.onClick,
+        modifier = Modifier.fillMaxWidth().then(container.modifier)
     ) {
         Row(
             modifier = Modifier
@@ -4363,15 +4424,7 @@ internal fun UpSearchResultCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // 头像
-            val avatarModifier = if (sharedTransitionScope != null && animatedVisibilityScope != null) {
-                with(sharedTransitionScope) {
-                    Modifier.sharedBounds(
-                        rememberSharedContentState(key = com.android.purebilibili.core.ui.transition.avatarSharedElementKey(cleanedItem.mid)),
-                        animatedVisibilityScope = animatedVisibilityScope,
-                        clipInOverlayDuringTransition = OverlayClip(CircleShape)
-                    )
-                }
-            } else Modifier
+            val avatarModifier = Modifier
 
             val verifyBadge = cleanedItem.official_verify?.let { verify ->
                 resolveOfficialVerifyBadge(type = verify.type, desc = verify.desc)
@@ -4527,13 +4580,13 @@ internal fun BangumiSearchResultCard(
     onTransitionClick: ((String) -> Unit)? = null,
 ) {
     val useMiuixPresentation = LocalAppUiStyle.current == AppUiStyle.MIUIX
-    val transitionKey = rememberSaveable(item.seasonId) {
-        "${searchBangumiContainerKey(item.seasonId)}:${java.util.UUID.randomUUID()}"
-    }
+    val container = com.android.purebilibili.core.ui.rememberNativeCardContainerTransition(
+        com.android.purebilibili.navigation3.BiliPaiNavKey.BangumiDetail(item.seasonId), onClick,
+    )
     SearchResultCardSurface(
         appearance = appearance,
-        onClick = { onTransitionClick?.invoke(transitionKey) ?: onClick() },
-        modifier = Modifier.searchResultContainerBounds(transitionKey),
+        onClick = container.onClick,
+        modifier = container.modifier,
     ) {
         Row(
             modifier = Modifier
@@ -5163,15 +5216,21 @@ internal fun ArticleSearchResultCard(
     item: SearchArticleItem,
     appearance: SearchResultCardAppearance,
     onClick: () -> Unit,
-    onTransitionClick: ((String) -> Unit)? = null,
 ) {
-    val transitionKey = rememberSaveable(item.id) {
-        "${searchArticleContainerKey(item.id)}:${java.util.UUID.randomUUID()}"
+    val nativeTarget = when (val target = resolveArticleNavigationTarget(item.id)) {
+        is ArticleNavigationTarget.NativeArticle -> com.android.purebilibili.navigation3.BiliPaiNavKey.ArticleDetail(target.articleId, item.title)
+        is ArticleNavigationTarget.NativeDynamic -> com.android.purebilibili.navigation3.BiliPaiNavKey.DynamicDetail(target.dynamicId)
+        null -> null
+    }
+    val container = nativeTarget?.let {
+        com.android.purebilibili.core.ui.rememberNativeCardContainerTransition(it, onClick)
     }
     SearchResultCardSurface(
         appearance = appearance,
-        onClick = { onTransitionClick?.invoke(transitionKey) ?: onClick() },
-        modifier = Modifier.searchResultContainerBounds(transitionKey),
+        // 专栏与图文只走导航卡片容器；关闭动效时仍用同一目标正常跳转，
+        // 不回退搜索页内部的共享元素宿主，确保返回回收到这张结果卡片。
+        onClick = container?.onClick ?: onClick,
+        modifier = container?.modifier ?: Modifier,
     ) {
         val metaLine = buildString {
             val publishTime = FormatUtils.formatPublishTime(item.pubTime)
@@ -5218,6 +5277,7 @@ internal fun ArticleSearchResultCard(
         }
         if (item.imageUrls.isNotEmpty()) {
             HorizontalVideoCardFrame(
+                horizontalCoverMaxWidthDp = com.android.purebilibili.feature.home.components.cards.WIDE_LIST_COVER_MAX_WIDTH_DP,
                 modifier = Modifier.fillMaxWidth(),
                 coverContent = {
                     AsyncImage(

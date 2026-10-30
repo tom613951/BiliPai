@@ -20,9 +20,6 @@ import coil3.request.allowHardware
 import android.os.Build
 import android.provider.Settings
 import androidx.media3.common.Player
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.Crossfade
@@ -191,6 +188,7 @@ import com.android.purebilibili.feature.audio.lyrics.halcyon.AppleMusicLyricsVie
 import com.android.purebilibili.feature.audio.lyrics.halcyon.mapToHalcyonLyrics
 import com.android.purebilibili.feature.audio.lyrics.halcyon.currentLyricIndexAt
 import com.android.purebilibili.feature.audio.lyrics.halcyon.playerLyricPerspective
+import com.android.purebilibili.core.ui.popup.appGlassDrawerSurface
 import com.android.purebilibili.feature.audio.lyrics.resolveActiveLyricIndex
 import com.android.purebilibili.feature.audio.lyrics.resolveDisplaySecondaryRows
 import com.android.purebilibili.feature.audio.lyrics.resolveLastStartedLyricIndex
@@ -234,7 +232,6 @@ import androidx.compose.material.icons.outlined.VolumeDown
 import androidx.compose.material.icons.outlined.VolumeUp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
@@ -396,6 +393,7 @@ internal val MusicArtworkScrimColors = listOf(
 internal fun MusicPlayerContent(
     sourceState: MusicPlayerUiState,
     playbackPositionSource: Player? = null,
+    playbackPositionIdentity: String? = null,
     onBack: () -> Unit,
     onPlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
@@ -416,6 +414,10 @@ internal fun MusicPlayerContent(
     onVideoSubtitlesEnabledChange: ((Boolean) -> Unit)? = null,
     selectedSubtitleTrackKey: String? = null,
     onSubtitleTrackSelected: (String) -> Unit = {},
+    secondarySubtitleLanguageOptions: List<Pair<String, String>> = emptyList(),
+    selectedSecondarySubtitleTrackKey: String? = null,
+    onSecondarySubtitleTrackSelected: ((String) -> Unit)? = null,
+    secondarySubtitleError: String? = null,
     onLyricsRetry: () -> Unit = {},
     onLyricsSearch: (String) -> Unit = {},
     onLyricsCandidateSelected: (Int) -> Unit = {},
@@ -452,23 +454,21 @@ internal fun MusicPlayerContent(
     // Only video audio mode supplies a player. Keep its frequent position updates below
     // the parent screen, while ordinary music continues using its existing state flow.
     val playerSurfaceActive = com.android.purebilibili.core.ui.rememberVisualWorkActive() && !isInPipMode
-    var livePositionMs by remember(playbackPositionSource) {
-        mutableLongStateOf(sourceState.positionMs)
-    }
-    LaunchedEffect(playbackPositionSource, sourceState.positionMs) {
-        livePositionMs = sourceState.positionMs
-    }
-    val lifecycleOwner = LocalLifecycleOwner.current
-    LaunchedEffect(playbackPositionSource, sourceState.isPlaying, playerSurfaceActive, lifecycleOwner) {
-        val player = playbackPositionSource ?: return@LaunchedEffect
-        if (!sourceState.isPlaying || !playerSurfaceActive) return@LaunchedEffect
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (isActive && player.isPlaying) {
-                livePositionMs = player.currentPosition.coerceAtLeast(0L)
-                delay(250L)
-            }
+    val lyricTimeline = remember(sourceState.lyrics) {
+        sourceState.lyrics?.let { document ->
+            com.android.purebilibili.core.player.PlaybackPositionTimeline(
+                document.lines.flatMap { line ->
+                    listOf(line.startTimeMs + document.offsetMs, line.endTimeMs + document.offsetMs)
+                },
+            )
         }
     }
+    val livePositionMs by com.android.purebilibili.core.player.rememberPlaybackPosition(
+        player = playbackPositionSource,
+        identity = playbackPositionIdentity ?: sourceState.title,
+        enabled = playerSurfaceActive,
+        timeline = lyricTimeline,
+    )
     val state = if (playbackPositionSource == null) sourceState
         else sourceState.copy(positionMs = livePositionMs)
     val context = LocalContext.current
@@ -522,7 +522,16 @@ internal fun MusicPlayerContent(
     )
     var lyricsControlsVisible by remember(state.title) { mutableStateOf(false) }
     // 翻译开关提升到内容层：顶栏与歌词设置面板共用，保证同一状态源
-    var lyricsShowTranslations by rememberSaveable { mutableStateOf(true) }
+    val lyricsPreferenceScope = rememberCoroutineScope()
+    val videoAudioMode = onVideoSubtitlesEnabledChange != null
+    val lyricsShowTranslations by remember(context, videoAudioMode) {
+        com.android.purebilibili.core.store.AudioLyricsSettingsStore.observeShowTranslations(context, videoAudioMode)
+    }.collectAsStateWithLifecycle(initialValue = !videoAudioMode)
+    val toggleLyricsTranslations: () -> Unit = {
+        lyricsPreferenceScope.launch {
+            com.android.purebilibili.core.store.AudioLyricsSettingsStore.setShowTranslations(context, !lyricsShowTranslations, videoAudioMode)
+        }
+    }
     // All material/layout branches consume the same display projection. Keep original
     // source data intact so re-enabling translations needs no reload or track change.
     val displayLyrics = remember(state.lyrics, lyricsShowTranslations) {
@@ -844,7 +853,7 @@ internal fun MusicPlayerContent(
                                 showBottomControls = false,
                                 lyricsUiStyle = lyricsUiStyle,
                                 showTranslations = lyricsShowTranslations,
-                                onToggleTranslations = { lyricsShowTranslations = !lyricsShowTranslations },
+                                onToggleTranslations = { toggleLyricsTranslations() },
                                 modifier = Modifier.fillMaxSize()
                             )
                             } else {
@@ -999,7 +1008,7 @@ internal fun MusicPlayerContent(
                                 onPageTap = openCoverPage,
                                 lyricsUiStyle = lyricsUiStyle,
                                 showTranslations = lyricsShowTranslations,
-                                onToggleTranslations = { lyricsShowTranslations = !lyricsShowTranslations },
+                                onToggleTranslations = { toggleLyricsTranslations() },
                                 modifier = Modifier.padding(bottom = MUSIC_PLAYER_COMPACT_DOCK_BOTTOM_PADDING_DP.dp)
                             )
                             // 歌词页不再放右上角迷你封面：与歌词工具行同位冲突，返回封面页由手势与底部 dock 承担
@@ -1189,7 +1198,7 @@ internal fun MusicPlayerContent(
                 onOpenLyricsSearch = { showLyricsSearch = true },
                 lyricsUiStyle = lyricsUiStyle,
                 showTranslations = lyricsShowTranslations,
-                onToggleTranslations = { lyricsShowTranslations = !lyricsShowTranslations },
+                onToggleTranslations = { toggleLyricsTranslations() },
                 availableWidthDp = availableWidthDp,
                 hingeStartDp = if (adaptiveInfo.foldingFeature.hingeOrientation == AppHingeOrientation.Horizontal) {
                     hingeStartDp
@@ -1324,7 +1333,7 @@ internal fun MusicPlayerContent(
                                                 showBottomControls = false,
                                                 lyricsUiStyle = lyricsUiStyle,
                                                 showTranslations = lyricsShowTranslations,
-                                                onToggleTranslations = { lyricsShowTranslations = !lyricsShowTranslations },
+                                                onToggleTranslations = { toggleLyricsTranslations() },
                                                 modifier = Modifier.fillMaxSize()
                                             )
                                         }
@@ -1662,7 +1671,8 @@ internal fun MusicPlayerContent(
                                     liquidGlassTuning = liquidGlassTuning,
                                     onClick = {
                                         showMusicChrome()
-                                        lyricsShowTranslations = !lyricsShowTranslations
+                                        if (subtitleLanguageOptions.isNotEmpty()) showLyricsOffsetSettings = true
+                                        else toggleLyricsTranslations()
                                     }
                                 )
                                 GlassIconButton(
@@ -1836,8 +1846,19 @@ internal fun MusicPlayerContent(
                 onVideoSubtitlesEnabledChange = onVideoSubtitlesEnabledChange,
                 selectedSubtitleTrackKey = selectedSubtitleTrackKey,
                 onSubtitleTrackSelected = onSubtitleTrackSelected,
+                secondarySubtitleLanguageOptions = secondarySubtitleLanguageOptions,
+                selectedSecondarySubtitleTrackKey = selectedSecondarySubtitleTrackKey,
+                onSecondarySubtitleTrackSelected = onSecondarySubtitleTrackSelected?.let { select ->
+                    { trackKey ->
+                        select(trackKey)
+                        lyricsPreferenceScope.launch {
+                            com.android.purebilibili.core.store.AudioLyricsSettingsStore.setShowTranslations(context, true, videoAudioMode)
+                        }
+                    }
+                },
+                secondarySubtitleError = secondarySubtitleError,
                 showTranslations = lyricsShowTranslations,
-                onToggleTranslations = { lyricsShowTranslations = !lyricsShowTranslations },
+                onToggleTranslations = { toggleLyricsTranslations() },
             )
         }
     }
@@ -1849,7 +1870,7 @@ internal fun MusicPlayerContent(
  *
  * 核心设计：
  * 1. 悬浮浮层：浮于播放器底层舞台之上，无全屏暗色遮罩 (scrim)，保持上半部封面与歌词通透沉浸。
- * 2. 质感材质：RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp) + biliPaiFloatingDockShell 流体毛玻璃。
+ * 2. 质感材质：玻璃开启时复用玻璃面板材质，关闭时保留原生背景。
  * 3. 极简导览：待播清单 (数量) + [切换列表 / 3D 唱片架] 模式胶囊 + [v] 优雅下推收起按钮，支持顶部下推手势收起。
  * 4. 模式无缝切换：3D 实体 CD 唱片架 (Cover Flow) 与 高级毛玻璃清单双模态切换。
  */
@@ -1910,7 +1931,7 @@ private fun ImmersiveBottomQueueShelf(
         color = if (glassEnabled && miuixBackdrop != null) Color.Transparent
         else if (coverFlowMode) panelColor else if (miuixBackdrop != null) Color.Transparent else panelColor,
         contentColor = MusicContentColor,
-        border = BorderStroke(1.dp, resolveMusicGlassBorderColor(glassTintColor, isDarkEnvironment)),
+        border = if (glassEnabled && miuixBackdrop != null) null else BorderStroke(1.dp, resolveMusicGlassBorderColor(glassTintColor, isDarkEnvironment)),
         shadowElevation = 16.dp,
         modifier = modifier
             .offset { IntOffset(0, dragOffsetY.value.roundToInt()) }
@@ -1931,7 +1952,15 @@ private fun ImmersiveBottomQueueShelf(
             ) {}
             .then(
                 // 唱片架与列表在玻璃开启时共享采样；关闭时保留各自的原生材质。
-                if (coverFlowMode && !glassEnabled) {
+                if (glassEnabled && miuixBackdrop != null) {
+                    Modifier.appGlassDrawerSurface(
+                        backdrop = miuixBackdrop,
+                        shape = panelShape,
+                        darkTheme = isDarkEnvironment,
+                        tuning = liquidGlassTuning,
+                        forceLowBlurBudget = false,
+                    )
+                } else if (coverFlowMode && !glassEnabled) {
                     Modifier
                 } else {
                     Modifier.biliPaiFloatingDockShell(
@@ -2023,9 +2052,27 @@ private fun ImmersiveBottomQueueShelf(
                         AppSurface(
                             onClick = onToggleQueueCoverFlow,
                             shape = AppShapes.container(ContainerLevel.Pill),
-                            color = resolveMusicGlassContainerColor(glassTintColor, isDarkEnvironment),
-                            border = BorderStroke(0.8.dp, resolveMusicGlassBorderColor(glassTintColor, isDarkEnvironment)),
-                            modifier = Modifier.height(48.dp)
+                            color = if (glassEnabled && miuixBackdrop != null) Color.Transparent
+                                else resolveMusicGlassContainerColor(glassTintColor, isDarkEnvironment),
+                            border = if (glassEnabled && miuixBackdrop != null) null
+                                else BorderStroke(0.8.dp, resolveMusicGlassBorderColor(glassTintColor, isDarkEnvironment)),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .then(
+                                    if (glassEnabled && miuixBackdrop != null) {
+                                        Modifier.biliPaiFloatingDockShell(
+                                            backdrop = miuixBackdrop,
+                                            containerColor = resolveBiliPaiBottomBarContainerColor(
+                                                darkTheme = isDarkEnvironment,
+                                                liquidGlassTuning = liquidGlassTuning,
+                                            ),
+                                            pressProgress = 0f,
+                                            shape = AppShapes.container(ContainerLevel.Pill),
+                                            liquidGlassTuning = liquidGlassTuning,
+                                            darkTheme = isDarkEnvironment,
+                                        )
+                                    } else Modifier
+                                )
                         ) {
                             Box(
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -3544,6 +3591,7 @@ private fun LyricsPage(
                         currentIndex = halcyonIndex,
                         currentPositionMs = lyricMs,
                         isPlaying = state.isPlaying,
+                        playbackSpeed = state.playbackSpeed,
                         isPaused = !state.isPlaying,
                         pageVisible = pageActive,
                         showTranslation = showTranslations,
@@ -3835,6 +3883,7 @@ private fun formatLyricsOffset(offsetMs: Long): String {
     return "校正 $sign$seconds.${hundredths.toString().padStart(2, '0')}s"
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LyricsOffsetSettingsContent(
     offsetMs: Long,
@@ -3845,6 +3894,10 @@ private fun LyricsOffsetSettingsContent(
     onVideoSubtitlesEnabledChange: ((Boolean) -> Unit)? = null,
     selectedSubtitleTrackKey: String? = null,
     onSubtitleTrackSelected: (String) -> Unit = {},
+    secondarySubtitleLanguageOptions: List<Pair<String, String>> = emptyList(),
+    selectedSecondarySubtitleTrackKey: String? = null,
+    onSecondarySubtitleTrackSelected: ((String) -> Unit)? = null,
+    secondarySubtitleError: String? = null,
     showTranslations: Boolean,
     onToggleTranslations: () -> Unit,
 ) {
@@ -3886,20 +3939,55 @@ private fun LyricsOffsetSettingsContent(
                 color = contentColor,
             )
         }
-        AppText("关闭后只显示主字幕或原文；如需中文，请先选择中文字幕。", color = secondaryColor)
-        AppText("字幕语言", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = contentColor)
-        if (subtitleLanguageOptions.isEmpty()) {
-            AppText("当前视频没有可切换的字幕语言", color = secondaryColor)
-        } else {
-            subtitleLanguageOptions.forEach { (trackKey, label) ->
-                AppTextButton(
-                    onClick = { onSubtitleTrackSelected(trackKey) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                ) {
-                    AppText(
-                        text = if (trackKey == selectedSubtitleTrackKey) "✓  $label" else label,
-                        color = if (trackKey == selectedSubtitleTrackKey) AppContentColors.accent() else contentColor,
-                    )
+        AppText(
+            if (onVideoSubtitlesEnabledChange != null) "默认关闭并记住选择，可选择当前视频提供的附加字幕语言。"
+            else "记住翻译与罗马音的显示选择。",
+            color = secondaryColor,
+        )
+        var languagePicker by remember { mutableStateOf<Int?>(null) }
+        AppTextButton(
+            onClick = { languagePicker = 0 },
+            enabled = subtitleLanguageOptions.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        ) {
+            val label = subtitleLanguageOptions.firstOrNull { it.first == selectedSubtitleTrackKey }?.second
+            AppText("主字幕语言：${label ?: "当前视频无可选字幕"}", color = contentColor)
+        }
+        if (onSecondarySubtitleTrackSelected != null) {
+            AppTextButton(
+                onClick = { languagePicker = 1 },
+                enabled = secondarySubtitleLanguageOptions.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                val label = secondarySubtitleLanguageOptions.firstOrNull { it.first == selectedSecondarySubtitleTrackKey }?.second
+                AppText("附加字幕语言：${label ?: "当前视频无其他字幕语言"}", color = contentColor)
+            }
+            secondarySubtitleError?.let { AppText(it, color = AppContentColors.error()) }
+        }
+        if (languagePicker != null) {
+            val secondary = languagePicker == 1
+            val options = if (secondary) secondarySubtitleLanguageOptions else subtitleLanguageOptions
+            val selectedKey = if (secondary) selectedSecondarySubtitleTrackKey else selectedSubtitleTrackKey
+            AppModalBottomSheet(
+                onDismissRequest = { languagePicker = null },
+                containerColor = AppSurfaceTokens.surface(),
+                contentColor = contentColor,
+            ) {
+                Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                    AppText(if (secondary) "选择附加字幕语言" else "选择主字幕语言", style = MaterialTheme.typography.titleMedium)
+                    options.forEach { (trackKey, label) ->
+                        AppTextButton(
+                            onClick = {
+                                if (secondary) onSecondarySubtitleTrackSelected?.invoke(trackKey)
+                                else onSubtitleTrackSelected(trackKey)
+                                languagePicker = null
+                            },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) {
+                            AppText(if (trackKey == selectedKey) "✓  $label" else label,
+                                color = if (trackKey == selectedKey) AppContentColors.accent() else contentColor)
+                        }
+                    }
                 }
             }
         }

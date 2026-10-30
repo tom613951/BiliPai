@@ -79,6 +79,7 @@ import com.android.purebilibili.core.store.SettingsManager
 import com.android.purebilibili.core.store.TokenManager
 import com.android.purebilibili.core.util.BilibiliNavigationTarget
 import com.android.purebilibili.core.util.BilibiliNavigationTargetParser
+import com.android.purebilibili.core.util.hasCommentLocation
 
 import com.android.purebilibili.core.ui.common.TextSelectionBottomSheet
 import com.android.purebilibili.core.ui.common.TextSelectionPolicy
@@ -142,6 +143,8 @@ data class DynamicCardNavigationActions(
 @Immutable
 data class DynamicCardInteractionActions(
     val onCommentClick: (dynamicId: String) -> Unit = {},
+    /** 仅由已展示本条动态评论区的宿主提供；与卡片展开样式无关。 */
+    val onShowCommentsInPlace: (() -> Unit)? = null,
     val onRepostClick: (dynamicId: String) -> Unit = {},
     val onLikeClick: (dynamicId: String) -> Unit = {},
     val onLikeClickWithState: ((dynamicId: String, isLiked: Boolean) -> Unit)? = null,
@@ -201,6 +204,7 @@ fun DynamicCardV2(
     val onUnfoldRelatedClick = actions.navigation.onUnfoldRelatedClick
     val onPrimaryClickOverride = actions.navigation.onPrimaryClickOverride
     val onCommentClick = actions.interaction.onCommentClick
+    val onShowCommentsInPlace = actions.interaction.onShowCommentsInPlace
     val onRepostClick = actions.interaction.onRepostClick
     val onLikeClick = actions.interaction.onLikeClick
     val onLikeClickWithState = actions.interaction.onLikeClickWithState
@@ -357,6 +361,28 @@ fun DynamicCardV2(
         )
     }
 
+    val openPrimaryArticle: () -> Unit = {
+        dispatchDynamicCardPrimaryClick(
+            item = item,
+            action = cardClickAction,
+            onPrimaryClickOverride = onPrimaryClickOverride,
+            onVideoClick = onVideoClick,
+            onBangumiClick = onBangumiClick,
+            onArticleClick = onArticleClick,
+            onDynamicDetailClick = openDynamicDetail,
+            onUserClick = onUserClick,
+            onLiveClick = onLiveClick,
+        )
+    }
+    val articleContainer = if (!isDetail && onPrimaryClickOverride == null &&
+        onArticleClick != null && cardClickAction is DynamicCardPrimaryAction.OpenArticle
+    ) {
+        com.android.purebilibili.core.ui.rememberNativeCardContainerTransition(
+            com.android.purebilibili.navigation3.BiliPaiNavKey.ArticleDetail(cardClickAction.articleId, cardClickAction.title),
+            openPrimaryArticle,
+        )
+    } else null
+
     pendingVoteId?.let { voteId ->
         DynamicVoteDialog(
             voteId = voteId,
@@ -508,18 +534,9 @@ fun DynamicCardV2(
                     top = if (isDetail) AppSpacingTokens.Medium else AppSpacingTokens.ExtraSmall,
                     bottom = if (isDetail) AppSpacingTokens.None else AppSpacingTokens.ExtraSmall,
                 )
+                .then(articleContainer?.modifier ?: Modifier)
                 .appActionClickable(enabled = isPrimaryClickEnabled) {
-                    dispatchDynamicCardPrimaryClick(
-                        item = item,
-                        action = cardClickAction,
-                        onPrimaryClickOverride = onPrimaryClickOverride,
-                        onVideoClick = onVideoClick,
-                        onBangumiClick = onBangumiClick,
-                        onArticleClick = onArticleClick,
-                        onDynamicDetailClick = openDynamicDetail,
-                        onUserClick = onUserClick,
-                        onLiveClick = onLiveClick
-                    )
+                    if (articleContainer != null) articleContainer.onClick() else openPrimaryArticle()
                 }
         ) {
         val context = LocalContext.current
@@ -879,7 +896,12 @@ fun DynamicCardV2(
         }
 
         //  风险提示条（module_dispute：如“视频内含有危险行为，请勿模仿”，点击打开 jump_url）
-        item.modules.module_dispute?.let { dispute ->
+        val showDispute by androidx.compose.runtime.remember(context) {
+            com.android.purebilibili.core.store.ContentDisplaySettings.observe(
+                context, com.android.purebilibili.core.store.ContentDisplaySettings.DYNAMIC_WARNING
+            )
+        }.collectAsStateWithLifecycle(initialValue = false)
+        item.modules.module_dispute?.takeIf { showDispute }?.let { dispute ->
             if (shouldShowDynamicDispute(dispute)) {
                 val disputeColors = resolveAccessibleContainerColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
@@ -1100,7 +1122,44 @@ fun DynamicCardV2(
             ) {
                 interactionItems.forEach { interactionItem ->
                     val desc = interactionItem.desc ?: return@forEach
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    val onPreviewClick: (() -> Unit)? =
+                        if (interactionItem.type == 1 && item.id_str.isNotBlank()) {
+                            {
+                                DynamicRepository.rememberDynamicDetailSeed(item)
+                                if (onShowCommentsInPlace != null) {
+                                    onShowCommentsInPlace()
+                                } else {
+                                    // 热评载荷通常没有 rpid；AT 节点的 rid 是用户 ID，不能拿来猜楼层。
+                                    val url = "bilibili://following/detail/${item.id_str}?tab=comment"
+                                    if (onOpenLink != null) {
+                                        onOpenLink(url)
+                                    } else {
+                                        val intent = android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse(url),
+                                        ).setPackage(context.packageName)
+                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        if (runCatching { context.startActivity(intent) }.isFailure) {
+                                            android.widget.Toast.makeText(
+                                                context, "无法打开评论区", android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    }
+                                }
+                            }
+                        } else null
+                    Row(
+                        modifier = if (onPreviewClick != null) {
+                            Modifier
+                                .fillMaxWidth()
+                                .appActionClickable(
+                                    onClickLabel = "查看评论",
+                                    role = androidx.compose.ui.semantics.Role.Button,
+                                    onClick = onPreviewClick,
+                                )
+                        } else Modifier,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         AppIcon(
                             imageVector = if (interactionItem.type == 1) {
                                 Icons.Outlined.ChatBubbleOutline
@@ -1117,6 +1176,7 @@ fun DynamicCardV2(
                             desc = desc,
                             collapseWebLinks = isDetail,
                             onUserClick = onUserClick,
+                            onBlankTap = onPreviewClick,
                             fontSize = MaterialTheme.typography.bodySmall.fontSize,
                             lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
                             extraEmoteUrlMap = dynamicCardEmoteMap,
@@ -2064,40 +2124,14 @@ private fun resolveOpusTextAlign(alignment: Int): TextAlign = when (alignment) {
     else -> TextAlign.Start
 }
 
-/** 预约成功后服务端回写的字段，按卡片身份缓存，避免影响列表里的其它卡片。 */
-private data class DynamicReserveOverride(
-    val description: String,
-    val reserveTotal: Long,
-    val buttonStatus: Int,
-)
-
 /**
- * 把预约结果合并回卡片模型：描述行、预约人数与按钮状态。
- * 按钮文案由新的 status 重新推导，因此信息流与详情回写后的样子也保持一致。
- */
-private fun OpusLinkCard.withReserveOverride(override: DynamicReserveOverride?): OpusLinkCard {
-    if (override == null) return this
-    val reserve = this.reserve ?: return this
-    val button = reserve.button
-    return copy(
-        description = override.description.ifBlank { description },
-        badgeText = resolveDynamicCardButtonText(button?.copy(status = override.buttonStatus))
-            .ifBlank { badgeText },
-        reserve = reserve.copy(
-            reserve_total = override.reserveTotal,
-            button = button?.copy(status = override.buttonStatus),
-        ),
-    )
-}
-
-/**
- * 附加内容卡插槽：信息流与详情页共用同一个入口。
+ * 信息流、图文详情与专栏正文共用的附加内容卡片入口。
  *
- * 这里只负责预约按钮的本地状态（提交中 / 提交后回写）与点击分发，
- * 展示与版式全部交给 [DynamicLinkCard]，保证两个页面像素级一致。
+ * 这里只负责预约会话与点击分发，展示与版式交给 [DynamicLinkCard]。
+ * 页面传入会话时由页面负责关闭，滚出视口不会丢失预约回写。
  */
 @Composable
-private fun DynamicLinkCardSlot(
+internal fun DynamicLinkCardSlot(
     card: OpusLinkCard,
     dynamicId: String,
     modifier: Modifier = Modifier,
@@ -2105,37 +2139,41 @@ private fun DynamicLinkCardSlot(
     onVoteClick: (Long) -> Unit,
     onOpenCard: (OpusLinkCard) -> Unit,
     onOpenUrl: (String) -> Unit,
+    onUnavailableClick: ((OpusLinkCard) -> Unit)? = null,
+    reserveSession: DynamicReserveCardSession? = null,
 ) {
     val context = LocalContext.current
-    val cardKey = card.linkCardIdentity()
-    var reserveSubmitting by remember(cardKey) { mutableStateOf(false) }
-    var reserveOverride by remember(cardKey) { mutableStateOf<DynamicReserveOverride?>(null) }
-    val shownCard = card.withReserveOverride(reserveOverride)
-    val reserveUi = remember(shownCard, dynamicId) { resolveDynamicReserveUi(shownCard, dynamicId) }
+    val account by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val session = remember(card, dynamicId, account, reserveSession) { reserveSession ?: DynamicReserveCardSession(card) }
+    val feedbackActive = remember(session) { java.util.concurrent.atomic.AtomicBoolean(true) }
+    val visualWorkAllowed by androidx.compose.runtime.rememberUpdatedState(com.android.purebilibili.core.ui.LocalVisualWorkAllowed.current)
+    androidx.compose.runtime.DisposableEffect(session, reserveSession) {
+        onDispose {
+            feedbackActive.set(false)
+            if (reserveSession == null) session.close()
+        }
+    }
+    val shownCard = session.shownCard
+    val reserveUi = remember(shownCard, dynamicId, onReserveClick != null) {
+        resolveDynamicReserveUi(shownCard, dynamicId)?.let { ui ->
+            ui.copy(actionEnabled = ui.actionEnabled &&
+                (ui.actionJumpUrl.isNotBlank() || (onReserveClick != null && dynamicId.isNotBlank())))
+        }
+    }
     val matchUi = remember(shownCard) { resolveDynamicMatchUi(shownCard) }
     val onReserveAction: (() -> Unit)? = when {
         reserveUi == null -> null
         reserveUi.actionJumpUrl.isNotBlank() -> ({ onOpenUrl(reserveUi.actionJumpUrl) })
         onReserveClick != null -> ({
-            if (!reserveSubmitting) {
-                reserveSubmitting = true
+            if (com.android.purebilibili.core.store.TokenManager.accountIdentity.value == account &&
+                reserveUi.actionEnabled && session.begin()) {
                 onReserveClick(reserveUi.action) { result ->
-                    reserveSubmitting = false
-                    result.onSuccess { updated ->
-                        reserveOverride = DynamicReserveOverride(
-                            description = listOf(
-                                shownCard.reserve?.desc1?.text.orEmpty(),
-                                updated.description,
-                            ).filter(String::isNotBlank).joinToString("  "),
-                            reserveTotal = updated.reserveTotal,
-                            buttonStatus = updated.buttonStatus,
-                        )
-                    }.onFailure { error ->
-                        android.widget.Toast.makeText(
-                            context,
-                            error.message ?: "预约操作失败",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
+                    if (com.android.purebilibili.core.store.TokenManager.accountIdentity.value == account && session.complete(result)) {
+                        if (feedbackActive.get() && visualWorkAllowed) {
+                            result.onFailure { error ->
+                                android.widget.Toast.makeText(context, error.message ?: "预约操作失败", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
                 }
             }
@@ -2147,11 +2185,15 @@ private fun DynamicLinkCardSlot(
         modifier = modifier,
         reserveUi = reserveUi,
         matchUi = matchUi,
-        reserveSubmitting = reserveSubmitting,
+        reserveSubmitting = session.submitting,
         onReserveAction = onReserveAction,
+        clickEnabled = shownCard.jumpUrl.isNotBlank() || resolveDynamicLinkCardVoteId(shownCard) != null ||
+            reserveUi?.descriptionJumpUrl?.isNotBlank() == true ||
+            (shownCard.type == "LINK_CARD_TYPE_ITEM_NULL" && onUnavailableClick != null),
         onClick = {
             val voteId = resolveDynamicLinkCardVoteId(shownCard)
             when {
+                shownCard.type == "LINK_CARD_TYPE_ITEM_NULL" && onUnavailableClick != null -> onUnavailableClick(shownCard)
                 voteId != null -> onVoteClick(voteId)
                 shownCard.jumpUrl.isNotBlank() -> onOpenCard(shownCard)
                 reserveUi?.descriptionJumpUrl?.isNotBlank() == true -> onOpenUrl(reserveUi.descriptionJumpUrl)
@@ -2533,7 +2575,7 @@ private fun dispatchDynamicRichTextLinkPayload(
                         BilibiliNavigationTargetParser.resolve(rawUrl)
                     } else null
                 if (target != null) {
-                    val handled = when (target) {
+                    val handled = if (target.hasCommentLocation) false else when (target) {
                         is BilibiliNavigationTarget.Dynamic -> {
                             if (onDynamicDetailClick != null) {
                                 onDynamicDetailClick(target.dynamicId)
@@ -2570,7 +2612,10 @@ private fun dispatchDynamicRichTextLinkPayload(
                                 true
                             } else false
                         }
+                        // 文集交给宿主链接分发，保留文集身份进入对应页面。
+                        is BilibiliNavigationTarget.ArticleCollection -> false
                         is BilibiliNavigationTarget.PopularFeed -> false
+                        is BilibiliNavigationTarget.CommentDetail -> false
                         is BilibiliNavigationTarget.Live -> {
                             if (onLiveClick != null) {
                                 onLiveClick(target.roomId, "", "")

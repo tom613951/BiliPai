@@ -1146,7 +1146,7 @@ internal fun TabletSecondaryContent(
                         }
                     }
 
-                    if (subReplyState.visible && subReplyState.rootReply != null) {
+                    if (subReplyState.visible) {
                         VideoInlineSubReplyDetailContent(
                             state = subReplyState,
                             commentState = commentState,
@@ -1196,7 +1196,6 @@ internal fun TabletSecondaryContent(
                                 },
                                 onSearchClick = { showCommentSearchSheet = true },
                                 compactTypography = true,
-                                scrollState = listState,
                             )
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             AdaptivePullToRefreshBox(

@@ -181,7 +181,7 @@ internal val settingsStaticDescriptionIndex: Map<String, String> = mapOf(
     "playback.video_ambient_settings.enabled" to "在横竖屏播放器留白处显示随画面变化的柔和光晕；HDR、Anime4K 和小窗下不启用",
     "playback.video_ambient_settings.power_saving" to "自动调节流畅度；省电模式减少刷新",
     "playback.video_ambient_settings.strength" to "共用横屏和竖屏留白的光晕亮度，不改变视频画面",
-    "playback.video_argue_msg_shown" to "在简介上方显示 UP 主的视频声明；关闭后：不再显示 UP 主设置的视频声明",
+    "playback.video_argue_msg_shown" to "显示视频警告、争议信息及禁止转载声明；关闭后隐藏视频警告、争议信息及禁止转载声明",
     "playback.video_detail_chrome_scroll_hide_enabled" to "浏览评论时收起最热／最新排序与搜索入口，回到列表顶部恢复；最热评论标题文字始终随下滑收起，不受此开关影响",
     "playback.video_info_default_expanded" to "进入视频页时默认展开标题、简介和标签；进入视频页时默认收起简介，点击标题区域后展开",
     "playback.video_note_default_collapsed" to "先开启“显示视频笔记”；进入视频页时先显示笔记摘要，需要时再展开；进入视频页时直接展开视频笔记内容和操作",
@@ -190,5 +190,8 @@ internal val settingsStaticDescriptionIndex: Map<String, String> = mapOf(
     "playback.wifi_quality" to "关闭“自动最高画质”后生效；仅无线网络环境生效",
     "privacy.privacy_content_authentication_enabled" to "进入收藏、历史等页面前使用指纹、人脸或锁屏密码确认身份",
     "privacy.privacy_mode_enabled" to "开启后不再新增播放和搜索历史，已有记录不会被删除",
+    "privacy.search_hot_control" to "关闭后隐藏搜索页对应分区",
+    "privacy.search_history_control" to "关闭后隐藏搜索历史，记录设置和已有历史不变",
+    "privacy.search_discover_control" to "关闭后隐藏搜索页对应分区",
     "privacy.search_suggestions_enabled" to "开启时使用官方搜索推荐；关闭后改用公开热搜词",
 )

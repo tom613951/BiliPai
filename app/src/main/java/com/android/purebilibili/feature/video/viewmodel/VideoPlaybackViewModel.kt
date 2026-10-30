@@ -472,7 +472,28 @@ internal fun buildPlaybackCdnFallbackState(
             )
         )
     }
-    val firstFallback = candidates.firstOrNull { candidate ->
+    // 回退时优先挑非 PCDN 的候选：首次选线（preferredDashUrl）已经排除 PCDN，
+    // 但这里的候选取自原始响应，可能把 mountaintoys 之类的 PCDN 地址捡回来。
+    val nonPcdn = candidates.filterNot {
+        com.android.purebilibili.feature.plugin.isRiskyCdnHost(it.videoUrl)
+    }
+    // 整批都是 PCDN 时不能直接用它回退（这些域名常常解析失败），
+    // 和 preferredDashUrl 一样换成常规 CDN：upgcxcode 路径与签名跨 host 通用。
+    val orderedCandidates = if (nonPcdn.isNotEmpty()) {
+        nonPcdn + candidates.filter { it !in nonPcdn }
+    } else {
+        val selectedHost = hostOf(selectedVideoUrl)
+        candidates.map { candidate ->
+            candidate.copy(
+                videoUrl = rewriteToDefaultCdnHost(candidate.videoUrl, selectedHost),
+                audioUrl = candidate.audioUrl
+                    ?.takeIf { com.android.purebilibili.feature.plugin.isRiskyCdnHost(it) }
+                    ?.let { url -> rewriteToDefaultCdnHost(url, selectedHost) }
+                    ?: candidate.audioUrl,
+            )
+        }
+    }
+    val firstFallback = orderedCandidates.firstOrNull { candidate ->
         candidate.videoUrl != selectedVideoUrl || candidate.audioUrl != selectedAudioUrl
     }
     return PlaybackCdnFallbackState(
@@ -480,11 +501,31 @@ internal fun buildPlaybackCdnFallbackState(
         selectedAudioUrl = selectedAudioUrl,
         fallbackVideoUrl = firstFallback?.videoUrl,
         fallbackAudioUrl = firstFallback?.audioUrl,
-        fallbackCandidates = candidates,
+        fallbackCandidates = orderedCandidates,
         regionLabel = regionLabel,
         usesCustomRule = usesCustomRule
     )
 }
+
+/** 把 URL 的 host 换成常规 CDN，保留原路径与签名参数。 */
+private fun rewriteToDefaultCdnHost(url: String, avoidHost: String? = null): String {
+    val path = url.substringAfter("://", "").substringAfter("/", "")
+    if (path.isEmpty()) return url
+    // 避开已经用过的线路（例如设置里选的就是阿里云），否则回退等于原地重试
+    val host = DEFAULT_FALLBACK_CDN_HOSTS.firstOrNull { host ->
+        avoidHost == null || !host.contains(avoidHost, ignoreCase = true)
+    } ?: DEFAULT_FALLBACK_CDN_HOSTS.first()
+    return "$host/$path"
+}
+
+private fun hostOf(url: String): String =
+    url.substringAfter("://", "").substringBefore("/").substringBefore(":")
+
+private val DEFAULT_FALLBACK_CDN_HOSTS = listOf(
+    "https://upos-sz-mirrorali.bilivideo.com",
+    "https://upos-sz-mirrorcos.bilivideo.com",
+    "https://upos-sz-mirrorhw.bilivideo.com",
+)
 
 internal fun buildPlaybackAudioUrlCandidates(
     audioUrl: String?,
@@ -1364,6 +1405,8 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
     private val playbackLoader = PlaybackLoader.from(playbackUseCase)
     private val playbackSessionStore = PlaybackSessionStore()
     private val playbackCoordinator = PlaybackCoordinator(playbackSessionStore)
+    internal val playbackReturnState =
+        com.android.purebilibili.feature.video.playback.session.PlaybackReturnState()
     private val interactionUseCase = VideoInteractionUseCase()
     private val qualityManager = QualityManager()
     private val playbackCdnPreference = SettingsManager
@@ -2429,6 +2472,15 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 cancelPlaybackStallRecovery()
             }
             if (playbackState == Player.STATE_ENDED) {
+                playbackTransitionMonitorJob?.cancel()
+                playbackTransitionMonitorJob = null
+                _uiState.update { state ->
+                    if (state is VideoPlaybackUiState.Success) {
+                        state.copy(pendingPlaybackTransitionPositionMs = null)
+                    } else {
+                        state
+                    }
+                }
                 samplePlaybackAnalytics(ended = true)
                 if (finishSleepAfterCurrent()) return
                 if (shouldSuppressPlaybackCompletionForCommentInteraction(isCommentInteractionActive)) {
@@ -2519,6 +2571,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            playbackReturnState.recordPlaybackIntent(currentBvid, currentCid, playWhenReady)
             if (!playWhenReady) {
                 cancelPlaybackStallRecovery()
             } else if (exoPlayer?.playbackState == Player.STATE_BUFFERING) {
@@ -3322,6 +3375,8 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                     } ?: true
                     if (shouldAutoPlay && !player.isPlaying) {
                         player.play()
+                    } else if (!shouldAutoPlay) {
+                        player.pause()
                     }
                     Logger.d(
                         "PlayerVM",
@@ -3353,8 +3408,11 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
             
             //  确保音量正常
             com.android.purebilibili.core.player.PlayerVolumeController.applyPreferredVolume(player)
-            if (!player.isPlaying) {
+            val shouldAutoPlay = playbackRequest.autoPlay ?: player.playWhenReady
+            if (shouldAutoPlay && !player.isPlaying) {
                 player.play()
+            } else if (!shouldAutoPlay) {
+                player.pause()
             }
             restoreSponsorPlaybackState(currentSuccess)
             return
@@ -3651,11 +3709,11 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                         } else {
                              relatedPlaybackPreparedToken = requestToken
                              relatedFirstFrameToken = requestToken
-                             // 🎯 Skip preparing player, but ensure it's playing if needed
-                             Logger.d("PlayerVM", "🎯 Skipping player preparation (already playing)")
+                             Logger.d("PlayerVM", "🎯 Skipping player preparation (reuse intent=$shouldAutoPlay)")
                              exoPlayer?.let { p ->
                                  com.android.purebilibili.core.player.PlayerVolumeController.applyPreferredVolume(p)
-                                 if (!p.isPlaying) p.play()
+                                 if (shouldAutoPlay && !p.isPlaying) p.play()
+                                 else if (!shouldAutoPlay) p.pause()
                              }
                         }
                         
@@ -5379,6 +5437,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         // this call; reading the StateFlow later used to lose the reply target and publish a
         // new root comment instead.
         val replyTo = _replyingToComment.value
+        val sendAccount = com.android.purebilibili.core.store.TokenManager.accountIdentity.value
         ensureComposerDraftVideo()
         val draftState = _composerDrafts.value
         val sendVideoId = draftState.videoId
@@ -5418,6 +5477,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                         syncToDynamic = syncToDynamic
                     )
                     .onSuccess { reply ->
+                        if (sendAccount != com.android.purebilibili.core.store.TokenManager.accountIdentity.value) return@onSuccess
                         toast(if (replyTo != null) "回复成功" else "评论成功")
                         val currentVideoId = (_uiState.value as? VideoPlaybackUiState.Success)
                             ?.info?.bvid.orEmpty()
@@ -5445,7 +5505,15 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                         }
 
                         // 通知 UI 刷新评论列表
-                        _commentSentEvent.trySend(reply)
+                        _commentSentEvent.trySend(CommentSentEvent(
+                            aid = sendAid,
+                            account = sendAccount,
+                            reply = reply?.let {
+                                if (root > 0L) resolveSentSubReply(
+                                    it, root, parent, replyTo, oid = sendAid, replyType = 1
+                                ) else it.copy(oid = sendAid, replyType = 1)
+                            }
+                        ))
                     }
                     .onFailure { error ->
                         Logger.e(
@@ -5496,8 +5564,13 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         }.getOrNull()
     }
     
-    // 评论发送成功事件
-    private val _commentSentEvent = Channel<com.android.purebilibili.data.model.response.ReplyItem?>(
+    data class CommentSentEvent(
+        val aid: Long,
+        val account: com.android.purebilibili.core.store.AccountSessionIdentity,
+        val reply: ReplyItem?
+    )
+
+    private val _commentSentEvent = Channel<CommentSentEvent>(
         capacity = resolvePlayerTransientEventChannelCapacity()
     )
     val commentSentEvent = _commentSentEvent.receiveAsFlow()
@@ -6515,6 +6588,19 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         }
 
         viewModelScope.launch {
+            val initialSecondaryTrack = secondaryTrack
+            val secondaryDeferred = async {
+                initialSecondaryTrack?.let { track ->
+                    VideoRepository.getSubtitleCues(
+                        subtitleUrl = track.subtitleUrl,
+                        bvid = bvid,
+                        cid = cid,
+                        subtitleId = track.id,
+                        subtitleIdStr = track.idStr,
+                        subtitleLan = track.lan
+                    )
+                } ?: Result.success(emptyList())
+            }
             var primaryResult = VideoRepository.getSubtitleCues(
                 subtitleUrl = primaryTrack.subtitleUrl,
                 bvid = bvid,
@@ -6523,17 +6609,38 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 subtitleIdStr = primaryTrack.idStr,
                 subtitleLan = primaryTrack.lan
             )
-            var secondaryResult = secondaryTrack?.let { track ->
-                VideoRepository.getSubtitleCues(
-                    subtitleUrl = track.subtitleUrl,
-                    bvid = bvid,
-                    cid = cid,
-                    subtitleId = track.id,
-                    subtitleIdStr = track.idStr,
-                    subtitleLan = track.lan
-                )
-            } ?: Result.success(emptyList())
             var activeTrackMetas = trackMetas
+
+            // 主轨就绪即可阅读；副轨下载或鉴权重试不阻塞主轨首次显示。
+            fun publishPrimaryIfReady() {
+                val cues = primaryResult.getOrNull()?.takeIf { it.isNotEmpty() } ?: return
+                _uiState.update { state ->
+                    if (state is VideoPlaybackUiState.Success &&
+                        state.info.bvid == bvid && state.info.cid == cid &&
+                        shouldApplySubtitleLoadResult(
+                            activeSubtitleToken = subtitleLoadToken,
+                            resultSubtitleToken = currentToken,
+                            expectedBvid = bvid,
+                            expectedCid = cid,
+                            currentBvid = currentBvid,
+                            currentCid = currentCid
+                        )
+                    ) {
+                        state.copy(
+                            subtitleEnabled = true,
+                            subtitleOwnerBvid = bvid,
+                            subtitleOwnerCid = cid,
+                            subtitlePrimaryTrackKey = primaryTrackKey,
+                            subtitlePrimaryLanguage = primaryTrack.lan,
+                            subtitlePrimaryLikelyAi = isLikelyAiSubtitleTrack(primaryTrack),
+                            subtitlePrimaryCues = cues,
+                            subtitleTracks = activeTrackMetas
+                        )
+                    } else state
+                }
+            }
+            publishPrimaryIfReady()
+            var secondaryResult = secondaryDeferred.await()
 
             val shouldRetryWithFreshPlayerInfo = shouldRetrySubtitleLoadWithPlayerInfo(
                 primaryResult.exceptionOrNull()?.message
@@ -6577,6 +6684,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                             subtitleIdStr = primaryTrack.idStr,
                             subtitleLan = primaryTrack.lan
                         )
+                        publishPrimaryIfReady()
                     }
 
                     if (secondaryTrack != null) {
@@ -9335,6 +9443,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         val preferredCandidates = applyPlaybackCdnPreference(
             candidates = cdnRewrite?.candidates ?: originalCandidates,
             preference = playbackCdnPreference.value,
+            pluginApplied = cdnRewrite != null,
         )
         val allVideoUrls = preferredCandidates.map { it.videoUrl }
         val allAudioUrls = preferredCandidates.map { it.audioUrl.orEmpty() }
@@ -9373,7 +9482,8 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 originalAudioUrl = audioUrl,
                 regionLabel = cdnRewrite?.regionLabel,
                 audioFallbackUrl = rawAudioUrls.drop(1).firstOrNull(),
-                fallbackCandidates = originalCandidates,
+                // 用已应用「设置线路 > 排除 PCDN」的候选，回退时才不会又捡回 PCDN
+                fallbackCandidates = preferredCandidates,
                 usesCustomRule = cdnRewrite?.sources?.firstOrNull() ==
                     com.android.purebilibili.plugin.sdk.PlaybackCdnCandidateSource.CUSTOM
             )

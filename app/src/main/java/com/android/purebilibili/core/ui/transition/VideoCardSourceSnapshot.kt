@@ -66,6 +66,8 @@ internal data class VideoCardSourceCoverPresentation(
     val premiumBadgeText: String = "",
     val showHistoryProgressBar: Boolean = false,
     val historyProgressFraction: Float = 0f,
+    /** 源封面的实际圆角，与透明横卡的整行外框圆角独立；未记录时沿用默认值。 */
+    val cornerRadiusDp: Float? = null,
 )
 
 /**
@@ -108,6 +110,12 @@ internal data class VideoCardSourceChromeSnapshot(
     /** Compact playback bar uses an early source-chrome handoff on return. */
     val isNowPlayingBar: Boolean = false,
 )
+
+/** 相同内容也可能来自另一次点击；只有原始快照实例能使用该次点击的像素。 */
+internal fun ownsVideoCardSourceSnapshot(
+    expected: VideoCardSourceChromeSnapshot?,
+    recorded: VideoCardSourceChromeSnapshot?,
+): Boolean = expected != null && expected === recorded
 
 /** Freeze the measured source-cover decode size together with the click-time snapshot. */
 internal fun VideoCardSourceChromeSnapshot.withMeasuredCoverDecodeSize(

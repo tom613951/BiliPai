@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.profile
 
+import com.android.purebilibili.core.util.responsiveContentWidth
+
 import com.android.purebilibili.navigation.tabIndicatorPosition
 import com.android.purebilibili.data.model.AccountLedgerKind
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
@@ -3092,7 +3094,11 @@ private fun ProfileVideoList(
                 onClick = listLayout.toggle,
             )
         }
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        BoxWithConstraints(
+            modifier = if (columns == 1) {
+                Modifier.responsiveContentWidth(com.android.purebilibili.core.util.resolveSingleColumnFeedMaxWidth())
+            } else Modifier.fillMaxWidth(),
+        ) {
             val cardWidth = (maxWidth - 10.dp * (columns - 1)) / columns
             LookaheadScope {
                 FlowRow(
@@ -3108,6 +3114,7 @@ private fun ProfileVideoList(
                             )) {
                                 if (columns == 1) {
                                     PersonalMediaCardFrame(
+                                        horizontalCoverMaxWidthDp = com.android.purebilibili.feature.home.components.cards.WIDE_LIST_COVER_MAX_WIDTH_DP,
                                         headlineContent = {
                                             AppText(
                                                 video.title,

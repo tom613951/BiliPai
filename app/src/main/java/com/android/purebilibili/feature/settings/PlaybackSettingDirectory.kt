@@ -23,6 +23,7 @@ internal fun settingItemTitle(settingId: String): String =
     settingsItemDirectory.first { it.settingId == settingId }.title
 
 internal fun settingItemTitle(settingId: String, context: Context): String = when (settingId) {
+    PROGRESSIVE_BLUR_RENDERER_SETTING_ID -> context.getString(com.android.purebilibili.R.string.animation_progressive_renderer_title)
     GRID_CUSTOMIZATION_SETTING_ID -> context.getString(com.android.purebilibili.R.string.home_settings_grid_customization_title)
     GRID_SHARE_SETTING_ID -> context.getString(com.android.purebilibili.R.string.home_settings_grid_share_title)
     GRID_COMPACT_SETTING_ID -> context.getString(com.android.purebilibili.R.string.home_settings_grid_compact_title)
@@ -65,7 +66,7 @@ internal val playbackSettingDirectory = listOf(
     PlaybackSettingItem("playback.hide_interactive_command_danmaku", "隐藏视频内互动提示", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getDanmakuHideInteractiveCommands(context).map { if (it) "开启" else "关闭" } }),
     PlaybackSettingItem("playback.danmaku_cloud_sync_enabled", "同步弹幕设置到账号", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getDanmakuCloudSyncEnabled(context).map { if (it) "开启" else "关闭" } }),
     PlaybackSettingItem("playback.video_info_default_expanded", "默认展开视频简介", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getVideoInfoDefaultExpanded(context).map { if (it) "开启" else "关闭" } }),
-    PlaybackSettingItem("playback.video_argue_msg_shown", "显示 UP 主视频声明", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getVideoArgueMsgShown(context).map { if (it) "开启" else "关闭" } }),
+    PlaybackSettingItem("playback.video_argue_msg_shown", "显示视频警告/争议信息", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getVideoArgueMsgShown(context).map { if (it) "开启" else "关闭" } }),
     PlaybackSettingItem("playback.detailed_comment_time_enabled", "完整评论时间", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getDetailedCommentTimeEnabled(context).map { if (it) "开启" else "关闭" } }),
     PlaybackSettingItem("playback.show_video_detail_comment_count", "视频详情显示评论数", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getShowVideoDetailCommentCount(context).map { if (it) "开启" else "关闭" } }),
     PlaybackSettingItem("playback.video_ai_summary_entry_enabled", "显示 AI 总结入口", SettingsRootCategory.COMMENTS_CONTENT, SettingsSearchFocusIds.PLAYBACK_COMMENTS, { context -> com.android.purebilibili.core.store.SettingsManager .getVideoAiSummaryEntryEnabled(context).map { if (it) "开启" else "关闭" } }),

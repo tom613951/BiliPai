@@ -142,6 +142,7 @@ internal fun FavoritePersonalCard(
 
     PersonalMediaCardFrame(
         stacked = stacked,
+        horizontalCoverMaxWidthDp = com.android.purebilibili.feature.home.components.cards.WIDE_LIST_COVER_MAX_WIDTH_DP,
         coverModifier = Modifier.onGloballyPositioned {
             transition.bounds.coverBounds = it.videoCardSourceBoundsInRoot()
         },

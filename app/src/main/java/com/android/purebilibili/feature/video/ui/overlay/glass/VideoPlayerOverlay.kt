@@ -325,6 +325,7 @@ internal fun resolveOverlayPlaybackButtonPlayingState(
     playbackState: Int,
     hasPendingSeekResume: Boolean = false
 ): Boolean {
+    if (playbackState == Player.STATE_ENDED) return false
     return isPlaying || (playWhenReady && (playbackState == Player.STATE_BUFFERING || hasPendingSeekResume))
 }
 
@@ -747,6 +748,8 @@ private fun VideoPlayerOverlayContent(
         mutableStateOf<com.android.purebilibili.core.ui.components.AppGlassMenuSource?>(null)
     }
     var showVideoSettings by remember(bvid, cid, isFullscreen) { mutableStateOf(false) }
+    val localShareMenuSource = com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
+    val shareMenuSource = actions.shareMenuSource ?: localShareMenuSource
     var pendingVideoShare by remember { mutableStateOf<VideoSharePayload?>(null) }
     fun openVideoShareSheet() {
         if (bvid.isEmpty()) return
@@ -1208,7 +1211,7 @@ private fun VideoPlayerOverlayContent(
     }
 
 
-    val glassPanelVisible = bottomControlFloatingPanelVisible || showQualityMenu ||
+    val glassPanelVisible = pendingVideoShare != null || bottomControlFloatingPanelVisible || showQualityMenu ||
         showAudioQualityMenu || showSpeedMenu || showRatioMenu || showDanmakuSettings ||
         showVideoSettings || showChapterList || showCastDialog || showPlaybackOrderSheet ||
         showPageSelectorSheet || showEpisodeSourceMenu || showCdnDiagnostics || danmakuComposerVisible
@@ -1285,6 +1288,7 @@ private fun VideoPlayerOverlayContent(
         seekResumeTransitionGraceActive,
         isPlaybackTransitionPending,
         hasPendingSeekResume,
+        player.playbackState,
         player.playWhenReady,
         player.isPlaying,
         debugInfo.bandwidthEstimate
@@ -1297,6 +1301,7 @@ private fun VideoPlayerOverlayContent(
                 hasPendingSeekResume,
             playWhenReady = player.playWhenReady,
             isPlaying = player.isPlaying,
+            playbackState = player.playbackState,
             bandwidthEstimate = debugInfo.bandwidthEstimate
         )
     }
@@ -1579,6 +1584,7 @@ private fun VideoPlayerOverlayContent(
                         onLikeClick = onToggleLike,
                         onDislikeClick = onDislike,
                         onCoinClick = onCoin,
+                        shareMenuSource = shareMenuSource,
                         onShareClick = {
                             if (onShare != null) {
                                 onShare()
@@ -2097,6 +2103,7 @@ private fun VideoPlayerOverlayContent(
 
         VideoShareSheetHost(
             payload = pendingVideoShare,
+            glassSource = shareMenuSource,
             onDismiss = { pendingVideoShare = null },
         )
 

@@ -458,10 +458,7 @@ internal fun resolveActivePlaybackLaunchIntent(
     context: Context,
     bvid: String?,
 ): Intent {
-    val launchIntent = context.packageManager
-        .getLaunchIntentForPackage(context.packageName)
-        ?: Intent(context, com.android.purebilibili.MainActivity::class.java)
-    return launchIntent.apply {
+    return Intent(context, com.android.purebilibili.MainActivity::class.java).apply {
         bvid?.takeIf { it.isNotBlank() }?.let { activeBvid ->
             action = Intent.ACTION_VIEW
             data = Uri.parse("https://www.bilibili.com/video/$activeBvid")
@@ -2219,8 +2216,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
                     prepare()
                 }
             
-            // Follow the currently enabled launcher alias. Targeting MainActivity directly can
-            // create a second activity instance when the selected app icon uses a splash alias.
+            // Every media entry targets the canonical UI host, never a launcher routing activity.
             val sessionIntent = resolveActivePlaybackLaunchIntent(context, currentBvid)
             val pendingIntent = PendingIntent.getActivity(
                 context, 0, sessionIntent,

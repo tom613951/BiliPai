@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onVisibilityChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -111,6 +112,8 @@ internal fun HomeStyleSingleColumnVideoCard(
     compactPartition: Boolean = false,
 ) {
     val context = LocalContext.current
+    var cardVisibleInWindow by remember(video.bvid, video.aid) { mutableStateOf(false) }
+    val publishTimeText = rememberVideoCardPublishTimeText(video, showPublishTime, cardVisibleInWindow)
     val isLongPressEnabled = com.android.purebilibili.core.ui.LocalVideoCardLongPressEnabled.current
     val contentTypography = horizontalVideoCardTypography()
     val configuration = LocalConfiguration.current
@@ -153,8 +156,13 @@ internal fun HomeStyleSingleColumnVideoCard(
     val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(
         video.bvid, enabled = sharedTransitionEnabled,
     )
-    val cardShape = AppShapes.container(ContainerLevel.Card)
-    val cardCornerDp = AppShapes.containerCornerDp(ContainerLevel.Card)
+    // 透明横卡的圆角属于封面，不能再叠加整行外框裁剪；有底板的紧凑卡保留原形状。
+    val cardShape = if (compactPartition) AppShapes.container(ContainerLevel.Card)
+        else androidx.compose.ui.graphics.RectangleShape
+    val cardCornerDp = if (compactPartition) AppShapes.containerCornerDp(ContainerLevel.Card) else 0.dp
+    val coverCornerDp = AppShapes.mediaCoverCornerDp(
+        if (compactPartition) ContainerLevel.Card else ContainerLevel.MediaCover,
+    )
     val useCardShellSharedBounds = shouldUseVideoCardShellSharedBounds(
         sourceRoute = sourceRoute,
         transitionEnabled = sharedReady,
@@ -204,15 +212,12 @@ internal fun HomeStyleSingleColumnVideoCard(
                     // Single-column paints play/danmaku in the info column (not on cover only).
                     infoPresentation = com.android.purebilibili.core.ui.transition
                         .resolveVideoCardSourceInfoPresentation(
-                            publishTimeText = if (showPublishTime) {
-                                FormatUtils.formatPublishTime(video.pubdate)
-                            } else {
-                                ""
-                            },
+                            publishTimeText = publishTimeText,
                             showStatsInInfo = true,
                             showOverflowMenu = onMoreClick != null || trailingContent != null,
                         ),
                     coverPresentation = VideoCardSourceCoverPresentation(
+                        cornerRadiusDp = coverCornerDp.value,
                         showDurationOnCover = durationStyle !=
                             com.android.purebilibili.core.store.HomeDurationStyle.HIDDEN,
                     ),
@@ -236,9 +241,15 @@ internal fun HomeStyleSingleColumnVideoCard(
     })
     val moreHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.MENUS)
     HorizontalVideoCardFrame(
+        plainHorizontal = !compactPartition,
+        fillInfoHeight = true,
         coverAspectRatio = coverAspectRatio,
         compactPartition = compactPartition,
         modifier = modifier
+            .padding(vertical = if (compactPartition) 0.dp else 5.dp)
+            .onVisibilityChanged(minFractionVisible = 0.01f, minDurationMs = 0L) {
+                cardVisibleInWindow = it
+            }
             .adaptiveCardHoverEffect(shape = cardShape)
             .onGloballyPositioned { coordinates ->
                 cardBounds.value = coordinates.videoCardSourceBoundsInRoot()
@@ -256,7 +267,7 @@ internal fun HomeStyleSingleColumnVideoCard(
             .then(nativeCardSnapshot.modifier)
             .clip(cardShape)
             .then(
-                if (transparentCardBackground) Modifier else Modifier.wallpaperAwareMediaCardBackground(
+                if (transparentCardBackground || !compactPartition) Modifier else Modifier.wallpaperAwareMediaCardBackground(
                     AppSurfaceTokens.videoCardContainer(
                         glassEnabled = LocalHomeCardDynamicTintEnabled.current || LocalHomeCardFrostedGlassEnabled.current,
                     ),
@@ -301,17 +312,19 @@ internal fun HomeStyleSingleColumnVideoCard(
                 modifier = Modifier.fillMaxWidth(),
                 style = contentTypography.title,
                 maxLines = videoCardTitleMaxLines(),
+                minLines = if (compactPartition) 1 else minOf(2, videoCardTitleMaxLines()),
                 overflow = videoCardTitleOverflow(),
                 color = AppContentColors.primaryText(),
             )
 
+            if (!compactPartition) Spacer(Modifier.weight(1f))
             if (compactPartition) {
                 // 与 PiliPlus 一致：标题占据上方弹性空间，UP 主与播放量等元信息固定在卡片底部。
                 Spacer(Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    if (showPublishTime && video.pubdate > 0) {
+                    if (publishTimeText.isNotBlank()) {
                         AppText(
-                            text = FormatUtils.formatPublishTime(video.pubdate) + "  ",
+                            text = publishTimeText + "  ",
                             style = contentTypography.author,
                             color = AppContentColors.secondaryText(),
                             maxLines = 1,
@@ -340,76 +353,77 @@ internal fun HomeStyleSingleColumnVideoCard(
                         modifier = Modifier.weight(1f),
                     )
                 }
-            } else UpBadgeName(
-                name = video.owner.name,
-                leadingContent = if (
-                    com.android.purebilibili.core.ui.LocalUpBadgeVisibility.current.showAvatars &&
-                    video.owner.face.isNotBlank()
-                ) {
-                    {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(FormatUtils.fixImageUrl(
-                                    video.owner.face
-                                ))
-                                .crossfade(false)
-                                .build(),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
-                        )
-                    }
-                } else {
-                    null
-                },
-                nameLeadingContent = if (isFollowing || video.isFollowed || video.recommendationReason.isNotBlank()) {
-                    {
-                        Row(
-                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            VideoRecommendationBadge(video.recommendationReason)
-                            if (isFollowing || video.isFollowed) {
-                                AppText(
-                                    text = "已关注",
-                                    style = contentTypography.coverBadge,
-                                    color = AppContentColors.accent(),
-                                )
+            } else Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                if (publishTimeText.isNotBlank()) {
+                    AppText(
+                        text = "$publishTimeText  ",
+                        style = contentTypography.author,
+                        color = AppContentColors.secondaryText(),
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+                UpBadgeName(
+                    name = video.owner.name,
+                    leadingContent = if (
+                        com.android.purebilibili.core.ui.LocalUpBadgeVisibility.current.showAvatars &&
+                        video.owner.face.isNotBlank()
+                    ) {
+                        {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(FormatUtils.fixImageUrl(
+                                        video.owner.face
+                                    ))
+                                    .crossfade(false)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    nameLeadingContent = if (isFollowing || video.isFollowed || video.recommendationReason.isNotBlank()) {
+                        {
+                            Row(
+                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                VideoRecommendationBadge(video.recommendationReason)
+                                if (isFollowing || video.isFollowed) {
+                                    AppText(
+                                        text = "已关注",
+                                        style = contentTypography.coverBadge,
+                                        color = AppContentColors.accent(),
+                                    )
+                                }
                             }
                         }
-                    }
-                } else {
-                    null
-                },
-                nameStyle = contentTypography.author,
-                nameColor = AppContentColors.secondaryText(),
-                badgeTextColor = AppContentColors.secondaryText().copy(alpha = 0.85f),
-                badgeBorderColor = AppContentColors.secondaryText().copy(alpha = 0.35f),
-                showUpBadge = showUpBadge,
-                // The info column is a single horizontal-card row; keep the owner on one
-                // measured line so a long name cannot grow past the cover bounds.
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                    } else {
+                        null
+                    },
+                    nameStyle = contentTypography.author,
+                    nameColor = AppContentColors.secondaryText(),
+                    badgeTextColor = AppContentColors.secondaryText().copy(alpha = 0.85f),
+                    badgeBorderColor = AppContentColors.secondaryText().copy(alpha = 0.35f),
+                    showUpBadge = showUpBadge,
+                    // The info column is a single horizontal-card row; keep the owner on one
+                    // measured line so a long name cannot grow past the cover bounds.
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
 
             HorizontalVideoStatRow(
                 playText = FormatUtils.formatStat(video.stat.view.toLong()),
                 danmakuText = FormatUtils.formatStat(video.stat.danmaku.toLong()),
             )
-
-            if (!compactPartition && showPublishTime && video.pubdate > 0) {
-                AppText(
-                    text = FormatUtils.formatPublishTime(video.pubdate),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AppContentColors.secondaryText(),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
         },
         trailingContent = when {
             trailingContent != null -> {

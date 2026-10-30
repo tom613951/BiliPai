@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Alignment
 import com.android.purebilibili.core.ui.wallpaper.sharedGlobalWallpaperBackground
 import androidx.compose.ui.graphics.compositeOver
@@ -131,10 +132,12 @@ import com.android.purebilibili.core.ui.components.UpBadgeName
 import com.android.purebilibili.core.ui.components.resolveUpStatsText
 import com.android.purebilibili.core.ui.transition.LocalVideoCardSharedElementSourceRoute
 import com.android.purebilibili.core.ui.transition.LocalMiuixVideoCardTransitionState
+import com.android.purebilibili.core.ui.transition.LocalVideoCardTransitionBackgroundState
 import com.android.purebilibili.core.ui.transition.captureNativeCoverOverlayLayer
 import com.android.purebilibili.core.ui.transition.captureNativeVideoCardImage
 import com.android.purebilibili.core.ui.transition.captureWholeCardReturnBitmap
-import kotlinx.coroutines.CoroutineStart
+import com.android.purebilibili.core.ui.transition.captureVideoCardPixelsAfterEntry
+import com.android.purebilibili.core.ui.transition.rememberVideoCardPixelCaptureAllowed
 import kotlinx.coroutines.launch
 import com.android.purebilibili.core.ui.transition.recordNativeVideoCardLayer
 import com.android.purebilibili.core.ui.transition.rememberNativeVideoCardLayer
@@ -163,7 +166,6 @@ import com.android.purebilibili.feature.home.HomeGlassResolvedColors
 import com.android.purebilibili.feature.home.resolveHomeGlassCoverPillBaseColor
 import com.android.purebilibili.feature.home.resolveHomeGlassPillStyle
 import com.android.purebilibili.core.player.PlaybackProgressManager
-import com.android.purebilibili.feature.video.ui.section.resolveCompactPublishTimeRowText
 //  [预览播放] 相关引用已移除
 
 import kotlin.math.roundToInt
@@ -257,15 +259,14 @@ internal fun resolveHomeVideoCardMetadataColors(
 }
 
 private fun resolveVideoCardMetadataModifier(
-    hasTrailingCardAction: Boolean
+    trailingActionCount: Int
 ): Modifier {
     return Modifier
         .fillMaxWidth()
         .then(
-            if (hasTrailingCardAction) {
-                // 右下角"⋮"/取消收藏按钮的视觉图标只占约 20dp，预留 24dp 即可
-                // 防遮挡，把更多宽度让给 UP 名称/日期，避免名称提前折叠省略。
-                Modifier.padding(end = AppSpacingTokens.ExtraLarge)
+            if (trailingActionCount > 0) {
+                // Each bottom-end action owns a full touch target, including when both are present.
+                Modifier.padding(end = AppChromeSizeTokens.MinimumTouchTarget * trailingActionCount)
             } else {
                 Modifier
             }
@@ -981,18 +982,8 @@ internal fun ElegantVideoCard(
         showOnlineCount = showOnlineCount,
         isVisibleInWindow = cardVisibleInWindow,
     )
-    val publishTimeRowText: String
-    val emphasizePublishTime: Boolean
-    remember(showPublishTime, video.pubdate) {
-        if (!showPublishTime) {
-            "" to false
-        } else {
-            resolveCompactPublishTimeRowText(pubdate = video.pubdate) to false
-        }
-    }.let { (text, emphasize) ->
-        publishTimeRowText = text
-        emphasizePublishTime = emphasize
-    }
+    val publishTimeRowText = rememberVideoCardPublishTimeText(video, showPublishTime, cardVisibleInWindow)
+    val emphasizePublishTime = false
 
     //  判断是否为竖屏视频（通过封面图 URL 中的尺寸信息或默认不显示）
     // B站封面 URL 通常包含尺寸信息，如 width=X&height=Y
@@ -1064,6 +1055,8 @@ internal fun ElegantVideoCard(
     val hasTrailingCardAction = onUnfavorite != null || hasOverflowMenu
     val nativeCardLayer = rememberNativeVideoCardLayer()
     val wholeCardCaptureScope = rememberCoroutineScope()
+    val wholeCardCaptureAllowed = rememberVideoCardPixelCaptureAllowed()
+    val videoCardTransitionBackgroundState = LocalVideoCardTransitionBackgroundState.current
     val nativeCoverOverlayLayer = rememberNativeVideoCardLayer()
     val freezeNativeCardLayer = remember(video.bvid) { mutableStateOf(false) }
 
@@ -1201,10 +1194,24 @@ internal fun ElegantVideoCard(
                 freezeNativeCardLayer.value = true
                 captureNativeVideoCardImage(nativeCardLayer)
                 captureNativeCoverOverlayLayer(nativeCoverOverlayLayer)
-                val expectedSourceKey = CardPositionManager.lastClickedVideoSourceKey
-                if (expectedSourceKey != null) {
-                    wholeCardCaptureScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                        captureWholeCardReturnBitmap(nativeCardLayer, expectedSourceKey)
+                val owner = CardPositionManager.videoCardPixelOwnerFor(CardPositionManager.lastClickedVideoSourceKey)
+                if (owner != null) {
+                    wholeCardCaptureScope.launch {
+                        captureVideoCardPixelsAfterEntry(
+                            phaseProvider = videoCardTransitionBackgroundState.phaseProvider,
+                            isReturnGestureInProgress = {
+                                videoCardTransitionBackgroundState.isReturnGestureInProgressProvider() ||
+                                    videoCardTransitionBackgroundState.isGestureRestoreInProgressProvider()
+                            },
+                            ownsCapture = {
+                                !nativeCardLayer.isReleased &&
+                                    CardPositionManager.isActiveVideoCardPixelOwner(owner) &&
+                                    CardPositionManager.isNativeVideoCardLayerCurrentOwner(nativeCardLayer)
+                            },
+                            captureAllowed = { wholeCardCaptureAllowed.value },
+                            entryWorkReleased = { owner.entryWorkReleased },
+                            capture = { captureWholeCardReturnBitmap(nativeCardLayer, owner) },
+                        )
                     }
                 }
             }
@@ -1212,10 +1219,13 @@ internal fun ElegantVideoCard(
         onClick(video.bvid, video.cid)
     })
     val homeCardScrolling = LocalHomeCardScrolling.current
+    val homeCardTransitionAtMount = LocalHomeCardTransitionRunning.current
     val enterAnimationEnabledAtMount = remember(video.bvid) {
         resolveHomeCardEnterAnimationEnabledAtMount(
             baseAnimationEnabled = animationEnabled,
-            isReturningFromDetail = isReturningFromVideoDetail,
+            // Mount-only sampling must not subscribe every neighboring card to transition changes.
+            isReturningFromDetail = isReturningFromVideoDetail ||
+                Snapshot.withoutReadObservation { homeCardTransitionAtMount?.value == true },
             isSwitchingCategory = CardPositionManager.isSwitchingCategory,
             // Read only at mount: stopping a scroll must not replay skipped entrances.
             isScrollInProgress = scrollLiteModeEnabled || homeCardScrolling?.value == true
@@ -1964,8 +1974,6 @@ internal fun ElegantVideoCard(
             AppSpacingTokens.Small
         }
 
-        Spacer(modifier = Modifier.weight(1f))
-
         Box(
             modifier = infoContainerModifier.videoCardShellReturnChromeAlpha(
                 enabled = useCardShellSharedBounds,
@@ -2033,7 +2041,9 @@ internal fun ElegantVideoCard(
         Spacer(modifier = Modifier.height(if (compactMetadata) AppSpacingTokens.ExtraSmall else AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro))
 
         Column(
-            modifier = resolveVideoCardMetadataModifier(hasTrailingCardAction)
+            modifier = resolveVideoCardMetadataModifier(
+                (if (onUnfavorite != null) 1 else 0) + (if (hasOverflowMenu) 1 else 0)
+            )
         ) {
         val metadataColors = resolveHomeVideoCardMetadataColors(
             onSurfaceColor = adaptiveContentColors.titleColor,
@@ -2201,11 +2211,11 @@ internal fun ElegantVideoCard(
                     glassAnchorBounds = menuGlassAnchorBounds,
                     glassSource = overflowMenuSource.takeIf { menuFromOverflowButton },
                 ) {
-                    // 以下扩展操作对齐 PiliPlus 的视频卡片菜单：BV 号、稍后再看、AI 总结、
-                    // 访问 UP 主、不感兴趣、拉黑与无痕模式；取消收藏是本应用收藏页的既有入口。
+                    // 卡片菜单提供内容号、观看、作者与隐私相关操作。
                     if (video.bvid.isNotBlank()) {
                         AppDropdownMenuItem(
                             text = { AppText(video.bvid, color = AppContentColors.primaryText()) },
+                            leadingIcon = { AppIcon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             onClick = {
                                 showDismissMenu = false
                                 copyPlainTextToClipboard(context, video.bvid, "BV号")
@@ -2217,6 +2227,7 @@ internal fun ElegantVideoCard(
                     // 稍后再看
                     if (onWatchLater != null) {
                         AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.WatchLater, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             text = {
                                 AppText(
                                     "稍后再看",
@@ -2233,6 +2244,7 @@ internal fun ElegantVideoCard(
                     // AI 总结（需要 cid 才能请求）
                     if (video.cid > 0L && video.bvid.isNotBlank()) {
                         AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             text = { AppText("AI总结", color = AppContentColors.primaryText()) },
                             onClick = {
                                 showDismissMenu = false
@@ -2244,6 +2256,7 @@ internal fun ElegantVideoCard(
                     // 访问 UP 主
                     if (onUpClick != null && video.owner.mid > 0L) {
                         AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.Person, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             text = { AppText("访问：${video.owner.name}", color = AppContentColors.primaryText()) },
                             onClick = {
                                 showDismissMenu = false
@@ -2252,9 +2265,10 @@ internal fun ElegantVideoCard(
                         )
                     }
 
-                    // 不感兴趣 (放第一位，方便操作) -> 改回下方
+                    // 不感兴趣
                     if (onDismiss != null) {
                         AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.NotInterested, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             text = {
                                 AppText(
                                     dismissMenuText,
@@ -2271,6 +2285,7 @@ internal fun ElegantVideoCard(
                     // 取消收藏 (仅在收藏页显示)
                     if (onUnfavorite != null) {
                          AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.BookmarkRemove, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.error()) },
                             text = {
                                 AppText(
                                     "取消收藏",
@@ -2288,6 +2303,7 @@ internal fun ElegantVideoCard(
                     // 拉黑 UP 主：本地屏蔽并同步 B 站关系
                     if (video.owner.mid > 0L) {
                         AppDropdownMenuItem(
+                            leadingIcon = { AppIcon(Icons.Outlined.PersonOff, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
                             text = { AppText("拉黑：${video.owner.name}", color = AppContentColors.primaryText()) },
                             onClick = {
                                 showDismissMenu = false
@@ -2301,6 +2317,10 @@ internal fun ElegantVideoCard(
                         com.android.purebilibili.core.store.SettingsManager.getPrivacyModeEnabled(context)
                     }.collectAsStateWithLifecycle(initialValue = false)
                     AppDropdownMenuItem(
+                        leadingIcon = {
+                            AppIcon(if (privacyModeEnabled) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                                contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText())
+                        },
                         text = {
                             AppText(
                                 if (privacyModeEnabled) "退出无痕模式" else "进入无痕模式",
