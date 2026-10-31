@@ -281,7 +281,63 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
 
     fun loadData(showLoading: Boolean = true) {
         needsAccountReload = false
-        loadPage(reset = true, showLoading = showLoading)
+        if (!showLoading && _uiState.value.items.isNotEmpty()) {
+            refreshLoadedPages()
+        } else {
+            loadPage(reset = true, showLoading = showLoading)
+        }
+    }
+
+    private fun refreshLoadedPages() {
+        val request = _uiState.value
+        val generation = ++loadGeneration
+        val identity = accountRequests.identity
+        _uiState.value = request.copy(isLoadingMore = true, error = null)
+        accountRequests.launch {
+            val items = mutableListOf<VideoItem>()
+            var lastPage: com.android.purebilibili.data.repository.WatchLaterPage? = null
+            var loadedPage = 0
+            for (pageNumber in 1..request.page.coerceAtLeast(1)) {
+                val result = WatchLaterRepository.getPage(
+                    page = pageNumber,
+                    viewed = request.filter.viewed,
+                    keyword = request.query,
+                    ascending = request.sortOrder == WatchLaterSortOrder.REVERSE,
+                )
+                if (!accountRequests.isCurrent(identity) || generation != loadGeneration ||
+                    _uiState.value.filter != request.filter
+                ) return@launch
+                val page = result.getOrElse { error ->
+                    _uiState.value = _uiState.value.copy(
+                        isLoadingMore = false,
+                        error = error.message ?: "加载失败",
+                    )
+                    return@launch
+                }
+                items.addAll(page.items)
+                lastPage = page
+                loadedPage = pageNumber
+                if (!page.hasMore) break
+            }
+            val page = lastPage ?: return@launch
+            // 管理操作可能在刷新期间修改列表，不能用较早的请求结果覆盖它。
+            if (_uiState.value.items != request.items) {
+                _uiState.value = _uiState.value.copy(isLoadingMore = false)
+                return@launch
+            }
+            val next = _uiState.value.copy(
+                items = items.distinctBy { it.aid },
+                totalCount = page.totalCount,
+                isLoading = false,
+                isLoadingMore = false,
+                page = loadedPage,
+                hasMore = page.hasMore,
+                error = null,
+            )
+            _uiState.value = next
+            tabCache.clear()
+            tabCache[next.filter] = next
+        }
     }
 
     fun loadMore() {
@@ -306,6 +362,7 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
 
     fun selectFilter(filter: WatchLaterFilter) {
         if (filter == _uiState.value.filter) return
+        loadGeneration++
         val current = _uiState.value
         // 加载或失败状态不能缓存成成功的空页，快速切回时应重新请求。
         if (!current.isLoading && current.error == null) {

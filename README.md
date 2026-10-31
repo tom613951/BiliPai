@@ -8,7 +8,7 @@
 
 <p>
   <a href="https://github.com/tom613951/BiliPai">
-    <img src="https://img.shields.io/badge/Source-v0.7.0-007AFF?style=for-the-badge&logo=github" alt="源码版本" />
+    <img src="https://img.shields.io/badge/Source-v0.7.1-007AFF?style=for-the-badge&logo=github" alt="源码版本" />
   </a>
   <a href="https://github.com/jay3-yy/BiliPai">
     <img src="https://img.shields.io/badge/Upstream-jay3--yy%2FBiliPai-FF9500?style=for-the-badge&logo=github" alt="官方 Upstream" />
@@ -23,7 +23,7 @@
 
 本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁。
 
-当前基于官方 **v0.7.0**（`cb0719388`，versionCode 538）源码。**只同步代码，不提供预编译包。**
+当前基于官方 **v0.7.1**（`8486dbf7d`，versionCode 539）源码。**只同步代码，不提供预编译包。**
 
 ---
 

@@ -49,7 +49,7 @@ import androidx.compose.ui.layout.onVisibilityChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
+import com.android.purebilibili.core.ui.components.AppIcon
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -86,6 +86,7 @@ import com.android.purebilibili.core.util.rememberHapticFeedback
 import com.android.purebilibili.data.model.response.VideoItem
 import com.android.purebilibili.feature.home.resolveHomeCoverRequestSpec
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreVert
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -447,11 +448,11 @@ internal fun HomeStyleSingleColumnVideoCard(
                             },
                         contentAlignment = Alignment.Center,
                     ) {
-                        AppText(
-                            text = "⋮",
-                            color = AppContentColors.secondaryText(),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                        AppIcon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = null,
+                            tint = AppContentColors.secondaryText(),
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }

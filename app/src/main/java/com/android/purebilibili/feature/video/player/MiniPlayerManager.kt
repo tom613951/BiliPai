@@ -439,20 +439,10 @@ internal fun <T> resolveEffectiveNotificationArtwork(
     return incomingArtwork ?: cachedArtwork
 }
 
-internal fun resolveNotificationIconResByPriority(
-    launcherIconRes: Int,
-    fallbackIconKey: String
-): Int {
-    return if (launcherIconRes != 0) launcherIconRes else resolveNotificationSmallIconRes(fallbackIconKey)
-}
-
-internal fun resolveLaunchActivityIconRes(context: Context): Int {
-    return runCatching {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        val component = launchIntent?.component ?: return@runCatching 0
-        context.packageManager.getActivityInfo(component, 0).iconResource
-    }.getOrDefault(0)
-}
+// 通知 small icon 必须是单色透明底图形：自适应启动图标自带彩色背景层，在部分系统上
+// 会被直接渲染成纯色圆形，因此无论启动器图标能否解析，都使用所选图标变体配套的单色资源。
+internal fun resolveNotificationIconRes(iconKey: String): Int =
+    resolveNotificationSmallIconRes(iconKey)
 
 internal fun resolveActivePlaybackLaunchIntent(
     context: Context,
@@ -484,11 +474,13 @@ internal fun resolveNotificationSmallIconRes(iconKey: String): Int {
     return when (normalizedKey) {
         "icon_blue_snow_maid" -> R.mipmap.ic_launcher_blue_snow_maid_monochrome
         "icon_blue_snow_maid_front" -> R.mipmap.ic_launcher_blue_snow_maid_front_monochrome
-        "icon_bilipai" -> R.mipmap.ic_launcher_bilipai
-        "icon_bilipai_pink" -> R.mipmap.ic_launcher_bilipai_pink
-        "icon_bilipai_white" -> R.mipmap.ic_launcher_bilipai_white
-        "icon_bilipai_monet" -> R.mipmap.ic_launcher_bilipai_monet
-        "icon_3d" -> R.mipmap.ic_launcher_3d
+        // BiliPai 各变体的自适应启动图标与彩色前景图都不能作为 small icon，
+        // 与它们 monochrome 层共用同一白色字形资源。
+        "icon_bilipai" -> R.mipmap.ic_launcher_bilipai_monet_foreground
+        "icon_bilipai_pink" -> R.mipmap.ic_launcher_bilipai_monet_foreground
+        "icon_bilipai_white" -> R.mipmap.ic_launcher_bilipai_monet_foreground
+        "icon_bilipai_monet" -> R.mipmap.ic_launcher_bilipai_monet_foreground
+        "icon_3d" -> R.drawable.ic_launcher_foreground_flat
         else -> R.mipmap.ic_launcher_blue_snow_maid_monochrome
     }
 }
@@ -3270,10 +3262,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
     /** 只补充品牌外观和当前内容；播放状态、按钮和通知发布由媒体服务负责。 */
     internal fun decoratePlaybackNotification(notification: android.app.Notification): android.app.Notification {
         val builder = android.app.Notification.Builder.recoverBuilder(context, notification)
-            .setSmallIcon(resolveNotificationIconResByPriority(
-                launcherIconRes = resolveLaunchActivityIconRes(context),
-                fallbackIconKey = SettingsManager.getAppIconSync(context),
-            ))
+            .setSmallIcon(resolveNotificationIconRes(SettingsManager.getAppIconSync(context)))
             .setContentTitle(currentTitle)
             .setContentText(currentOwner)
             .setContentIntent(PendingIntent.getActivity(

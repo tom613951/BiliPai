@@ -261,7 +261,7 @@ fun RelatedVideoItem(
     val stationaryCoverUrl = remember(video.pic) {
         FormatUtils.resolveVideoCoverUrl(video.pic, useLowQuality = false)
     }
-    val coverRequest = remember(stationaryCoverUrl) {
+    val coverRequest = remember(context, stationaryCoverUrl) {
         ImageRequest.Builder(context)
             .data(stationaryCoverUrl)
             .crossfade(false)
@@ -436,13 +436,14 @@ fun RelatedVideoItem(
                                 video.owner.face.isNotEmpty()
                             ) {
                                 {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(FormatUtils.fixImageUrl(
-                                                video.owner.face
-                                            ))
+                                    val avatarRequest = remember(context, video.owner.face) {
+                                        ImageRequest.Builder(context)
+                                            .data(FormatUtils.fixImageUrl(video.owner.face))
                                             .crossfade(false)
-                                            .build(),
+                                            .build()
+                                    }
+                                    AsyncImage(
+                                        model = avatarRequest,
                                         contentDescription = null,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier

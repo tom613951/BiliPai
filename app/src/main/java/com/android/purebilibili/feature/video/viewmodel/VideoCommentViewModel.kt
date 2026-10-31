@@ -105,6 +105,7 @@ internal fun shouldApplyConversationReplyResult(
 data class CommentUiState(
     val replies: ImmutableList<ReplyItem> = persistentListOf(),
     val voteCard: ReplyVoteCard? = null,
+    val pageControl: com.android.purebilibili.data.model.response.ReplyPageControl? = null,
     val isRepliesLoading: Boolean = false,
     val isRepliesRefreshing: Boolean = false,
     val replyCount: Int = 0,
@@ -311,6 +312,7 @@ class VideoCommentViewModel : ViewModel() {
                 upMid = state.upMid,
                 pinnedReplyIds = state.pinnedReplyIds,
                 subject = subject,
+                pageControl = state.pageControl,
                 cachedAtMs = System.currentTimeMillis(),
             ),
         )
@@ -486,6 +488,7 @@ class VideoCommentViewModel : ViewModel() {
             allReplies = sentReplies.merge(cached.replies)
             _commentState.value = _commentState.value.copy(
                 replies = allReplies.toImmutableList(),
+                pageControl = cached.pageControl,
                 replyCount = maxOf(cached.replyCount, currentState.replyCount),
                 replyCountSubject = requestSubject,
                 isRepliesEnd = cached.isEnd,
@@ -556,6 +559,7 @@ class VideoCommentViewModel : ViewModel() {
                 _commentState.value = current.copy(
                     replies = combinedReplies.toImmutableList(),
                     voteCard = if (pageToLoad == 1) data.voteCard else current.voteCard,
+                    pageControl = if (pageToLoad == 1) data.control else current.pageControl,
                     likedComments = (current.likedComments + combinedReplies.flatMap { root ->
                         (listOf(root) + root.replies.orEmpty()).filter { it.action == 1 }.map { it.rpid }
                     }).toImmutableSet(),

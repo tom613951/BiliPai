@@ -170,8 +170,8 @@ android {
         targetSdk = 37
         // 版本名按发行计划确定；versionCode 每次发布单调 +1
         // 规范：docs/wiki/VERSIONING.md · 更新日志：CHANGELOG.md
-        versionCode = 538
-        versionName = "0.7.0"
+        versionCode = 539
+        versionName = "0.7.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -198,8 +198,22 @@ android {
         }
     }
 
+    val releaseStoreFile = providers.environmentVariable("BILI_RELEASE_STORE_FILE").orNull
+    val releaseStorePassword = providers.environmentVariable("BILI_RELEASE_STORE_PASSWORD").orNull
+    val releaseKeyAlias = providers.environmentVariable("BILI_RELEASE_KEY_ALIAS").orNull
+    val releaseKeyPassword = providers.environmentVariable("BILI_RELEASE_KEY_PASSWORD").orNull
+    if (listOf(releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { !it.isNullOrBlank() }) {
+        signingConfigs.create("officialRelease") {
+            storeFile = file(requireNotNull(releaseStoreFile))
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("officialRelease")
             // Disable PNG crunching to avoid AAPT errors
             isCrunchPngs = false
             // 个人自用补丁：有可用密钥库时启用 release 签名，否则保持未签名。

@@ -1964,6 +1964,9 @@ fun HomeScreen(
         popularGridStates
     ) {
         homeClick@{ request ->
+            // 上一次详情转场未落位时忽略新的卡片点击：并发的第二次导航会让共享元素
+            // 注册表在第一场转场中途重新协商，旧卡标题/作者会短暂跳变成新卡内容。
+            if (isVideoNavigating) return@homeClick
             if (request.episodeId > 0L ||
                 (request.dynamicId.isNotBlank() && !request.bvid.startsWith("BV", ignoreCase = true))) {
                 feedNavigation.onVideoClick(request)

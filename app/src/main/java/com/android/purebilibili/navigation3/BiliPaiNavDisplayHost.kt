@@ -409,6 +409,7 @@ internal fun BiliPaiNavDisplayHost(
         sourceMetadata.sourceBounds,
         sourceMetadata.sourceCornerDp,
         sourceMetadata.sourceLayout,
+        sourceMetadata.sourceRoute,
         videoSharedTransitionDurationMillis,
         heroMotion,
         videoCardTransitionProgress,
@@ -432,6 +433,7 @@ internal fun BiliPaiNavDisplayHost(
                 returningProvider = returningProvider,
                 deviceCornerDp = effectiveDeviceCornerDp,
                 sourceLayout = sourceMetadata.sourceLayout,
+                sourceRoute = sourceMetadata.sourceRoute,
             )
         } else {
             observedVideoFallbackTransition
@@ -442,6 +444,7 @@ internal fun BiliPaiNavDisplayHost(
         sourceMetadata.sourceBounds,
         sourceMetadata.sourceCornerDp,
         sourceMetadata.sourceLayout,
+        sourceMetadata.sourceRoute,
         videoSharedTransitionDurationMillis,
         heroMotion,
         videoCardTransitionProgress,
@@ -464,6 +467,7 @@ internal fun BiliPaiNavDisplayHost(
                 returningProvider = returningProvider,
                 deviceCornerDp = effectiveDeviceCornerDp,
                 sourceLayout = sourceMetadata.sourceLayout,
+                sourceRoute = sourceMetadata.sourceRoute,
             )
         } else {
             observedVideoFallbackTransition

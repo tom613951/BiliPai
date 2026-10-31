@@ -1481,9 +1481,12 @@ class MainActivity : AppCompatActivity() {
                 .collectAsStateWithLifecycle(initialValue = true)
             val liquidControlsUseThemeColor by SettingsManager.getLiquidControlsUseThemeColor(context)
                 .collectAsStateWithLifecycle(initialValue = false)
+            val liquidSwitchThumbMode by SettingsManager.getLiquidSwitchThumbMode(context)
+                .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.core.ui.LiquidSwitchThumbMode.THEME)
             val appThemeConfig = remember(
                 liquidGlassEnabled,
                 liquidControlsUseThemeColor,
+                liquidSwitchThumbMode,
                 blurIntensity,
                 headerBlurEnabled,
                 bottomBarBlurEnabled,
@@ -1500,6 +1503,7 @@ class MainActivity : AppCompatActivity() {
                 AppThemeConfig(
                     liquidGlassEnabled = liquidGlassEnabled,
                     liquidControlsUseThemeColor = liquidControlsUseThemeColor,
+                    liquidSwitchThumbMode = liquidSwitchThumbMode,
                     blurIntensity = blurIntensity,
                     headerBlurEnabled = headerBlurEnabled,
                     bottomBarBlurEnabled = bottomBarBlurEnabled,

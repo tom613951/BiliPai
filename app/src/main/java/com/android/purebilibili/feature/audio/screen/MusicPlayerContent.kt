@@ -1005,7 +1005,7 @@ internal fun MusicPlayerContent(
                                     showMusicChrome()
                                 },
                                 showBottomControls = false,
-                                onPageTap = openCoverPage,
+                                fullScreenLyrics = true,
                                 lyricsUiStyle = lyricsUiStyle,
                                 showTranslations = lyricsShowTranslations,
                                 onToggleTranslations = { toggleLyricsTranslations() },
@@ -3438,7 +3438,7 @@ private fun LyricsPage(
     showTranslations: Boolean = true,
     onToggleTranslations: () -> Unit = {},
     showBottomControls: Boolean = true,
-    onPageTap: (() -> Unit)? = null,
+    fullScreenLyrics: Boolean = false,
     isDarkEnvironment: Boolean = true,
     lyricsUiStyle: SettingsManager.MusicLyricsUiStyle = SettingsManager.MusicLyricsUiStyle.CLASSIC,
     pageVisible: Boolean = true,
@@ -3449,7 +3449,6 @@ private fun LyricsPage(
         com.android.purebilibili.core.ui.rememberVisualWorkActive()
     val document = state.lyrics
     val immersiveLyrics = lyricsUiStyle == SettingsManager.MusicLyricsUiStyle.IMMERSIVE
-    val fullScreenLyrics = onPageTap != null
     var stableCurrentIndex by remember(document) {
         mutableIntStateOf(
             document?.let {
@@ -3475,6 +3474,12 @@ private fun LyricsPage(
     val isLyricsDragged by listState.interactionSource.collectIsDraggedAsState()
     var showLyricsSettings by remember { mutableStateOf(false) }
     var isAutoFollowPaused by remember(document) { mutableStateOf(false) }
+    fun seekToLyric(timeMs: Long) {
+        val lyrics = document ?: return
+        val positionMs = (timeMs + lyrics.offsetMs).coerceAtLeast(0L)
+        isAutoFollowPaused = false
+        onSeek(if (state.durationMs > 0L) positionMs.coerceAtMost(state.durationMs) else positionMs)
+    }
     LaunchedEffect(progressSeekRevision) {
         if (progressSeekRevision > 0) {
             isAutoFollowPaused = false
@@ -3612,13 +3617,7 @@ private fun LyricsPage(
                         contentColor = MusicContentColor,
                         wordLiftEnabled = true,
                         onLineClick = { line ->
-                            if (onPageTap != null) {
-                                onPageTap()
-                            } else {
-                                isAutoFollowPaused = false
-                                val seekMs = line.words.firstOrNull()?.startMs ?: line.timeMs
-                                onSeek(seekMs + document.offsetMs)
-                            }
+                            seekToLyric(line.timeMs)
                         },
                         onLineLongClick = {},
                         topContentPadding = 72.dp,
@@ -3653,13 +3652,7 @@ private fun LyricsPage(
                         reduceMotion = reduceMotion,
                         centerAligned = fullScreenLyrics,
                         onClick = {
-                            if (onPageTap != null) {
-                                onPageTap()
-                            } else {
-                                isAutoFollowPaused = false
-                                val seekMs = line.spans.firstOrNull()?.startTimeMs ?: line.startTimeMs
-                                onSeek(seekMs + document.offsetMs)
-                            }
+                            seekToLyric(line.spans.firstOrNull()?.startTimeMs ?: line.startTimeMs)
                         }
                     )
                 }

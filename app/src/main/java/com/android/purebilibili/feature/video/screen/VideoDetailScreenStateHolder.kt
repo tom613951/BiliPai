@@ -1029,6 +1029,7 @@ internal fun VideoDetailScreenStateHolder(
 
                     // 先摘掉父详情壳 sharedBounds，再 push，避免相关卡嵌套在父壳内吃不到 morph。
                     // 只保留轻量 UI 位置快照；整屏位图捕获会把导航提交阻塞数百毫秒。
+                    viewModel.cancelRelatedPreload()
                     sharedDanmakuManager.clearForVideoChange()
                     hasCommittedRelatedVideoNavigation = true
                     presentationState.markNavigatingToVideo()
@@ -1229,13 +1230,15 @@ internal fun VideoDetailScreenStateHolder(
 
     // 普通导航与整卡导航共用落位后的工作错峰；不借卡片开关改变玻璃或原生布局。
     // 已有播放器复用入口不延后；entry 内阶段单向锁存，返回预览不重新关闭许可。
+    val entryPlaybackSettled = remember { kotlinx.coroutines.flow.MutableStateFlow(false) }
     val entryWorkPhase = rememberVideoDetailEntryWorkPhase(
         staggerWork = shouldStaggerVideoDetailEntryWork(
             deferEntryLoad = deferVideoDetailEntryLoad,
             reuseFromMiniPlayerAtEntry = reuseFromMiniPlayerAtEntry,
         ),
-        contentReady = isTransitionFinished && detailContentState != null,
+        contentReady = isTransitionFinished,
         isVisible = isVisible,
+        playbackSettled = entryPlaybackSettled,
     )
     val entryPlaybackReady = entryTransitionFinished && entryWorkPhase != VideoDetailEntryWorkPhase.Content
     val entryRelatedReady = entryWorkPhase == VideoDetailEntryWorkPhase.Related
@@ -1991,6 +1994,13 @@ internal fun VideoDetailScreenStateHolder(
             initialValue = false,
             lifecycle = lifecycleOwner.lifecycle
         )
+    // 横屏保持：自动进入横屏后不随倾回竖屏退出全屏，仅手动退出。
+    val landscapeHoldEnabled by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getLandscapeHoldEnabled(context)
+    }.collectAsStateWithLifecycle(
+            initialValue = false,
+            lifecycle = lifecycleOwner.lifecycle
+        )
     val rotationResolver = context.applicationContext.contentResolver
     var systemAutoRotateEnabled by remember(rotationResolver) {
         mutableStateOf(
@@ -2171,9 +2181,35 @@ internal fun VideoDetailScreenStateHolder(
         fallbackResumePositionMs = resumePositionMsFromRoute,
         startPaused = isPortraitFullscreen && !useSharedPortraitPlayer,
         entryTransitionFinished = entryPlaybackReady,
-        relatedPublicationAllowed = entryTransitionFinished,
+        // 请求可提前完成，但发布列表和播放队列应等播放器、评论的首轮工作错峰后再执行。
+        relatedPublicationAllowed = entryTransitionFinished &&
+            (entryRelatedReady || uiState is VideoPlaybackUiState.Error),
         playbackSessionActive = playbackSessionActiveForMorph,
     )
+    DisposableEffect(playerState.player) {
+        val player = playerState.player
+        val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() { entryPlaybackSettled.value = true }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED ||
+                    (playbackState == Player.STATE_READY && !player.playWhenReady)
+                ) entryPlaybackSettled.value = true
+            }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (!playWhenReady && player.playbackState == Player.STATE_READY) {
+                    entryPlaybackSettled.value = true
+                }
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                entryPlaybackSettled.value = true
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(uiState is VideoPlaybackUiState.Error) {
+        if (uiState is VideoPlaybackUiState.Error) entryPlaybackSettled.value = true
+    }
     LaunchedEffect(isFullscreenMode) {
         val restorePositionMs = pendingFullscreenPositionRestoreMs
         if (restorePositionMs <= 0L) return@LaunchedEffect
@@ -2892,6 +2928,7 @@ internal fun VideoDetailScreenStateHolder(
         isFullscreenPlayerLocked,
         orientationRequestsAllowed,
         userRequestedFullscreen,
+        landscapeHoldEnabled,
     ) {
         val hostActivity = activity
         if (
@@ -2933,6 +2970,7 @@ internal fun VideoDetailScreenStateHolder(
                 val targetOrientation = resolvePhoneAutoRotateRequestedOrientation(
                     orientationDegrees = orientation,
                     isCurrentlyLandscape = isCurrentlyLandscape,
+                    landscapeHoldEnabled = landscapeHoldEnabled,
                     useExactLandscapeSide = orientationPolicyDevice,
                     // A manual fullscreen press can happen while the device is still upright.
                     // Wait for one physical landscape observation before allowing the sensor
@@ -3829,6 +3867,7 @@ internal fun VideoDetailScreenStateHolder(
                             isRepliesEnd = commentState.isRepliesEnd, videoTags = success.videoTags,
                             paginationPage = commentState.nextPage,
                             voteCard = commentState.voteCard,
+                            pageControl = commentState.pageControl,
                             sortMode = commentState.sortMode,
                             currentMid = commentState.currentMid, showUpFlag = commentState.showUpFlag,
                             showIdentityDecorations = commentMemberDecorationsEnabled,

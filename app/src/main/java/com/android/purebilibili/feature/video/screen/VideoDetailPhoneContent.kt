@@ -326,6 +326,7 @@ internal fun VideoDetailPhoneSuccessContentLayer(
                                         likedComments = commentState.likedComments,
                                         hatedComments = commentState.hatedComments,
                                         nextPage = commentState.nextPage,
+                                        pageControl = commentState.pageControl,
                                     ),
                                     noteState = VideoContentNoteState(
                                         aiSummary = success.aiSummary,

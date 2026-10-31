@@ -477,9 +477,10 @@ internal class MiuixVideoCardTransitionProgress(
     private var settleVisualReturn = 0f
     private var lastVisualReturn = 0f
     private var followSequence: Long? = null
-    private var followAnchorPose = VideoCardFollowPose()
-    private var lastFollowPose = VideoCardFollowPose()
-    private var releaseFollowPose = VideoCardFollowPose()
+    private val neutralFollowPose = VideoCardFollowPose()
+    private var followAnchorPose = neutralFollowPose
+    private var lastFollowPose = neutralFollowPose
+    private var releaseFollowPose = neutralFollowPose
     private var followSettle: NavSettle? = null
     // 仅保留自动阶段已经应用的对象；新抓取时才转换锚点，不增加逐帧姿态分配。
     private var automaticTransform: MiuixVideoCardGestureTransform? = null
@@ -626,7 +627,8 @@ internal class MiuixVideoCardTransitionProgress(
         ) {
             followSequence = null
             followSettle = null
-            lastFollowPose = VideoCardFollowPose()
+            // 自动转场每帧也会经过这里，复用不可变的初始姿态。
+            lastFollowPose = neutralFollowPose
             if (scope.gesture != null || !gesturePoseEnabled || isCoveredOrRevealedParent(scope)) {
                 automaticTransform = null
             }
@@ -741,7 +743,7 @@ internal class MiuixVideoCardTransitionProgress(
         activeSettle = null
         followSequence = null
         followSettle = null
-        lastFollowPose = VideoCardFollowPose()
+        lastFollowPose = neutralFollowPose
         automaticTransform = null
         automaticOrigin = TransformOrigin.Center
     }
@@ -851,6 +853,7 @@ internal fun miuixVideoCardNavTransition(
     returningProvider: () -> Boolean = { false },
     deviceCornerDp: Dp = 32.dp,
     sourceLayout: VideoCardSourceLayout = VideoCardSourceLayout.COVER_ONLY,
+    sourceRoute: String? = null,
 ): NavTransition {
     val bounds = sourceBounds?.takeIf { it.width > 1f && it.height > 1f }
         ?: return fallback
@@ -861,6 +864,9 @@ internal fun miuixVideoCardNavTransition(
         heroMotionSpec, returning = true, gestureTranslationEnabled = gestureTranslationEnabled,
     )
     val corner = sourceCornerDp?.coerceAtLeast(0) ?: 16
+    // 透明相关推荐横卡没有整行底板，不为放大的整页轮廓生成动态阴影。
+    val useFlyingShadow = !(sourceLayout == VideoCardSourceLayout.SIDE_BY_SIDE &&
+        sourceRoute?.substringBefore('?')?.startsWith("video/") == true)
     val clipShapeA = MiuixVideoCardClipShape()
     val clipShapeB = MiuixVideoCardClipShape()
     val coveredShapeCache = MiuixVideoCardCoveredShapeCache()
@@ -997,7 +1003,7 @@ internal fun miuixVideoCardNavTransition(
                         } else {
                             shape = activeShape
                         }
-                        if (gestureFollowEnabled) {
+                        if (gestureFollowEnabled && useFlyingShadow) {
                             // Click and back poses share this envelope. Reuse it instead of
                             // allocating and resolving the full gesture transform a second time.
                             shadowElevation = MIUIX_VIDEO_CARD_GESTURE_SHADOW_DP.dp.toPx() * poseWeight

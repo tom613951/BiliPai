@@ -1612,8 +1612,10 @@ fun rememberVideoPlayerState(
 
     // 网络请求与播放器绑定分开，进场门控只约束媒体准备。
     // 门控开放前先 attachPlayer，保证 prepare 使用当前播放器。
-    DisposableEffect(viewModel, relatedPublicationAllowed) {
+    SideEffect {
         viewModel.setRelatedPublicationAllowed(relatedPublicationAllowed)
+    }
+    DisposableEffect(viewModel) {
         onDispose { viewModel.setRelatedPublicationAllowed(true) }
     }
     DisposableEffect(viewModel, player, entryTransitionFinished, playbackSessionActive) {

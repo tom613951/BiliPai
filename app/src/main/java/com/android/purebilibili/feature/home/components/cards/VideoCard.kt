@@ -2167,17 +2167,16 @@ internal fun ElegantVideoCard(
                                 menuGlassAnchorBounds = null
                                 openDismissMenu(menuButtonCoordsRef.value, null)
                             },
+                        // 触控区 48dp，但图标光学上贴卡片右下角，与发布时间行对齐。
                         contentAlignment = Alignment.BottomEnd
                     ) {
-                        AppText(
-                            text = "⋮",
-                            color = adaptiveContentColors.subtitleColor,
-                            fontSize = MaterialTheme.typography.labelMedium.fontSize,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(
-                                end = AppSpacingTokens.ExtraSmall,
-                                bottom = AppSpacingTokens.ExtraSmall
-                            )
+                        AppIcon(
+                            imageVector = Icons.Outlined.MoreVert,
+                            contentDescription = null,
+                            tint = adaptiveContentColors.subtitleColor,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .padding(end = AppSpacingTokens.ExtraSmall, bottom = AppSpacingTokens.ExtraSmall)
                         )
                     }
                 }

@@ -1,6 +1,7 @@
 // 文件路径: feature/video/screen/VideoContentSection.kt
 package com.android.purebilibili.feature.video.screen
 
+import com.android.purebilibili.feature.video.ui.components.commentSectionNotice
 import com.android.purebilibili.navigation.tabIndicatorPosition
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.feature.video.ui.components.RelatedVideoList
@@ -477,6 +478,7 @@ internal class VideoContentCommentState(
     val likedComments: Set<Long>,
     val hatedComments: Set<Long>,
     val nextPage: Int,
+    val pageControl: com.android.purebilibili.data.model.response.ReplyPageControl? = null,
 )
 
 internal class VideoContentNoteState(
@@ -1075,6 +1077,7 @@ internal fun VideoContentSection(
                             repliesError = if (pageComments != null) pageComments.repliesError else repliesError,
                             isRepliesEnd = pageComments?.isRepliesEnd ?: isRepliesEnd,
                             paginationPage = pageComments?.nextPage ?: commentState.nextPage,
+                            pageControl = pageComments?.pageControl ?: commentState.pageControl,
                             voteCard = if (pageComments != null) pageComments.voteCard else voteCard,
                             onUpClick = onUpClick,
                             onSubReplyClick = onSubReplyClick,
@@ -1668,6 +1671,7 @@ internal fun VideoCommentTab(
     pinnedReplyIds: Set<Long> = emptySet(),
     paginationPage: Int = 1,
     floatingHeaderContentPaddingPx: (() -> Float)? = null,
+    pageControl: com.android.purebilibili.data.model.response.ReplyPageControl? = null,
 ) {
     val commentAppearance = rememberVideoCommentAppearance()
     val avatarPushEnabled = com.android.purebilibili.feature.video.ui.components.rememberCommentAvatarPushEnabled()
@@ -1746,6 +1750,7 @@ internal fun VideoCommentTab(
                     .fillMaxSize(),
                 contentPadding = commentContentPadding
             ) {
+            commentSectionNotice(pageControl)
             if (repliesError != null) {
                 item(key = "video_comment_refresh_error", contentType = "video_comment_error") {
                     com.android.purebilibili.feature.video.ui.components.VideoCommentLoadError(
@@ -1777,7 +1782,7 @@ internal fun VideoCommentTab(
                     Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                         // replyCount 来自详情/游标 all_count：>0 却列表空 = 最热链路空成功，勿误报「暂无」
                         AppText(
-                            text = if (replyCount > 0) {
+                            text = pageControl?.emptyMessage()?.takeIf { it.isNotBlank() } ?: if (replyCount > 0) {
                                 "评论暂时无法加载，可切换「最新」或稍后重试"
                             } else {
                                 "暂无评论"
@@ -1912,6 +1917,7 @@ internal fun LandscapeCommentPanel(
     threadContent: (@Composable ((List<String>, Int, ImagePreviewSourceAnchor?, ImagePreviewTextContent?) -> Unit) -> Unit)? = null,
     modifier: Modifier = Modifier,
     paginationPage: Int = 1,
+    pageControl: com.android.purebilibili.data.model.response.ReplyPageControl? = null,
 ) {
     var previewImages by remember { mutableStateOf(emptyList<String>()) }
     var previewInitialIndex by remember { mutableIntStateOf(0) }
@@ -2015,6 +2021,7 @@ internal fun LandscapeCommentPanel(
                             maxTimestampMs = info.pages.firstOrNull { it.cid == info.cid }?.duration?.times(1000L)
                                 ?: info.pages.firstOrNull()?.duration?.times(1000L),
                             replies = replies,
+                            pageControl = pageControl,
                             replyCount = replyCount,
                             emoteMap = emoteMap,
                             isRepliesLoading = isRepliesLoading,

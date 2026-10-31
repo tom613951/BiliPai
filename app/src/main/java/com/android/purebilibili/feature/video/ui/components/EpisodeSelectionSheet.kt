@@ -3,6 +3,14 @@ package com.android.purebilibili.feature.video.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ColumnScope
@@ -11,6 +19,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,14 +48,58 @@ internal fun EpisodeSelectionSheet(
     content: @Composable ColumnScope.(requestDismiss: () -> Unit) -> Unit,
 ) {
     if (inlinePanel) {
-        com.android.purebilibili.core.ui.LocalNavigationBackHandler(enabled = true, onBackCompleted = onDismiss)
-        com.android.purebilibili.core.ui.AppPopupSurface(
-            type = com.android.purebilibili.core.ui.AppPopupSurfaceType.SHEET,
-            shape = androidx.compose.ui.graphics.RectangleShape,
-            containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+        val visible = remember { MutableTransitionState(false).apply { targetState = true } }
+        val backState = rememberNavigationEventState(NavigationEventInfo.None)
+        val backTransition = backState.transitionState as? NavigationEventTransitionState.InProgress
+        val motionEnabled = com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current &&
+            !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current
+        val gestureEnabled = motionEnabled &&
+            com.android.purebilibili.core.ui.LocalPredictiveBackGestureEnabled.current
+        var committedProgress by remember { mutableFloatStateOf(0f) }
+        val backProgress = animateFloatAsState(
+            targetValue = if (!gestureEnabled) 0f else if (!visible.targetState) committedProgress else
+                backTransition?.takeIf {
+                    it.direction == NavigationEventTransitionState.TRANSITIONING_BACK
+                }?.latestEvent?.progress?.coerceIn(0f, 1f) ?: 0f,
+            animationSpec = if (backTransition != null || !gestureEnabled) snap() else tween(180),
+            label = "inlineEpisodeSelectionBack",
+        )
+        val requestDismiss = {
+            if (visible.targetState) {
+                committedProgress = backProgress.value
+                visible.targetState = false
+            }
+        }
+        LaunchedEffect(visible.currentState, visible.targetState, visible.isIdle) {
+            if (visible.isIdle && !visible.currentState && !visible.targetState) onDismiss()
+        }
+        NavigationBackHandler(
+            state = backState,
+            isBackEnabled = true,
+            onBackCompleted = requestDismiss,
+        )
+        AnimatedVisibility(
+            visibleState = visible,
             modifier = modifier.fillMaxSize(),
+            enter = if (motionEnabled) slideInVertically(tween(260)) { it } + fadeIn(tween(180))
+                else EnterTransition.None,
+            exit = if (motionEnabled) slideOutVertically(tween(220)) { it } + fadeOut(tween(180))
+                else ExitTransition.None,
         ) {
-            Column(Modifier.fillMaxSize()) { content(onDismiss) }
+            com.android.purebilibili.core.ui.AppPopupSurface(
+                type = com.android.purebilibili.core.ui.AppPopupSurfaceType.SHEET,
+                shape = androidx.compose.ui.graphics.RectangleShape,
+                containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    val progress = backProgress.value
+                    transformOrigin = TransformOrigin(0.5f, 1f)
+                    scaleX = 1f - 0.06f * progress
+                    scaleY = 1f - 0.06f * progress
+                    translationY = size.height * 0.12f * progress
+                },
+            ) {
+                Column(Modifier.fillMaxSize()) { content(requestDismiss) }
+            }
         }
         return
     }

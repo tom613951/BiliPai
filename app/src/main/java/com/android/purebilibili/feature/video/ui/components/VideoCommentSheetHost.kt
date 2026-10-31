@@ -967,6 +967,19 @@ internal fun VideoCommentMainList(
                             .layerBackdrop(commentChromeBackdrop),
                         contentPadding = WindowInsets.navigationBars.asPaddingValues()
                     ) {
+                    commentSectionNotice(state.pageControl)
+                    if (state.replies.isEmpty() && !state.isRepliesLoading &&
+                        !state.isRepliesRefreshing && repliesError == null) {
+                        state.pageControl?.emptyMessage()?.takeIf { it.isNotBlank() }?.let { message ->
+                            item(key = "comment_server_empty", contentType = "comment_server_empty") {
+                                AppText(
+                                    text = message,
+                                    color = AppContentColors.secondaryText(),
+                                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                )
+                            }
+                        }
+                    }
                     state.voteCard?.let { card ->
                         item(key = "comment_vote_${card.voteId}") {
                             VideoCommentVoteCard(

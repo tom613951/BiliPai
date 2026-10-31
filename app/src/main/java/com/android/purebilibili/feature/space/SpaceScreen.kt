@@ -5865,7 +5865,7 @@ private fun SpaceHeaderBanner(
                         .fillMaxWidth()
                         .height(3.5.dp)
                         .align(Alignment.BottomCenter),
-                    color = Color.White,
+                    color = AppContentColors.accent(),
                     trackColor = MediaContrastPalette.Track,
                 )
             }
@@ -5928,7 +5928,7 @@ private fun SpaceHeaderBanner(
                     .fillMaxWidth()
                     .height(3.5.dp)
                     .align(Alignment.BottomCenter),
-                color = Color.White,
+                color = AppContentColors.accent(),
                 trackColor = MediaContrastPalette.Track
             )
         }

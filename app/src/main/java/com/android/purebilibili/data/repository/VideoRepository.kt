@@ -991,6 +991,7 @@ object VideoRepository {
     }
 
     suspend fun getCreatorCardStats(mid: Long): Result<CreatorCardStats> = VideoCatalogRepository.getCreatorCardStats(mid)
+    fun getCachedCreatorCardStats(mid: Long): CreatorCardStats? = VideoCatalogRepository.getCachedCreatorCardStats(mid)
 
     suspend fun isVerticalVideo(bvid: String, aid: Long = 0L): Boolean = withContext(Dispatchers.IO) {
         val normalizedBvid = bvid.trim()

@@ -2469,7 +2469,10 @@ private fun VideoPlayerSectionContent(
                             if (isScreenLocked) {
                                 return@detectDragGestures
                             }
-                            if (isLongPressing || longPressSpeedLocked) {
+                            // 长按倍速进行中禁用拖拽：此时竖移在调倍速值。
+                            // 仅锁定（手指已松开、倍速固定）不阻断音量/亮度/进度滑动，
+                            // 否则锁定 2x 后侧边滑动调音量会完全失效。
+                            if (isLongPressing) {
                                 return@detectDragGestures
                             }
                             //  [新增] 边缘防误触检测
