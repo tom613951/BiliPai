@@ -2289,6 +2289,7 @@ internal fun VideoContentTabBar(
     showDanmakuActions: Boolean = true,
     measurementLabels: List<String>? = null,
     liquidGlassTabsOffsetX: Dp = 0.dp,
+    liquidGlassAdaptIndicatorToLabel: Boolean = false,
 ) {
     val liquidGlassEnabledForTabBar = LocalAppThemeConfig.current.liquidGlassEnabled
     val configuration = LocalConfiguration.current
@@ -2350,10 +2351,9 @@ internal fun VideoContentTabBar(
                 // Counts have a metadata reservation before comment loading starts. Data arrival
                 // updates text only, rather than starting a second width spring during entry.
                 liquidGlassAnimateLabelWidthChanges = false,
-                // The glass indicator follows each equal-width slot, including the short first label.
-                // Native MD3 and Miuix renderers ignore these glass-only parameters.
+                // Callers opt into content-sized glass indicators; native geometry is unchanged.
                 liquidGlassLabelHorizontalPadding = 10.dp,
-                liquidGlassAdaptIndicatorToLabel = false,
+                liquidGlassAdaptIndicatorToLabel = liquidGlassAdaptIndicatorToLabel,
                 selectedValue = selectedTabIndex,
                 onSelectionChange = onTabSelected,
                 // 仅移动页面显式指定的玻璃 dock；原生布局及右侧弹幕操作保持原位。

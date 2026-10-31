@@ -347,7 +347,7 @@ fun PlaybackSettingsContent(
                                     AppSwitchPreference(
                                 icon = rememberSettingsSemanticIcon(SettingsIconRole.HARDWARE_DECODER),
                                 title = playbackSettingTitle("playback.hw_decode"),
-                                subtitle = "推荐保持开启；只有遇到绿屏或无法播放时再尝试关闭，关闭后更耗电",
+                                subtitle = "开启优先硬解，遇到绿屏可尝试关闭以优先系统软解；不可用时尝试其他解码器。软解可能更耗电，下次创建播放器时生效",
                                 checked = state.hwDecode,
                                 onCheckedChange = {
                                     viewModel.toggleHwDecode(it)

@@ -3,6 +3,9 @@
 
 package com.android.purebilibili.feature.video.player
 
+import com.android.purebilibili.core.player.withAppVideoDecoderDiagnostics
+import com.android.purebilibili.core.player.withAppVideoDecoderPreference
+
 import coil3.request.allowHardware
 import coil3.request.transformations
 
@@ -2178,7 +2181,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
                 HiResCompatibleRenderersFactory(context)
             }.setExtensionRendererMode(
                 androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
-            )
+            ).withAppVideoDecoderPreference(context)
             _player = ExoPlayer.Builder(context)
                 .apply {
                     if (SettingsManager.getResilientVideoBufferSync(context)) {
@@ -2198,7 +2201,7 @@ class MiniPlayerManager private constructor(private val context: Context) :
                         stopPlaybackOnExit = stopPlaybackOnExit
                     )
                 )
-                .build()
+                .build().withAppVideoDecoderDiagnostics(context)
                 .apply {
                     addListener(playerListener)
                     //  [修复] 确保音量正常

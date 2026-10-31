@@ -1,6 +1,9 @@
 // 文件路径: feature/bangumi/BangumiPlayerScreen.kt
 package com.android.purebilibili.feature.bangumi
 
+import com.android.purebilibili.core.player.withAppVideoDecoderDiagnostics
+import com.android.purebilibili.core.player.withAppVideoDecoderPreference
+
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
 import com.android.purebilibili.core.ui.AppContentColors
 import com.android.purebilibili.core.ui.components.appElasticPress
@@ -254,8 +257,9 @@ fun BangumiPlayerScreen(
                     .setExtensionRendererMode(
                         androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
                     )
+                    .withAppVideoDecoderPreference(context)
             )
-            .build()
+            .build().withAppVideoDecoderDiagnostics(context)
             .apply {
                 playWhenReady = true
             }

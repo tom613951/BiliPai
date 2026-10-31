@@ -272,6 +272,10 @@ fun RelatedVideoItem(
     val relatedVideoNavigationAllowed = LocalRelatedVideoNavigationAllowed.current
     val triggerRelatedVideoClick = relatedClick@{
         if (!relatedVideoNavigationAllowed()) return@relatedClick
+        if (CardPositionManager.isVideoNavigationDebounceActive()) {
+            // 防抖窗口内的点击注定被导航层拒绝；不得覆写在飞转场的全局记录与冻结像素。
+            return@relatedClick
+        }
         cardCoordinatesRef.value
             ?.takeIf { it.isAttached }
             ?.videoCardSourceBoundsInRoot()

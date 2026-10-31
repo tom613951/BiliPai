@@ -188,6 +188,10 @@ internal fun HomeStyleSingleColumnVideoCard(
             .build()
     }
     val triggerClick by rememberUpdatedState(appActionWithFeedback {
+        if (CardPositionManager.isVideoNavigationDebounceActive()) {
+            // 防抖窗口内的点击注定被导航层拒绝；不得覆写在飞转场的全局记录与冻结像素。
+            return@appActionWithFeedback
+        }
         cardBounds.value?.let { bounds ->
             val sourceCoverBounds = coverBounds.value
             CardPositionManager.recordVideoCardPosition(

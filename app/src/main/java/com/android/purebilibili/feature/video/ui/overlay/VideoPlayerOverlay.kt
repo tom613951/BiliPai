@@ -2245,6 +2245,16 @@ private fun VideoPlayerOverlayContent(
         if (showVideoSettings) {
             CompositionLocalProvider(com.android.purebilibili.core.ui.components.LocalAppGlassMenuSource provides moreSource) {
                 VideoSettingsPanel(
+                    playerDiagnosticsEnabled = insightMode != PlayerSettingsStore.PlayerInsightMode.OFF,
+                    onPlayerDiagnosticsChange = { enabled ->
+                        if (!enabled) showInsightDetails = false
+                        scope.launch {
+                            SettingsManager.setPlayerInsightMode(
+                                context,
+                                if (enabled) PlayerSettingsStore.PlayerInsightMode.ALWAYS else PlayerSettingsStore.PlayerInsightMode.OFF,
+                            )
+                        }
+                    },
                     chapterDisplayMode = chapterDisplayMode,
                     onChapterDisplayModeChange = { mode ->
                         scope.launch { SettingsManager.setChapterDisplayMode(context, mode) }

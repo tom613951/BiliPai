@@ -205,6 +205,10 @@ internal fun StoryVideoCard(
     val coverCoordinates = remember { object { var value: LayoutCoordinates? = null } }
     val nativeCardSnapshot = rememberNativeVideoCardSnapshotController(video.bvid)
     val triggerCardClick by rememberUpdatedState(appActionWithFeedback {
+        if (CardPositionManager.isVideoNavigationDebounceActive()) {
+            // 防抖窗口内的点击注定被导航层拒绝；不得覆写在飞转场的全局记录与冻结像素。
+            return@appActionWithFeedback
+        }
         cardCoordinates.value?.takeIf { it.isAttached }?.videoCardSourceBoundsInRoot()?.let { bounds ->
             CardPositionManager.recordVideoCardPosition(
                 bvid = video.bvid,

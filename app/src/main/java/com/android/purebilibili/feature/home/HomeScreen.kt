@@ -290,6 +290,8 @@ fun HomeScreen(
     onSpaceClick: (Long) -> Unit = {},
     globalHazeState: dev.chrisbanes.haze.HazeState? = null,  //  [新增] 全局底栏模糊状态
     isTopLevelActive: Boolean = true,
+    /** 首页是否在屏幕上。图片加载只看这个，不看数据同步是否就绪。 */
+    pageOnScreen: Boolean = isTopLevelActive,
     visibleDuringNavigation: Boolean = false,
     isReturningFromVideoDetail: Boolean = false,
     isQuickReturningFromVideoDetail: Boolean = false,
@@ -2602,6 +2604,7 @@ fun HomeScreen(
                                      category = category,
                                      categoryState = pageCategoryState,
                                      isActive = homeFeedWorkAllowed && pagerState.currentPage == page,
+                                     pageOnScreen = pageOnScreen && pagerState.currentPage == page,
                                      visibleDuringNavigation = visibleDuringNavigation && pagerState.currentPage == page &&
                                          homeFeedWorkAllowed,
                                      gridState = contentGridState,

@@ -126,7 +126,7 @@ internal val settingsStaticDescriptionIndex: Map<String, String> = mapOf(
     "playback.fullscreen_swipe_seek_seconds" to "固定秒数模式下，左右拖动约半屏达到的秒数上限，数值越小越精确；不限制时按拖动距离调整进度；按视频时长比例调进度时不生效",
     "playback.hide_interactive_command_danmaku" to "隐藏画面内的关注、三连、UP 提示和投票；显示画面内的关注、三连、UP 提示和投票",
     "playback.home_settings.low_quality_home_cover_in_data_saver" to "省流量时进一步降低首页封面分辨率；关闭时保留高清尺寸，图片压缩质量仍遵循省流量模式",
-    "playback.hw_decode" to "推荐保持开启；只有遇到绿屏或无法播放时再尝试关闭，关闭后更耗电",
+    "playback.hw_decode" to "开启优先硬解，遇到绿屏可尝试关闭以优先系统软解；不可用时尝试其他解码器。软解可能更耗电，下次创建播放器时生效",
     "playback.image_preview3d_page_enabled" to "滑动图片时，使用立体翻页效果；普通图片浏览使用平面横滑",
     "playback.image_preview_long_press_save_enabled" to "查看图片时长按可分享、复制链接或保存；关闭后不响应图片长按操作",
     "playback.immersive_video_page_status_bar" to "状态栏背景随画面模糊，保留系统图标和手势条；状态栏使用黑色背景，保留系统图标和手势条",

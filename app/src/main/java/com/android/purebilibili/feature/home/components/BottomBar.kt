@@ -2654,7 +2654,8 @@ private fun MaterialBottomBar(
                             if (showIcon) {
                                 BottomBarReminderBadgeAnchor(
                                     item = item,
-                                    unreadCount = dynamicUnreadCount
+                                    unreadCount = dynamicUnreadCount,
+                                    badgeLift = 2.dp
                                 ) {
                                     if (skinIconPath != null) {
                                         BottomBarSkinIcon(
@@ -2829,6 +2830,7 @@ private fun OfficialMd3FloatingToolbarContent(
                         item = item,
                         unreadCount = dynamicUnreadCount,
                         floatingCompact = true,
+                        badgeLift = 2.dp,
                     ) {
                         AppIcon(
                             imageVector = resolveMaterialBottomBarIcon(item, selected),
@@ -2869,26 +2871,44 @@ private fun OfficialMd3FloatingToolbarContent(
                             animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
                             label = "md3FloatingSelectionContentColor",
                         )
-                        IconButton(
-                            onClick = onClick,
-                            colors = IconButtonDefaults.iconButtonColors(contentColor = selectionContentColor),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                if (indicatorProgress > 0f) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .graphicsLayer {
-                                                val scale = 0.4f + 0.6f * indicatorProgress
-                                                scaleX = scale
-                                                scaleY = scale
-                                                alpha = indicatorAlpha
-                                            }
-                                            .clip(CircleShape)
-                                            .background(selectionColors.container),
+                        Box(contentAlignment = Alignment.Center) {
+                            IconButton(
+                                onClick = onClick,
+                                colors = IconButtonDefaults.iconButtonColors(contentColor = selectionContentColor),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (indicatorProgress > 0f) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .graphicsLayer {
+                                                    val scale = 0.4f + 0.6f * indicatorProgress
+                                                    scaleX = scale
+                                                    scaleY = scale
+                                                    alpha = indicatorAlpha
+                                                }
+                                                .clip(CircleShape)
+                                                .background(selectionColors.container),
+                                        )
+                                    }
+                                    AppIcon(
+                                        imageVector = resolveMaterialBottomBarIcon(item, selected),
+                                        contentDescription = label,
                                     )
                                 }
-                                icon()
+                            }
+                            // 角标独立于圆形按钮绘制，避免右上角被按钮自身的轮廓裁剪。
+                            formatBottomBarDynamicReminderBadge(
+                                if (shouldShowBottomBarDynamicReminderBadge(item, dynamicUnreadCount)) {
+                                    dynamicUnreadCount
+                                } else 0
+                            )?.let { badgeText ->
+                                BottomBarReminderBadge(
+                                    badgeText = badgeText,
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 8.dp, end = 4.dp),
+                                )
                             }
                         }
                     }
@@ -5411,6 +5431,7 @@ private fun BottomBarReminderBadgeAnchor(
     unreadCount: Int = 0,
     modifier: Modifier = Modifier,
     floatingCompact: Boolean = false,
+    badgeLift: Dp = 0.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     BottomBarReminderBadgeAnchor(
@@ -5423,6 +5444,7 @@ private fun BottomBarReminderBadgeAnchor(
         ),
         modifier = modifier,
         floatingCompact = floatingCompact,
+        badgeLift = badgeLift,
         content = content
     )
 }
@@ -5433,6 +5455,7 @@ private fun BottomBarReminderBadgeAnchor(
     modifier: Modifier = Modifier,
     // 紧凑玻璃栏保留上沿空间；徽标完整避开图标轮廓。
     floatingCompact: Boolean = false,
+    badgeLift: Dp = 0.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     val badgeSize = if (badgeText == "•") 7.dp else 18.dp
@@ -5449,7 +5472,9 @@ private fun BottomBarReminderBadgeAnchor(
             Box(
                 modifier = Modifier.padding(
                     horizontal = badgeEndOverhang / 2,
-                    vertical = badgeTopOverhang / 2,
+                    // MD3 显式增加对称预留，让角标相对图标上移；图标保持居中，
+                    // 角标仍在锚点测量边界内，不用负偏移突破裁剪区域。
+                    vertical = badgeTopOverhang / 2 + badgeLift.coerceAtLeast(0.dp),
                 )
             ) {
                 content()
@@ -5481,6 +5506,7 @@ private fun BottomBarReminderBadge(
         if (!isDot) {
             AppText(
                 text = badgeText,
+                tapToCopyEnabled = false,
                 color = OpticalContrastPalette.Highlight,
                 style = appTabularNumberTextStyle(),
                 fontSize = 9.sp,

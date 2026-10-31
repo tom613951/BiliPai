@@ -1,5 +1,8 @@
 package com.android.purebilibili.feature.live
 
+import com.android.purebilibili.core.player.withAppVideoDecoderDiagnostics
+import com.android.purebilibili.core.player.withAppVideoDecoderPreference
+
 import com.android.purebilibili.core.ui.components.appGlassMenuSource
 import com.android.purebilibili.core.ui.AppContentColors
 
@@ -602,7 +605,7 @@ private fun LiveRoomScreen(
         ExoPlayer.Builder(context)
             .setRenderersFactory(
                 androidx.media3.exoplayer.DefaultRenderersFactory(context)
-                    .setEnableDecoderFallback(true)
+                    .withAppVideoDecoderPreference(context)
             )
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setAudioAttributes(
@@ -613,7 +616,7 @@ private fun LiveRoomScreen(
                 /* handleAudioFocus= */ handleAudioFocus,
             )
             .setHandleAudioBecomingNoisy(true)
-            .build().apply { playWhenReady = true }
+            .build().withAppVideoDecoderDiagnostics(context).apply { playWhenReady = true }
     }
     com.android.purebilibili.feature.video.screen.VideoDetailKeepScreenOnEffect(
         window = activity?.window,
