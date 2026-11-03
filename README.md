@@ -2,182 +2,133 @@
 
 <img src="docs/images/233娘.jpeg" height="96" alt="BiliPai" />
 
-# BiliPai (个人自用 Fork)
+# BiliPai
 
-**基于官方 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 同步的第三方 Bilibili Android 客户端**
+**原生、纯净、可扩展的第三方 BiliBili Android 客户端**
 
-<p>
-  <a href="https://github.com/tom613951/BiliPai">
-    <img src="https://img.shields.io/badge/Source-v0.7.5-007AFF?style=for-the-badge&logo=github" alt="源码版本" />
-  </a>
-  <a href="https://github.com/jay3-yy/BiliPai">
-    <img src="https://img.shields.io/badge/Upstream-jay3--yy%2FBiliPai-FF9500?style=for-the-badge&logo=github" alt="官方 Upstream" />
-  </a>
-</p>
+[简体中文](README.md) · [English](README_EN.md)
+
+<img src="https://img.shields.io/badge/Source-0.7.5%20%28547%29-007AFF?style=flat-square" alt="Source 0.7.5 (547)" />
+<img src="https://img.shields.io/badge/Android-8.0%2B-34C759?style=flat-square" alt="Android 8.0+" />
+<img src="https://img.shields.io/badge/License-GPLv3-FF3B30?style=flat-square" alt="GPLv3" />
+
+[下载](#下载与安装) · [Wiki](https://github.com/jay3-yy/BiliPai/wiki) · [Telegram 频道](https://t.me/bilipai666) · [Telegram 交流群](https://t.me/bilipai888/1)
 
 </div>
 
----
+基于 Kotlin 与 Jetpack Compose 打造，支持视频、番剧、直播、动态、消息与离线缓存，适配手机、平板与折叠屏。
 
-## 项目说明
+## 主要功能
 
-本仓库是 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 的个人定制分支，持续跟随官方源码同步，并在其上叠加个人补丁。
-
-当前基于官方 **v0.7.5**（`7fec76941`，versionCode 547）源码。**只同步代码，不提供预编译包。**
-
----
-
-## 个人定制改动
-
-1. **评论区二级回复遮罩与交互优化**
-   - 移除展开二级回复时的灰色背景遮罩层：`resolveVideoCommentSheetHostScrimAlpha` 峰值透明度固定为 `0f`，播放器上方不再出现灰色蒙层。
-   - 优化背景点击拦截：展开二级回复（`THREAD_DETAIL`）时不再拦截背景点击，也不会因点背景而关闭主面板。
-
-2. **禁用云端自动编译**
-   - 移除 `.github` 目录，避免第三方仓库触发 GitHub Actions 构建。
-
----
-
-## 安装包获取
-
-> **注意**：本仓库不提供预编译 APK，请自行构建（见下方「自行构建」）。
-> 历史版本仍可在 [Releases 页面](https://github.com/tom613951/BiliPai/releases) 下载。
-
-本仓库只跟随上游同步源码并叠加个人补丁，构建由使用者自行完成。
-
-### 构建变体说明
-
-| 变体 | 特性 |
+| 功能 | 说明 |
 | --- | --- |
-| `release` | 启用 R8 代码压缩 + 资源压缩，需自备密钥库签名 |
-| `smooth` | 继承 release 语义，`isDebuggable=false`，跳过 R8，用于本地快速验证 |
-| `dev` | 同 release，包名带 `.dev` 后缀，用于并存测试 |
+| 视频播放 | DASH、高清画质、弹幕、手势、倍速、播放记忆、后台播放与画中画 |
+| 听视频 | 沉浸式与黑胶模式、歌词、队列、定时关闭、系统媒体控制 |
+| 字幕与笔记 | 本地字幕导入导出、样式与时间调整；私有笔记、时间点与 AI 总结草稿 |
+| 番剧与直播 | 追番、自适应选集、大屏分栏与横屏布局；直播分区与实时弹幕 |
+| 动态与消息 | 关注动态、评论回复、图片预览与私信 |
+| 搜索与缓存 | 视频、UP 主与番剧搜索；离线下载、断点续传与本地播放 |
+| 外观与布局 | Google Material 3、Miuix、可选液态玻璃与弹性动效、动态取色、首页规则网格与大屏布局 |
+| 扩展能力 | 插件、DLNA / Google Cast 投屏、WebDAV 设置备份 |
 
-> **注意**：自行构建的 APK 与官方版应用 ID 相同，**安装前需先卸载官方版本**。
-> 若你之前安装过本仓库的历史预编译包（v0.6.4 及更早），自行构建时请沿用同一密钥库，
-> 否则需先卸载再安装，否则会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。
+部分画质需要登录或相应账号权限。外观、播放、弹幕与后台行为可在设置中调整。
 
-> **说明**：历史预编译包（v0.5.5 ~ v0.6.4）使用密钥库 `CN=BiliPai Personal`
-> （SHA-256 `44:B5:F2:B9:...:4B`，有效期至 2054）。v0.3.9-personal 及更早版本
-> 使用不同签名，从那些版本升级**必须先卸载**。
+## 界面预览
 
----
+<div align="center">
 
-## 自行构建
+**液态玻璃设计，贯穿全局**
 
-前置条件：JDK 21、Android SDK。
+截图仅展示部分界面下的液态玻璃效果。
 
-Miuix 依赖位于 GitHub Packages，**即使是公开包也要求鉴权**。需在 `~/.gradle/gradle.properties` 中配置（切勿提交到仓库）：
+<img src="docs/images/screenshot-glass-1.png" height="400" alt="BiliPai 首页" />
+<img src="docs/images/screenshot-glass-2.png" height="400" alt="BiliPai 外观设置" />
+<img src="docs/images/screenshot-glass-3.png" height="400" alt="BiliPai 视频详情" />
+<img src="docs/images/screenshot-glass-4.png" height="400" alt="BiliPai 搜索" />
 
-```properties
-gpr.user=<你的 GitHub 用户名>
-gpr.key=<你的 GitHub Token，需含 read:packages 权限>
-```
+</div>
 
-构建正式版还需在仓库根目录放置 `keystore.properties`（已在 `.gitignore` 中）：
+界面随版本、主题和设备尺寸有所不同。
 
-```properties
-storeFile=/absolute/path/to/your-release.jks
-storePassword=<密码>
-keyAlias=<别名>
-keyPassword=<密码>
-```
+截图之外，应用还提供弹幕轻触快捷操作、竖屏上滑全屏与动态环境光、听视频、AI 总结笔记、字幕导入导出、插件扩展、DLNA / Google Cast 投屏与 WebDAV 设置备份等；部分功能与 Android 版本相关。
 
-> **注意**：Windows 路径必须用正斜杠 `/` 或双反斜杠 `\\`，不能写单反斜杠。
-> `java.util.Properties` 会把 `\` 当转义符，`C:\Users\...\release.jks` 会被解析成
-> `C:Users...release.jks`（路径不成立），`hasReleaseKeystore` 随之为 `false`，
-> release 变体**静默回退成未签名 APK**，`assembleRelease` 不报错但产物装不上。
-> 正确写法：`storeFile=C:/Users/you/release.jks`。
-> 排查手段：`./gradlew :app:signingReport | grep -A3 "Variant: release"`，
-> 看到 `Config: release` 才算生效（`Config: none` 即路径没读到）。
+## 下载与安装
 
-生成密钥库：
+从 [Telegram 频道](https://t.me/bilipai666) 获取安装包与发布说明，交流反馈可加入 [Telegram 群组](https://t.me/bilipai888/1)。
+
+- 系统要求：Android 8.0+
+- 登录方式：TV 扫码、密码、短信验证码或 Cookie 导入
+- 安装 APK 时需允许对应来源安装应用
+
+## 插件
+
+内置空降助手、去广告、Anime4K、弹幕增强、夜间护眼、推荐与投屏等插件，并提供多种扩展方式：
+
+- JSON / `.bp` 规则：通过 URL 导入，用于内容过滤与弹幕处理等。
+- `.bilipai.js` 插件：扩展内容源，支持直播源、影视目录与网页抓取。
+- `.bpskin` 皮肤包：导入背景、颜色与部分动效资源，不执行代码。
+- `.bpplugin` Kotlin 插件包：目前支持包预览与能力授权，尚不执行外部 Dex。
+
+导入第三方插件前，请检查来源与权限声明。开发说明见 [插件开发指南](docs/PLUGIN_DEVELOPMENT.md)、[Kotlin 插件 SDK](plugins/sdk/README.md) 与 [JS 插件示例](examples/plugins/README.md)。
+
+## 最近更新
+
+- 切换倍速保留播放源与首帧；评论预览和动态热评直接定位对应楼层。
+- 推荐流减少重复请求、统一卡片请求量；改进拖动快进幅度及平板评论加载体验。
+- 空间增加漫画、文集、预约、勋章墙和更多账号入口；“网页投稿”支持原生列表、筛选、排序与跳页。
+- 跨设备续播优先使用最新云端进度，修正分 P、进度回退和历史记录显示。
+- 修复快速进入评论时误报加载失败，以及评论视频链接点击和长按菜单。
+- 修复私信键盘遮挡、播放器数量角标裁切，统一分区拖动振动并增加剧集卡片间距。
+- 内置网页跟随应用主题并保留浏览进度，修复空间切页和退出时的回弹节点崩溃。
+
+完整记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 构建
+
+环境：JDK 21、Android SDK 37。
 
 ```bash
-keytool -genkeypair -v -keystore release.jks -alias bilipai \
-  -keyalg RSA -keysize 4096 -validity 10000
+git clone https://github.com/jay3-yy/BiliPai.git
+cd BiliPai
+./gradlew :app:assembleDev
 ```
 
-构建：
+Miuix 依赖从 GitHub Packages 获取，需在本机 `~/.gradle/gradle.properties` 配置 `gpr.user`、`gpr.key`（或设置 `GITHUB_ACTOR`、`GITHUB_TOKEN`）。APK 输出至 `app/build/outputs/bilipai/dev/`。`app/google-services.json` 为可选配置，缺失时跳过 Firebase。
 
-```bash
-./gradlew :app:assembleRelease
-```
+## 参与贡献
 
-产物位于 `app/build/outputs/bilipai/release/BiliPai-<version>.apk`（上游自 0.4.x 起改由 export task 输出规范名）。若缺少 `keystore.properties`，release 变体将回退为未签名（不影响 `debug` / `smooth` / `dev`）。
+欢迎通过 [Issue](https://github.com/jay3-yy/BiliPai/issues/new/choose) 反馈问题、提出建议，也欢迎提交 [Pull Request](https://github.com/jay3-yy/BiliPai/pulls)，一起完善功能和翻译。
 
-> **提示**：只想要一个能用的包、不在意 R8 压缩？用 `./gradlew :app:assembleSmooth`
-> 跳过 R8，构建时间约为 release 的一半，产物在 `outputs/bilipai/smooth/`。
+## 致谢
 
-> **提示**：内存吃紧时，`gradle.properties` 已配置为单 JVM 构建
-> （`kotlin.compiler.execution.strategy=in-process` + `-Xmx8g`），
-> 实测峰值约 8.7GB。若物理内存不足 16GB，把 `org.gradle.jvmargs` 的 `-Xmx8g`
-> 降到 `-Xmx6g`、`org.gradle.workers.max` 从 8 降到 4。
+- [Kotlin](https://kotlinlang.org/) — 开发语言与协程
+- [Jetpack Compose](https://developer.android.com/jetpack/compose) — 声明式 UI 框架
+- [AndroidX Media3](https://github.com/androidx/media) — Media3 / ExoPlayer 播放引擎
+- [FFmpeg](https://ffmpeg.org/) — 音频解码
+- [Room](https://developer.android.com/training/data-storage/room) / [DataStore](https://developer.android.com/topic/libraries/architecture/datastore) — 本地数据与偏好存储
+- [Retrofit](https://github.com/square/retrofit) / [OkHttp](https://github.com/square/okhttp) — 网络请求
+- [Coil](https://github.com/coil-kt/coil) — 图片加载
+- [Lottie](https://github.com/airbnb/lottie-android) — 矢量动画
+- [MaterialKolor](https://github.com/jordond/MaterialKolor) — 动态主题配色
+- [Compose Rich Editor](https://github.com/MohamedRejeb/Compose-Rich-Editor) — 富文本编辑
+- [DanmakuRenderEngine](https://github.com/bytedance/DanmakuRenderEngine) — 弹幕渲染引擎
+- [BiliBili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) — B 站 API 文档
+- [BiliBiliSponsorBlock](https://github.com/hanydd/BilibiliSponsorBlock) — 空降助手数据与 API
+- [Miuix](https://github.com/compose-miuix-ui/miuix) — 界面组件库
+- [Haze](https://github.com/chrisbanes/haze) — 毛玻璃效果
+- [PiliPlus](https://github.com/bggRGjQaUbCoE/PiliPlus) — 全局应用交互参考
+- [Bili Pilot](https://github.com/siwei-yuan/bili-pilot) — CDN 选线参考
 
-> **限制**：项目路径不能包含非 ASCII 字符（含中文的目录会导致 AGP 直接拒绝构建）。
+其余依赖与来源见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
----
+## 许可证与声明
 
-## 上游缺陷修复与贡献
+本项目采用 [GPLv3](LICENSE)。分发时请遵守许可证，提供对应源代码并保留版权声明。
 
-构建本仓库时发现并修复了上游的问题，**均已合入官方仓库**：
+本项目为非官方客户端，与 BiliBili 无隶属关系。内容版权归对应权利方所有，使用时请遵守相关法律法规与平台规则。登录信息保存在本地；使用统计可在设置中管理。
 
-| 编号 | 类型 | 标题 | 状态 |
-| --- | --- | --- | --- |
-| [#882](https://github.com/jay3-yy/BiliPai/issues/882) | Issue | 干净 clone 无法构建：`.gitignore` 的 `**/build/` 静默排除了插件源码包 `com.android.purebilibili.build` | CLOSED |
-| [#884](https://github.com/jay3-yy/BiliPai/pull/884) | PR | 补齐缺失的 `ComposeDetachedOwnerGuard` 插件源码 | MERGED |
-| [#885](https://github.com/jay3-yy/BiliPai/pull/885) | PR | 让该插件在全新 CI runner（无 Gradle 缓存）上也能工作 | MERGED |
+<div align="center">
 
-### #882 / #884
+<sub>源码版本 0.7.5（547） · 更新于 2026-11-02 · Made by [YangY](https://x.com/YangY_0x00)</sub>
 
-上游 v0.3.x 在 `app/build.gradle.kts` 中引用了 Gradle 插件 `ComposeDetachedOwnerGuard`，但 `.gitignore` 里的 `**/build/` 规则同时匹配了 Java 包目录 `com/android/purebilibili/build/`，导致插件源码被 git 静默忽略（`git add` 不报错也不提示），公开仓库中缺失该实现。任何干净 clone 都会在配置阶段直接失败。
-
-修复方式：在 `**/build/` 之后补充否定规则放行该包目录，并补齐插件实现。
-
-### #885
-
-上述实现改为扫描 Gradle transform 缓存并就地改写其中的 `classes.jar`。全新 CI runner 没有该缓存，而插件任务是编译任务的前置依赖、会在缓存被填充之前执行，因此每次干净检出都失败：
-
-```
-[ComposeDetachedOwnerGuard] no compose-ui classes.jar found under
-/home/runner/.gradle/caches; run a build once so the transform cache is
-populated, then retry.
-```
-
-修复方式：改为直接从依赖解析取得 compose-ui AAR（`detachedConfiguration`，版本由 BOM 与解析图决定、不硬编码），补丁产物写入项目内构建目录，**不再读写全局 Gradle 缓存**。同时修掉了旧实现的两个副作用 —— 改写时丢失 jar 目录项（内层 `classes.jar` 从 1375 项掉到 1333），以及在 compose-ui 缺席时静默报成功而非显式失败。
-
-> 说明：这两个修复现已属于上游代码，**本仓库不再携带任何插件相关改动**，与上游逐字节一致。
-
-### 后续：上游改用 AGP 原生插桩（v0.3.6）
-
-我在 [#880](https://github.com/jay3-yy/BiliPai/issues/880) 下反馈过：上述实现虽然能产出正确的补丁 AAR，但**该产物没有被接入 `:app` 的编译 classpath**，因此运行时崩溃仍未消除。
-
-上游在 v0.3.6（提交 `3608e0347`）采纳了这一结论，并选择了更彻底的方案 —— 放弃 AAR 补丁路线，改用 **AGP 原生 `AsmClassVisitorFactory` 插桩**：
-
-```java
-components.onVariants(components.selector().all(), (Action<Variant>) variant -> {
-    variant.getInstrumentation().transformClassesWith(
-            ComposeDetachedOwnerGuard.class, InstrumentationScope.ALL, parameters -> Unit.INSTANCE);
-    variant.getInstrumentation().setAsmFramesComputationMode(
-            FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS);
-});
-```
-
-插件由 333 行精简至 33 行，`DetachedOwnerFallback.java` 随之删除。官方 CHANGELOG 的表述是「**修正旧补丁仅生成 AAR、未接入打包流程的问题**」。
-
-该方案在编译期直接改写字节码，产物天然进入打包流程。本仓库构建时已验证生效：`Task :app:transformReleaseClassesWithAsm` 执行，`LayoutNodeSubcompositionsState.getOutOfFrameExecutor()` 中注入 `isAttached` 守卫，未附着时直接返回 `null` 而非抛出 `IllegalStateException`。
-
----
-
-## 相关链接
-
-- **官方上游**：[jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai)
-- **本 Fork**：[tom613951/BiliPai](https://github.com/tom613951/BiliPai)
-
----
-
-## 许可与归属
-
-本项目基于官方开源项目二次构建，**全部核心功能与实现均归 [jay3-yy](https://github.com/jay3-yy/BiliPai) 及上游贡献者所有**，本仓库仅包含少量个人定制补丁，不改动任何核心业务逻辑。
-
-请遵守原项目的开源许可与相关法律法规。使用本客户端观看、下载或分享内容时，请遵守对应平台规则。如涉及版权或权益问题，请联系本仓库处理。
+</div>
