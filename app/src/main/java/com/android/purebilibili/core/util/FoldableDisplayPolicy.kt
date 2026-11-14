@@ -42,6 +42,8 @@ data class AppDisplayContext(
     val naturalOrientation: AppDisplayNaturalOrientation = AppDisplayNaturalOrientation.Unknown,
     val detectionBasis: AppFoldableDetectionBasis = AppFoldableDetectionBasis.None,
     val isInMultiWindowMode: Boolean = false,
+    val smallestScreenWidthDp: Int = 0,
+    val foldPosture: AppFoldPosture = AppFoldPosture.None,
 ) {
     val isFoldableCoverWindow: Boolean
         get() = foldableDisplayRole == AppFoldableDisplayRole.Cover
@@ -66,6 +68,8 @@ internal data class AppDisplayContextInput(
     val hasCurrentFoldingFeature: Boolean = false,
     val hasHingeAngleSensor: Boolean = false,
     val isInMultiWindowMode: Boolean = false,
+    val smallestScreenWidthDp: Int = 0,
+    val foldPosture: AppFoldPosture = AppFoldPosture.None,
 )
 
 internal fun resolveAppDisplayContext(input: AppDisplayContextInput): AppDisplayContext {
@@ -102,6 +106,8 @@ internal fun resolveAppDisplayContext(input: AppDisplayContextInput): AppDisplay
         // Some vendor builds omit the hinge-angle feature. Retain the existing metrics signal
         // only as a low-confidence, full-window fallback; never use it in multi-window mode.
         !input.isInMultiWindowMode &&
+            // 平板内容区可能被系统栏压到 600dp 以下，不能仅凭这个差值推断为外屏。
+            input.smallestScreenWidthDp < LARGE_SCREEN_SMALLEST_WIDTH_DP &&
             maximumShortSideDp != null &&
             maximumShortSideDp >= LARGE_SCREEN_SMALLEST_WIDTH_DP &&
             currentShortSideDp < LARGE_SCREEN_SMALLEST_WIDTH_DP ->
@@ -127,6 +133,8 @@ internal fun resolveAppDisplayContext(input: AppDisplayContextInput): AppDisplay
         ),
         detectionBasis = basis,
         isInMultiWindowMode = input.isInMultiWindowMode,
+        smallestScreenWidthDp = input.smallestScreenWidthDp,
+        foldPosture = input.foldPosture,
     )
 }
 
@@ -191,6 +199,7 @@ internal fun isLandscapeNaturalDisplay(
 internal fun Activity.resolveAppDisplayContext(
     configuration: Configuration = resources.configuration,
     hasCurrentFoldingFeature: Boolean = false,
+    foldPosture: AppFoldPosture = AppFoldPosture.None,
 ): AppDisplayContext {
     val density = resources.displayMetrics.density.coerceAtLeast(1f)
     val maximumBounds = runCatching {
@@ -207,6 +216,7 @@ internal fun Activity.resolveAppDisplayContext(
         AppDisplayContextInput(
             currentWindowWidthDp = configuration.screenWidthDp,
             currentWindowHeightDp = configuration.screenHeightDp,
+            smallestScreenWidthDp = configuration.smallestScreenWidthDp,
             maximumWindowWidthDp = maximumBounds?.let { (it.width() / density).toInt() },
             maximumWindowHeightDp = maximumBounds?.let { (it.height() / density).toInt() },
             configurationOrientation = configuration.orientation,
@@ -216,6 +226,7 @@ internal fun Activity.resolveAppDisplayContext(
             hasCurrentFoldingFeature = hasCurrentFoldingFeature,
             hasHingeAngleSensor = hasHingeAngleSensor,
             isInMultiWindowMode = isInMultiWindowMode,
+            foldPosture = foldPosture,
         )
     )
 }

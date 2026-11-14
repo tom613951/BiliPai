@@ -529,11 +529,11 @@ fun BottomControlBar(
     val nearbyHandoff = com.android.purebilibili.feature.nearby.LocalNearbyHandoff.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val hideCenterPlayback = rememberHideGlassCenterPlayback()
+    val hideCenterPlayback = rememberHideCenterPlayback()
     val toggleCenterPlayback: () -> Unit = {
         scope.launch {
             com.android.purebilibili.core.store.player.PlayerSettingsStore
-                .setHideGlassCenterPlayback(context, !hideCenterPlayback)
+                .setHideCenterPlayback(context, !hideCenterPlayback)
         }
     }
     val configuration = LocalConfiguration.current
@@ -609,10 +609,6 @@ fun BottomControlBar(
         resolveVideoProgressBarLayoutPolicy(
             widthDp = uiLayoutWidthDp
         )
-    }
-    val fullscreenToggleTouchTargetDp = remember(layoutPolicy.fullscreenIconSizeDp, isFullscreen) {
-        if (isFullscreen) PlayerChromeLayout.CircularButtonSizeDp
-        else resolveFullscreenToggleTouchTargetDp(iconSizeDp = layoutPolicy.fullscreenIconSizeDp)
     }
     val showEpisodeButton = remember(isFullscreen, hasEpisodeEntry, uiLayoutWidthDp) {
         shouldShowEpisodeButtonInControlBar(
@@ -861,6 +857,7 @@ fun BottomControlBar(
             progressBarContent()
             PlayerControlViewPointSegments(
                 progressProvider = progressProvider,
+                    positionProvider = displayedPositionProvider,
                 viewPoints = visibleViewPoints,
                 onSeek = onSeek,
                 spacing = layoutPolicy.progressSpacingDp.dp,
@@ -1963,22 +1960,23 @@ fun BottomControlBar(
                     }
                 }
             }
-            Spacer(modifier = Modifier.width(if (isFullscreen) 8.dp else layoutPolicy.rightActionSpacingDp.dp))
-            // Fullscreen
-            PlayerControlGlassDock(enabled = true, shape = androidx.compose.foundation.shape.CircleShape) {
-                Box(
-                    modifier = Modifier
-                        .size(fullscreenToggleTouchTargetDp.dp)
-                        .testTag("player_fullscreen_toggle")
-                        .consumeTap(onToggleFullscreen),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AppIcon(
-                        imageVector = if (isFullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
-                        contentDescription = if (isFullscreen) "退出横屏" else "横屏",
-                        tint = Color.White,
-                        modifier = Modifier.size(layoutPolicy.fullscreenIconSizeDp.dp)
-                    )
+            if (!isFullscreen || configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                Spacer(modifier = Modifier.width(layoutPolicy.rightActionSpacingDp.dp))
+                PlayerControlGlassDock(enabled = true, shape = androidx.compose.foundation.shape.CircleShape) {
+                    Box(
+                        modifier = Modifier
+                            .size(resolveFullscreenToggleTouchTargetDp(layoutPolicy.fullscreenIconSizeDp).dp)
+                            .testTag("player_fullscreen_toggle")
+                            .consumeTap(onToggleFullscreen),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AppIcon(
+                            imageVector = if (isFullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                            contentDescription = if (isFullscreen) "退出全屏" else "横屏",
+                            tint = Color.White,
+                            modifier = Modifier.size(layoutPolicy.fullscreenIconSizeDp.dp)
+                        )
+                    }
                 }
             }
         }

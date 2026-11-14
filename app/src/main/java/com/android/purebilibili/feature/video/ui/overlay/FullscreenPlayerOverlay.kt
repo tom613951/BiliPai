@@ -223,6 +223,21 @@ internal fun shouldStartFullscreenDragGesture(
 fun FullscreenPlayerOverlay(
     miniPlayerManager: MiniPlayerManager,
     onDismiss: () -> Unit,
+    onNavigateToDetail: () -> Unit,
+) {
+    val config = com.android.purebilibili.core.ui.LocalAppThemeConfig.current
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.android.purebilibili.core.ui.LocalAppThemeConfig provides config.copy(liquidGlassEnabled = config.playerGlassEnabled),
+    ) {
+        FullscreenPlayerOverlayContent(miniPlayerManager, onDismiss, onNavigateToDetail)
+    }
+}
+
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun FullscreenPlayerOverlayContent(
+    miniPlayerManager: MiniPlayerManager,
+    onDismiss: () -> Unit,
     onNavigateToDetail: () -> Unit
 ) {
     val autoHide = rememberPlayerControlsAutoHide(4_000L)
@@ -272,6 +287,18 @@ fun FullscreenPlayerOverlay(
     val rootFocusRequester = remember { FocusRequester() }
     val inputDevicePolicy = com.android.purebilibili.core.ui.adaptive.resolveInputDevicePolicy(
         com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current,
+    )
+    // Tabletop 姿态：画面限在铰链上屏，控制条自然落在下屏；非 tabletop 返回 null 走整窗布局。
+    val appWindowAdaptiveInfo = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current
+    val latestDisplayContext by rememberUpdatedState(appWindowAdaptiveInfo.displayContext)
+    val configuration = LocalConfiguration.current
+    val tabletopLayoutPolicy = com.android.purebilibili.core.util.resolvePlayerTabletopLayoutPolicy(
+        foldPosture = appWindowAdaptiveInfo.posture,
+        hingeOrientation = appWindowAdaptiveInfo.foldingFeature.hingeOrientation,
+        hingeTopPx = appWindowAdaptiveInfo.foldingFeature.hingeBounds?.top,
+        windowWidthPx = (configuration.screenWidthDp * density.density).toInt(),
+        windowHeightPx = (configuration.screenHeightDp * density.density).toInt(),
+        density = density.density,
     )
     val scope = rememberCoroutineScope()
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
@@ -454,9 +481,6 @@ fun FullscreenPlayerOverlay(
         val desktopFullscreenRequested =
             AppWindowSystemUiController.requestDesktopFullscreen(activity, enter = true)
 
-        // 设置横屏
-        activity.applyPlayerRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
-
         //  首次进入时应用沉浸式
         AppWindowSystemUiController.enterImmersive(window)
 
@@ -488,7 +512,8 @@ fun FullscreenPlayerOverlay(
             activity.applyPlayerRequestedOrientation(
                 resolveFullscreenOverlayExitRequestedOrientation(
                     originalRequestedOrientation = originalOrientation
-                )
+                ),
+                displayContext = latestDisplayContext,
             )
 
             AppWindowSystemUiController.restore(window, originalSystemUi)
@@ -499,6 +524,14 @@ fun FullscreenPlayerOverlay(
             // 取消屏幕常亮
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    // 姿态变化只更新方向请求，不重启系统栏快照和播放器绑定。
+    LaunchedEffect(context, appWindowAdaptiveInfo.displayContext) {
+        context.findHostActivity()?.applyPlayerRequestedOrientation(
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
+            displayContext = appWindowAdaptiveInfo.displayContext,
+        )
     }
 
     DisposableEffect(context, keepFullscreenPlaybackAwake) {
@@ -1058,8 +1091,9 @@ fun FullscreenPlayerOverlay(
             }
         }
 
-        // 视频播放器
-        player?.let { exoPlayer ->
+        // 视频播放器：tabletop 下画面限于铰链上屏，其余姿态整窗居中。
+        val fullscreenVideoSurface: @Composable () -> Unit = {
+            player?.let { exoPlayer ->
             val useTextureSurface = com.android.purebilibili.feature.video.ui.components.rememberCompatibleVideoTextureSurface(
                 exoPlayer, miniPlayerManager.cachedUiState?.currentQuality ?: 0,
             )
@@ -1155,6 +1189,23 @@ fun FullscreenPlayerOverlay(
                     }
                 }
             }
+            }
+        }
+
+        val tabletopVideoHostHeightDp = tabletopLayoutPolicy.videoHostHeightDp?.dp
+        if (tabletopVideoHostHeightDp != null) {
+            // 上屏分区：画面与弹幕对齐铰链上方，控制条由下方窗格承接。
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(tabletopVideoHostHeightDp)
+                    .align(Alignment.TopStart),
+                contentAlignment = Alignment.Center,
+            ) {
+                fullscreenVideoSurface()
+            }
+        } else {
+            fullscreenVideoSurface()
         }
 
         // Same stable hit surface as inline/fullscreen detail playback; controls stay above it.

@@ -18,12 +18,14 @@ import androidx.compose.animation.fadeOut
 import com.android.purebilibili.core.ui.components.AppHorizontalPager as HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
@@ -55,6 +57,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.material3.MaterialTheme
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -80,6 +83,7 @@ import com.android.purebilibili.feature.home.PopularSubCategory
 import com.android.purebilibili.feature.home.HomeScreen
 import com.android.purebilibili.feature.home.HomeViewModel
 import com.android.purebilibili.core.util.applyPlayerRequestedOrientation
+import com.android.purebilibili.core.util.WindowHeightSizeClass
 import com.android.purebilibili.core.ui.wallpaper.LocalHomeWallpaperSelection
 import com.android.purebilibili.core.ui.wallpaper.LocalWallpaperPlaybackCoordinator
 import com.android.purebilibili.core.ui.wallpaper.WallpaperPlaybackCoordinator
@@ -210,6 +214,10 @@ import com.android.purebilibili.core.ui.motion.emphasizedExitTween
 import com.android.purebilibili.core.ui.motion.softLandingSpring
 import com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo
 import com.android.purebilibili.core.util.LocalWindowSizeClass
+import com.android.purebilibili.core.util.VideoDetailPresentationInput
+import com.android.purebilibili.core.util.VideoDetailPresentationMode
+import com.android.purebilibili.core.util.resolveCompanionPaneWidthFraction
+import com.android.purebilibili.core.util.resolveVideoDetailPresentation
 import com.android.purebilibili.core.util.shouldUseSidebarNavigationForLayout
 import com.android.purebilibili.core.plugin.skin.rememberUiSkinState
 // import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass (Removed)
@@ -261,7 +269,6 @@ import com.android.purebilibili.navigation3.shouldBindVideoDetailBackPreviewPlay
 import com.android.purebilibili.navigation3.shouldActivateVideoDetailPlaybackSession
 import com.android.purebilibili.navigation3.shouldRecoverVideoPlayerAfterBackCancellation
 import com.android.purebilibili.navigation3.resolveBiliPaiVideoSource
-import com.android.purebilibili.navigation3.shouldUseMiuixVideoCardMorph
 import com.android.purebilibili.navigation3.predictiveback.BiliPaiPredictiveBackAnimationStyle
 import com.android.purebilibili.navigation3.predictiveback.BiliPaiPredictiveBackExitDirection
 import com.android.purebilibili.navigation3.resolveInitialBiliPaiBackStack
@@ -295,7 +302,7 @@ import java.nio.charset.StandardCharsets
 // 定义路由参数结构
 object VideoRoute {
     const val base = "video"
-    const val route = "$base/{bvid}?cid={cid}&cover={cover}&startAudio={startAudio}&autoPortrait={autoPortrait}&fullscreen={fullscreen}&resumePositionMs={resumePositionMs}&commentRootRpid={commentRootRpid}&commentTargetRpid={commentTargetRpid}&initialVertical={initialVertical}&directPortraitEntry={directPortraitEntry}"
+    const val route = "$base/{bvid}?cid={cid}&cover={cover}&startAudio={startAudio}&autoPortrait={autoPortrait}&fullscreen={fullscreen}&resumePositionMs={resumePositionMs}&commentRootRpid={commentRootRpid}&commentTargetRpid={commentTargetRpid}&initialVertical={initialVertical}&directPortraitEntry={directPortraitEntry}&title={title}"
 
     internal fun resolveVideoRoutePath(
         bvid: String,
@@ -309,10 +316,12 @@ object VideoRoute {
         commentTargetRpid: Long = 0L,
         initialVertical: Boolean = false,
         directPortraitEntry: Boolean = false,
+        title: String = "",
     ): String {
         val initialVerticalQuery = if (initialVertical) "&initialVertical=true" else ""
         val directPortraitQuery = if (directPortraitEntry) "&directPortraitEntry=true" else ""
-        return "$base/$bvid?cid=$cid&cover=$encodedCover&startAudio=$startAudio&autoPortrait=$autoPortrait&fullscreen=$fullscreen&resumePositionMs=${resumePositionMs.coerceAtLeast(0L)}&commentRootRpid=${commentRootRpid.coerceAtLeast(0L)}&commentTargetRpid=${commentTargetRpid.coerceAtLeast(0L)}$initialVerticalQuery$directPortraitQuery"
+        val titleQuery = if (title.isNotBlank()) "&title=${Uri.encode(title)}" else ""
+        return "$base/$bvid?cid=$cid&cover=$encodedCover&startAudio=$startAudio&autoPortrait=$autoPortrait&fullscreen=$fullscreen&resumePositionMs=${resumePositionMs.coerceAtLeast(0L)}&commentRootRpid=${commentRootRpid.coerceAtLeast(0L)}&commentTargetRpid=${commentTargetRpid.coerceAtLeast(0L)}$initialVerticalQuery$directPortraitQuery$titleQuery"
     }
 
     // 构建 helper
@@ -328,6 +337,7 @@ object VideoRoute {
         commentTargetRpid: Long = 0L,
         initialVertical: Boolean = false,
         directPortraitEntry: Boolean = false,
+        title: String = "",
     ): String {
         val encodedCover = Uri.encode(coverUrl)
         return resolveVideoRoutePath(
@@ -342,6 +352,7 @@ object VideoRoute {
             commentTargetRpid = commentTargetRpid,
             initialVertical = initialVertical,
             directPortraitEntry = directPortraitEntry,
+            title = title,
         )
     }
 }
@@ -374,6 +385,7 @@ internal fun resolveStandardVideoRoute(
     commentTargetRpid: Long = 0L,
     initialVertical: Boolean = false,
     directPortraitEntry: Boolean = false,
+    title: String = "",
 ): String {
     val encodedCover = URLEncoder.encode(coverUrl, StandardCharsets.UTF_8.toString())
     return VideoRoute.resolveVideoRoutePath(
@@ -388,6 +400,7 @@ internal fun resolveStandardVideoRoute(
         commentTargetRpid = commentTargetRpid,
         initialVertical = initialVertical,
         directPortraitEntry = directPortraitEntry,
+        title = title,
     )
 }
 
@@ -404,12 +417,12 @@ private fun BiliPaiNavKey.toPrivacyNavigationTarget(): PrivacyNavigationTarget {
     }
 }
 
-@androidx.media3.common.util.UnstableApi
 // @OptIn(ExperimentalMaterial3WindowSizeClassApi::class) (Removed)
 // 转场时钟卡住多久后强制当作空闲，避免整页后台工作被永久挡掉。
 private const val CARD_TRANSITION_STUCK_TIMEOUT_MS = 1_500L
 
 @Composable
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 fun AppNavigation(
     //  小窗管理器
     miniPlayerManager: MiniPlayerManager? = null,
@@ -419,9 +432,11 @@ fun AppNavigation(
     pendingVideoId: String? = null,
     pendingShortcutRoute: String? = null,
     pendingNavigationRoute: String? = null,
+    pendingAppShortcutNavIndex: Int? = null,
     onPendingVideoIdConsumed: (String) -> Unit = {},
     onPendingShortcutRouteConsumed: (String) -> Unit = {},
     onPendingNavigationRouteConsumed: (String) -> Unit = {},
+    onPendingAppShortcutNavIndexConsumed: (Int) -> Unit = {},
     initialSearchKeyword: String? = null,
     onInitialSearchKeywordConsumed: (String) -> Unit = {},
     onVideoDetailEnter: () -> Unit = {},
@@ -437,8 +452,10 @@ fun AppNavigation(
     mainHazeState: dev.chrisbanes.haze.HazeState? = null, //  全局 Haze 状态
     onBrandFeedbackBottomInsetChanged: (androidx.compose.ui.unit.Dp) -> Unit = {},
     entryDialogsBlocked: Boolean = false,
+    initialVideoRoute: String? = null,
+    videoActivityPlaybackActive: Boolean = true,
+    onVideoActivityHome: (() -> Unit)? = null,
 ) {
-    val homeViewModel: HomeViewModel = viewModel()
     val coroutineScope = rememberCoroutineScope()
     val videoDetailViewModelOwners = remember {
         mutableMapOf<BiliPaiNavKey.VideoDetail, ViewModelStoreOwner>()
@@ -446,6 +463,22 @@ fun AppNavigation(
     
     // 单一首页视觉配置源：减少根导航层多路 DataStore 收集导致的全局重组。
     val context = androidx.compose.ui.platform.LocalContext.current
+    val hostActivity = context.findActivity() as androidx.activity.ComponentActivity
+    var officialVideoChildActive by rememberSaveable { mutableStateOf(false) }
+    val hostWindowFocused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(hostWindowFocused) {
+        if (hostWindowFocused) officialVideoChildActive = false
+    }
+    val homeViewModel by remember(hostActivity) {
+        lazy { androidx.lifecycle.ViewModelProvider(hostActivity)[HomeViewModel::class.java] }
+    }
+    val videoActivityWindowVisible = if (initialVideoRoute != null) {
+        val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+        // 原生 Dialog 会接管窗口焦点，但宿主页面仍可见，不能因此撤掉菜单。
+        // 动画和逐帧工作继续在各自的 rememberVisualWorkActive 门控中检查焦点。
+        com.android.purebilibili.core.ui.LocalVisualWorkAllowed.current &&
+            lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+    } else true
     val windowConfiguration = androidx.compose.ui.platform.LocalConfiguration.current
     val windowDensity = androidx.compose.ui.platform.LocalDensity.current
     androidx.compose.runtime.SideEffect {
@@ -455,6 +488,8 @@ fun AppNavigation(
         )
     }
     val application = remember(context) { context.applicationContext as Application }
+    val navigationFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val navigationKeyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     // Navigation3 的条目级 ViewModelStore 不一定携带 Application extras，设置页统一从根导航注入。
     val settingsViewModel: SettingsViewModel = viewModel(
         factory = remember(application) { SettingsViewModelFactory(application) }
@@ -507,10 +542,11 @@ fun AppNavigation(
             homeSettings = homeSettings,
         )
     }
-    val cardTransitionEnabled = appearance.cardTransitionEnabled
-    val videoTransitionRealtimeBlurEnabled by SettingsManager
-        .getVideoTransitionRealtimeBlurEnabled(context)
-        .collectAsStateWithLifecycle(initialValue = false)
+    // 一镜到底仅由系统窗口承接；应用内导航统一使用普通页面转场。
+    val cardTransitionEnabled = false
+    val videoTransitionRealtimeBlurEnabled by remember(context) {
+        SettingsManager.getVideoTransitionRealtimeBlurEnabled(context)
+    }.collectAsStateWithLifecycle(initialValue = false)
     val isBottomBarBlurEnabled = appearance.bottomBarBlurEnabled
     val bottomBarLabelMode = appearance.bottomBarLabelMode
     val isBottomBarFloating = appearance.bottomBarFloating
@@ -591,15 +627,18 @@ fun AppNavigation(
     // 缓存缺失时等待 DataStore 首值；先用 false 建栈会让恢复备份后的本次启动进错首页。
     val launchToPortraitFeedOnStartupAtInit = resolvedPortraitStartupRoute ?: return
 
-    val videoSharedTransitionSpeedSettings = remember(
-        homeSettings.videoSharedTransitionSpeed,
-        homeSettings.videoSharedTransitionCustomDurationMillis,
-    ) {
-        VideoSharedTransitionSpeedSettings(
-            speed = homeSettings.videoSharedTransitionSpeed,
-            customDurationMillis = homeSettings.videoSharedTransitionCustomDurationMillis,
-        )
-    }
+    // 直播、番剧等非视频独立窗口按显式入口处理，不恢复内存终止快照。
+    val windowInitialKey = initialVideoRoute?.let(::legacyRouteToBiliPaiNavKey)
+    val nonVideoWindowEntry = windowInitialKey != null && windowInitialKey !is BiliPaiNavKey.VideoDetail
+    val memoryRecovery = com.android.purebilibili.navigation3.rememberFairMemoryNavigationRecovery(
+        context = context,
+        explicitEntry = agreementRequired || pendingVideoId != null || pendingShortcutRoute != null ||
+            pendingNavigationRoute != null || initialSearchKeyword != null || nonVideoWindowEntry,
+        expectedVideoBvid = (windowInitialKey as? BiliPaiNavKey.VideoDetail)?.bvid,
+    ) ?: return
+    val recoveredNavigation = memoryRecovery.snapshot?.navigation
+
+    val videoSharedTransitionSpeedSettings = remember { VideoSharedTransitionSpeedSettings() }
     val windowSizeClass = LocalWindowSizeClass.current
     val appWindowAdaptiveInfo = LocalAppWindowAdaptiveInfo.current
     val videoTransitionAdaptiveInfo = remember(windowSizeClass, appWindowAdaptiveInfo) {
@@ -613,7 +652,13 @@ fun AppNavigation(
     }
     val videoCardTransitionClock = rememberVideoCardTransitionClock()
     val systemReduceMotion = rememberSystemReduceMotion()
-    val sharedVideoCardTransitionEnabled = cardTransitionEnabled && !systemReduceMotion
+    val systemCardTransitionEnabled = appearance.cardTransitionEnabled && !systemReduceMotion
+    val sharedVideoCardTransitionEnabled = systemCardTransitionEnabled
+    androidx.compose.runtime.SideEffect {
+        (hostActivity as? com.android.purebilibili.feature.video.VideoActivity)
+            ?.updateOfficialReturnMotion(systemCardTransitionEnabled, videoTransitionRealtimeBlurEnabled)
+    }
+    val videoCardSourceTrackingEnabled = systemCardTransitionEnabled
     val effectiveVideoCardTransitionDurationMillis = if (systemReduceMotion) {
         VideoCardTransitionVisualTimeline.REDUCED_MOTION_DURATION_MILLIS
     } else {
@@ -633,18 +678,41 @@ fun AppNavigation(
         val initialNavigationBackStack = remember(
             startDestination,
             launchToPortraitFeedOnStartupAtInit,
+            initialVideoRoute,
+            recoveredNavigation,
         ) {
-                resolveInitialBiliPaiBackStack(
+            if (recoveredNavigation != null) {
+                val savedStack = recoveredNavigation.backStack
+                if (initialVideoRoute == null && savedStack.first() != BiliPaiNavKey.MainHost) {
+                    listOf(BiliPaiNavKey.MainHost) + savedStack
+                } else savedStack
+            } else if (initialVideoRoute != null) listOf(legacyRouteToBiliPaiNavKey(initialVideoRoute))
+            else resolveInitialBiliPaiBackStack(
                     firstRoute = startDestination,
                     onboardingRequired = agreementRequired,
                     openPortraitFeedOnStartup = launchToPortraitFeedOnStartupAtInit
                 )
         }
         @Suppress("UNCHECKED_CAST")
-        val navigation3BackStack = rememberNavBackStack<BiliPaiNavKey>(
-            *initialNavigationBackStack.toTypedArray()
-        ) as androidx.compose.runtime.snapshots.SnapshotStateList<BiliPaiNavKey>
-        val navigation3SaveableStateHolder = rememberSaveableStateHolder()
+        val navigation3BackStack = key(memoryRecovery.snapshot?.savedAtMs) {
+            rememberNavBackStack<BiliPaiNavKey>(
+                *initialNavigationBackStack.toTypedArray()
+            ) as androidx.compose.runtime.snapshots.SnapshotStateList<BiliPaiNavKey>
+        }
+        val navigation3SaveableStateHolder = key(memoryRecovery.snapshot?.savedAtMs) {
+            rememberSaveableStateHolder()
+        }
+        androidx.compose.runtime.SideEffect {
+            (hostActivity as? com.android.purebilibili.feature.video.VideoActivity)?.let { activity ->
+                activity.updateOfficialReturnContent(
+                    when (val current = navigation3BackStack.lastOrNull()) {
+                        is BiliPaiNavKey.VideoDetail -> current.bvid
+                        else -> com.android.purebilibili.navigation3.resolveSystemWindowCardIdentity(current)
+                    },
+                )
+                activity.updateOfficialRootPredictiveBack(initialVideoRoute != null && navigation3BackStack.size == 1)
+            }
+        }
         fun replaceNavigation3BackStack(keys: List<BiliPaiNavKey>) {
             val replacementStack = keys.ifEmpty { listOf(BiliPaiNavKey.MainHost) }
             if (navigation3BackStack == replacementStack) return
@@ -670,9 +738,19 @@ fun AppNavigation(
         var accountSessionRefreshGeneration by remember { mutableIntStateOf(0) }
         val currentNavigation3Key = navigation3BackStack.lastOrNull()
         val currentRoute = currentNavigation3Key?.toLegacyRoute()
+        com.android.purebilibili.feature.message.ForegroundMessageSyncHost(
+            messagePageOpen = currentRoute == ScreenRoutes.Inbox.route ||
+                currentRoute?.startsWith("chat/") == true ||
+                currentRoute?.startsWith("message/") == true,
+            enabled = !isInPipMode,
+        )
         var previousOrientationDestination by remember { mutableStateOf(currentNavigation3Key) }
         LaunchedEffect(currentNavigation3Key) {
             val leavingVideo = previousOrientationDestination is BiliPaiNavKey.VideoDetail
+            val orientationActivity = context.findActivity()
+            val keepLandscape = leavingVideo && orientationActivity?.let {
+                com.android.purebilibili.feature.video.VideoActivityLauncher.consumeLandscapeBack(it)
+            } == true
             previousOrientationDestination = currentNavigation3Key
             val destinationOwnsOrientation = currentNavigation3Key is BiliPaiNavKey.VideoDetail ||
                 currentNavigation3Key is BiliPaiNavKey.BangumiPlayer ||
@@ -680,9 +758,12 @@ fun AppNavigation(
                 currentNavigation3Key is BiliPaiNavKey.OfflineVideoPlayer ||
                 currentNavigation3Key is BiliPaiNavKey.AudioMode
             if (leavingVideo && !destinationOwnsOrientation) {
-                // 小窗只接管播放，不保留详情页的横屏请求；普通页面重新遵循系统旋转设置。
+                // 普通退出恢复系统旋转；显式横屏返回将当前方向交给上一页。
                 // 按导航所有权交接，避免等退场组件销毁时覆盖新播放器的方向。
-                context.findActivity()?.applyPlayerRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED)
+                orientationActivity?.applyPlayerRequestedOrientation(
+                    if (keepLandscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED,
+                )
             }
         }
         val homeWallpaperSelection by SettingsManager.getHomeWallpaperSelection(context)
@@ -792,12 +873,28 @@ fun AppNavigation(
         val visibleBottomBarRoutes = remember(visibleBottomBarItems) {
             visibleBottomBarItems.map { it.route }.toSet()
         }
-        val bottomPagerState = rememberPagerState(
-            pageCount = { visibleBottomBarItems.size.coerceAtLeast(1) }
-        )
+        val bottomPagerState = key(memoryRecovery.snapshot?.savedAtMs) {
+            rememberPagerState(
+                initialPage = visibleBottomBarItems.indexOfFirst { it.route == recoveredNavigation?.bottomRoute }
+                    .coerceAtLeast(0),
+                pageCount = { visibleBottomBarItems.size.coerceAtLeast(1) },
+            )
+        }
+        com.android.purebilibili.navigation3.RegisterFairMemoryNavigationState(
+            activity = hostActivity,
+            backStack = navigation3BackStack,
+            bottomRoute = visibleBottomBarItems.getOrNull(bottomPagerState.settledPage)?.route.orEmpty(),
+        ) {
+            com.android.purebilibili.core.lifecycle.FairMemoryNavigationState(
+                backStack = navigation3BackStack.toList(),
+                bottomRoute = visibleBottomBarItems.getOrNull(bottomPagerState.settledPage)?.route.orEmpty(),
+            )
+        }
         val bottomPagerDragged = bottomPagerState.interactionSource.collectIsDraggedAsState()
         val bottomPagerDraggingProvider = remember(bottomPagerDragged) { { bottomPagerDragged.value } }
-        val bottomPagerSaveableStateHolder = rememberSaveableStateHolder()
+        val bottomPagerSaveableStateHolder = key(memoryRecovery.snapshot?.savedAtMs) {
+            rememberSaveableStateHolder()
+        }
         val mainBottomPagerState = rememberMainBottomPagerState(bottomPagerState)
         // 只在同一进程的 Activity 重建中保留；跨进程恢复时由 Saver 清空预热记录。
         var bottomPagerContentReady by rememberSaveable { mutableStateOf(false) }
@@ -921,6 +1018,41 @@ fun AppNavigation(
         // 独立听视频横条按实际内容区定位，随侧栏展开、收起与窗口变化重新测量。
         // 宽度仅在测量阶段读取，玻璃、MD3 与 Miuix 共用相同的避让边界。
         var navigationContentWidthPx by remember { mutableIntStateOf(0) }
+        var companionVideoDetailKey by remember { mutableStateOf<BiliPaiNavKey.VideoDetail?>(null) }
+        var companionPlaybackIdentity by remember { mutableStateOf<Pair<String, Long>?>(null) }
+        var companionSourceKey by remember { mutableStateOf<BiliPaiNavKey?>(null) }
+        // 详情进入沉浸播放（全屏/竖屏全屏/PiP）时隐藏分栏把手，随其它播放页 chrome 一同退出。
+        var companionImmersivePlayback by remember { mutableStateOf(false) }
+        val videoCompanionEnabled by remember(context) {
+            SettingsManager.getVideoCompanionEnabled(context)
+        }.collectAsStateWithLifecycle(initialValue = true)
+        val companionContentWidth = with(windowDensity) {
+            navigationContentWidthPx.takeIf { it > 0 }?.toDp() ?: windowSizeClass.widthDp
+        }
+        val companionPaneState = rememberSaveable(saver = CompanionPaneState.Saver) {
+            CompanionPaneState(1f - resolveCompanionPaneWidthFraction(companionContentWidth.value.toInt()))
+        }
+        val companionSessionVisible = companionVideoDetailKey != null &&
+            currentNavigation3Key == companionSourceKey
+        val companionFullscreenActive = companionSessionVisible && companionImmersivePlayback
+        val feedPaneVisible = !companionSessionVisible ||
+            (!companionFullscreenActive && companionPaneState.mode != CompanionPaneMode.Video)
+        val companionVideoDetailVisible = companionSessionVisible && companionPaneState.mode != CompanionPaneMode.Feed
+        // 组合只读取松手后的宽度；拖动中的连续值由下方测量修饰符读取。
+        val companionPaneWidth = if (companionVideoDetailKey != null) {
+            if (companionFullscreenActive) companionContentWidth else
+                companionContentWidth * companionPaneState.metadataVideoFraction(companionContentWidth.value)
+        } else 0.dp
+        val companionFeedWidth = if (companionSessionVisible) {
+            companionContentWidth * companionPaneState.metadataFeedFraction(companionContentWidth.value)
+        } else null
+        val sourcePaneWindowSizeClass = companionFeedWidth?.let { width ->
+            windowSizeClass.copy(
+                widthDp = width,
+                widthSizeClass = com.android.purebilibili.core.util.resolveWindowWidthSizeClass(width),
+            )
+        } ?: windowSizeClass
+        val sourcePaneAdaptiveInfo = appWindowAdaptiveInfo.copy(windowSizeClass = sourcePaneWindowSizeClass)
         // 由所有入口共用的底栏内部显隐状态。进视频前先置为隐藏，避免返回到主入口后再补一次隐藏动画。
         var isBottomBarVisible by remember(launchToPortraitFeedOnStartupAtInit) {
             mutableStateOf(!launchToPortraitFeedOnStartupAtInit)
@@ -942,8 +1074,11 @@ fun AppNavigation(
         val systemBackAction = remember(
             isAtMainHostRoot,
             currentBottomNavItem,
+            initialVideoRoute,
+            navigation3BackStack.size,
         ) {
-            resolveAppSystemBackAction(
+            if (initialVideoRoute != null && navigation3BackStack.size == 1) AppSystemBackAction.FINISH_ACTIVITY
+            else resolveAppSystemBackAction(
                 isAtMainHostRoot = isAtMainHostRoot,
                 currentBottomItem = currentBottomNavItem,
                 homeItem = BottomNavItem.HOME
@@ -972,10 +1107,16 @@ fun AppNavigation(
                 ?: com.android.purebilibili.core.ui.transition.VideoCardSourceLayout.COVER_ONLY,
             sourceChromeSnapshot = navigation3ReturnSession.transitionSession?.sourceChromeSnapshot,
         )
-        fun captureCardSourceDirectionForSession(): BiliPaiNavCardSourceDirection {
+        fun refreshVideoCardReturnGeometry() {
+            navigation3ReturnSession = navigation3ReturnSession.copy(
+                transitionSession = navigation3ReturnSession.transitionSession?.refreshedForReturn()
+                    ?.copy(hostOriginInRoot = navigationHostOriginInRoot),
+            )
+        }
+        fun captureCardSourceDirectionForSession(cardFullyVisible: Boolean): BiliPaiNavCardSourceDirection {
             return resolveBiliPaiNavCardSourceDirection(
                 clickedBoundsRecorded = CardPositionManager.lastClickedCardBounds != null,
-                cardFullyVisible = CardPositionManager.isCardFullyVisible,
+                cardFullyVisible = cardFullyVisible,
                 isSingleColumnCard = CardPositionManager.isSingleColumnCard,
                 normalizedCenterX = CardPositionManager.lastClickedCardCenter?.x
             )
@@ -985,24 +1126,38 @@ fun AppNavigation(
             source: BiliPaiVideoSource,
             coverIdentity: String?,
             useRecordedCardSource: Boolean = true,
-        ) = VideoCardTransitionSession.create(
-            bvid = bvid,
-            source = source,
-            recordedSourceKey = CardPositionManager.lastClickedVideoSourceKey
-                .takeIf { useRecordedCardSource },
-            cardBounds = CardPositionManager.lastClickedCardBounds,
-            coverBounds = CardPositionManager.lastClickedCoverBounds,
-            infoBounds = CardPositionManager.lastClickedInfoBounds,
-            sourceCornerDp = CardPositionManager.lastClickedVideoSourceCornerDp,
-            cardSourceDirection = captureCardSourceDirectionForSession(),
-            coverIdentity = coverIdentity,
-            cardFullyVisible = CardPositionManager.isCardFullyVisible,
-            isSingleColumnCard = CardPositionManager.isSingleColumnCard,
-            sourceLayout = CardPositionManager.lastClickedVideoSourceLayout,
-            sourceChromeSnapshot = CardPositionManager.lastClickedVideoSourceChromeSnapshot,
-            hostOriginInRoot = navigationHostOriginInRoot,
-            sourcePixelOwner = CardPositionManager.videoCardPixelOwnerFor(source.key),
-        )
+        ): VideoCardTransitionSession {
+            val anchor = if (useRecordedCardSource) {
+                com.android.purebilibili.core.ui.transition.VideoCardSourceInstances.takeAnchor(bvid)
+            } else null
+            // 各来源使用自身实际视口裁剪，不套用首页固定顶栏高度。
+            // 完整录制层可还原被视口裁切的整卡；窗口截图来源仍要求完整可见。
+            val sourceLayer = CardPositionManager.nativeCardLayerForOwner(CardPositionManager.videoCardPixelOwnerFor(source.key))
+            val hasCompleteSourcePixels = sourceLayer != null && !sourceLayer.isReleased &&
+                sourceLayer.size.width > 1 && sourceLayer.size.height > 1
+            val cardFullyVisible = anchor?.boundsInRoot() != null
+            val measuredSourceBounds = anchor?.boundsInRoot(allowPartial = hasCompleteSourcePixels)
+            return VideoCardTransitionSession.create(
+                bvid = bvid,
+                source = source,
+                recordedSourceKey = CardPositionManager.lastClickedVideoSourceKey
+                    .takeIf { useRecordedCardSource },
+                cardBounds = measuredSourceBounds,
+                coverBounds = CardPositionManager.lastClickedCoverBounds,
+                infoBounds = CardPositionManager.lastClickedInfoBounds,
+                sourceCornerDp = CardPositionManager.lastClickedVideoSourceCornerDp,
+                cardSourceDirection = captureCardSourceDirectionForSession(cardFullyVisible),
+                coverIdentity = coverIdentity,
+                cardFullyVisible = cardFullyVisible,
+                isSingleColumnCard = CardPositionManager.isSingleColumnCard,
+                sourceLayout = CardPositionManager.lastClickedVideoSourceLayout,
+                sourceChromeSnapshot = CardPositionManager.lastClickedVideoSourceChromeSnapshot,
+                hostOriginInRoot = navigationHostOriginInRoot,
+                sourcePixelOwner = CardPositionManager.videoCardPixelOwnerFor(source.key),
+                sourceAnchor = anchor,
+                hasCompleteSourcePixels = hasCompleteSourcePixels,
+            )
+        }
         // Freeze the source before direction/offline lookups can suspend. A related click
         // replaces the previous home-card globals, which may be invalidated while those
         // lookups are pending; late capture then loses the first nested card morph.
@@ -1026,32 +1181,33 @@ fun AppNavigation(
             )
             return captureVideoCardTransitionSession(bvid, source, coverUrl, useRecordedCardSource)
         }
-        fun prearmVideoCardOpening(session: VideoCardTransitionSession) {
-            val hasUsableSourceBounds = session.cardBounds
-                ?.let { it.width > 1f && it.height > 1f } == true
-            if (sharedVideoCardTransitionEnabled && !systemReduceMotion && !hasUsableSourceBounds) {
-                com.android.purebilibili.core.ui.transition.VideoCardTransitionDiagnostics.onSourceGeometryRejected(
-                    sourceKey = session.sourceKey,
-                    recordedSourceKey = CardPositionManager.lastClickedVideoSourceKey,
-                    hasRecordedBounds = CardPositionManager.lastClickedCardBounds != null,
-                )
-            }
-            if (
-                shouldUseMiuixVideoCardMorph(
-                    cardTransitionEnabled = sharedVideoCardTransitionEnabled,
-                    reduceMotion = systemReduceMotion,
-                    sourceRoute = session.sourceRoute,
-                    hasUsableSourceBounds = hasUsableSourceBounds,
-                )
-            ) {
-                // Activate the source-cover session before NavDisplay mounts the destination.
-                // Waiting for its stack-observer effect exposes the black player Surface for one frame.
-                videoCardTransitionClock.beginOpeningIfNeeded(session.sourceRoute)
-            }
-        }
         var lastVideoDetailOpenId by remember { mutableLongStateOf(0L) }
         var lastLiveAreaDetailOpenId by remember { mutableLongStateOf(0L) }
         var lastSearchOpenId by remember { mutableLongStateOf(0L) }
+        // 共用普通视频入口选择分栏，列表来源不再限定为首页。
+        fun tryOpenCompanionVideoDetail(key: BiliPaiNavKey): Boolean {
+            val originKey = navigation3BackStack.lastOrNull()
+            if (key !is BiliPaiNavKey.VideoDetail) return false
+            val candidate = key.copy(initialVertical = key.initialVertical ||
+                com.android.purebilibili.data.repository.VideoRepository.getCachedVerticalFlag(key.bvid) == true)
+            if (!shouldOpenVideoCompanion(
+                    key = candidate,
+                    origin = originKey,
+                    enabled = videoCompanionEnabled,
+                    window = windowSizeClass,
+                    posture = appWindowAdaptiveInfo.posture,
+                    shouldAvoidHinge = appWindowAdaptiveInfo.shouldAvoidHinge,
+                )) return false
+            if (companionPaneState.mode == CompanionPaneMode.Feed) companionPaneState.restoreSplit()
+            navigationFocusManager.clearFocus()
+            navigationKeyboardController?.hide()
+            companionSourceKey = originKey
+            companionPlaybackIdentity = candidate.bvid to candidate.cid
+            companionVideoDetailKey = candidate
+            onVideoDetailEnter()
+            return true
+        }
+
         fun pushResolvedNavigation3KeyDirect(key: BiliPaiNavKey) {
             val currentSearch = navigation3BackStack.lastOrNull() as? BiliPaiNavKey.Search
             val requestedSearchKeyword = when (key) {
@@ -1123,6 +1279,7 @@ fun AppNavigation(
             })
         }
         fun pushNavigation3KeyDirect(key: BiliPaiNavKey) {
+            if (tryOpenCompanionVideoDetail(key)) return
             pushResolvedNavigation3KeyDirect(com.android.purebilibili.feature.bangumi.resolveBangumiPlaybackEntry(key))
         }
         fun pushNavigation3Key(key: BiliPaiNavKey, beforeNavigation: (() -> Unit)? = null) {
@@ -1153,7 +1310,56 @@ fun AppNavigation(
                 pushNavigation3KeyDirect(key)
             }
         }
+        /** 直播、番剧等窗口可承接目标：系统一镜到底优先，未启动窗口时保持原窗口内导航。 */
+        fun navigateToSystemCardWindowOrPush(key: BiliPaiNavKey) {
+            if (tryOpenCompanionVideoDetail(key)) return
+            val resolvedKey = com.android.purebilibili.feature.bangumi.resolveBangumiPlaybackEntry(key)
+            fun commitInApp() {
+                pushNavigation3Key(resolvedKey)
+            }
+            val identity = com.android.purebilibili.navigation3.resolveSystemWindowCardIdentity(resolvedKey)
+                ?: return commitInApp()
+            val session = captureVideoCardNavigationSession(
+                bvid = identity,
+                sourceRoute = null,
+                coverUrl = null,
+                useRecordedCardSource = true,
+            )
+            if (!com.android.purebilibili.feature.video.SystemVideoCardTransition.canAttempt(
+                    systemCardTransitionEnabled, session, hostActivity,
+                )
+            ) {
+                return commitInApp()
+            }
+            coroutineScope.launch {
+                val opened = com.android.purebilibili.feature.video.SystemVideoCardTransition.tryOpen(
+                    activity = hostActivity,
+                    request = com.android.purebilibili.feature.video.VideoOpenRequest(
+                        bvid = (resolvedKey as? BiliPaiNavKey.AudioMode)?.sourceBvid.orEmpty(),
+                        initialRoute = resolvedKey.toLegacyRoute(),
+                    ),
+                    source = session,
+                    realtimeBlurEnabled = videoTransitionRealtimeBlurEnabled,
+                    sourceBackgroundColor = backgroundColor.toArgb(),
+                    // 容器卡不参与视频导航请求跟踪；过期请求由像素归属与几何复核拒绝。
+                    isCurrent = { true },
+                )
+                if (opened) {
+                    officialVideoChildActive = true
+                } else if (
+                    CardPositionManager.isActiveVideoCardPixelOwner(
+                        session.sourcePixelOwner ?: return@launch,
+                    ) && hostActivity.window.decorView.hasWindowFocus()
+                ) {
+                    commitInApp()
+                }
+            }
+        }
         fun replaceNavigation3TopWithKey(key: BiliPaiNavKey) {
+            if (initialVideoRoute != null && navigation3BackStack.size == 1) {
+                replaceNavigation3BackStack(listOf(com.android.purebilibili.feature.bangumi.resolveBangumiPlaybackEntry(key)))
+                return
+            }
             replaceNavigation3BackStack(pushBiliPaiNavKey(
                 currentStack = popBiliPaiNavKey(navigation3BackStack),
                 key = com.android.purebilibili.feature.bangumi.resolveBangumiPlaybackEntry(key),
@@ -1216,7 +1422,8 @@ fun AppNavigation(
         }
         fun navigateToPortraitStoryInNavigation3(
             seed: PortraitStoryNavigationSeed,
-            sourceRoute: String? = null
+            sourceRoute: String? = null,
+            pendingTransitionSession: VideoCardTransitionSession? = null,
         ) {
             if (!canNavigate(false)) return
             isBottomBarVisible = false
@@ -1233,7 +1440,7 @@ fun AppNavigation(
                 previousSourceRoute = navigation3ReturnSession.lastVideoSourceRoute
             )
             if (source.route != null) {
-                val transitionSession = captureVideoCardTransitionSession(
+                val transitionSession = pendingTransitionSession ?: captureVideoCardTransitionSession(
                     bvid = seed.bvid,
                     source = source,
                     coverIdentity = seed.coverUrl,
@@ -1246,7 +1453,6 @@ fun AppNavigation(
                         },
                     )
                     .markDetailEntered(SystemClock.uptimeMillis())
-                prearmVideoCardOpening(transitionSession)
             }
             pushNavigation3Key(
                 BiliPaiNavKey.Story(
@@ -1255,7 +1461,14 @@ fun AppNavigation(
                     seedCover = seed.coverUrl,
                     sourceRoute = source.route,
                     openId = SystemClock.uptimeMillis()
-                )
+                ),
+                beforeNavigation = {
+                    // 竖屏流使用独立播放器，即使同一视频也不能保留旧小窗。
+                    miniPlayerManager?.let { manager ->
+                        if (manager.isMiniMode) manager.dismiss()
+                        else manager.haltForeignPlaybackForIncomingVideo(seed.bvid)
+                    }
+                },
             )
         }
         fun navigateToVideoRouteInNavigation3(
@@ -1270,6 +1483,7 @@ fun AppNavigation(
             )
             val parsedKey = legacyRouteToBiliPaiNavKey(route)
             val videoKey = parsedKey as? BiliPaiNavKey.VideoDetail
+            if (videoKey != null && tryOpenCompanionVideoDetail(videoKey.copy(sourceRoute = sourceRoute))) return
             val transitionSession = pendingTransitionSession ?: captureVideoCardNavigationSession(
                 bvid = videoKey?.bvid.orEmpty(),
                 sourceRoute = sourceRoute,
@@ -1285,9 +1499,9 @@ fun AppNavigation(
                     bvid = videoKey?.bvid.orEmpty(),
                     cid = videoKey?.cid ?: 0L,
                     coverUrl = videoKey?.coverUrl.orEmpty(),
-                    cardTransitionEnabled = cardTransitionEnabled,
+                    cardTransitionEnabled = appearance.cardTransitionEnabled,
                 )?.let { seed ->
-                    navigateToPortraitStoryInNavigation3(seed, sourceRoute = sourceRoute)
+                    navigateToPortraitStoryInNavigation3(seed, sourceRoute = sourceRoute, pendingTransitionSession = transitionSession)
                     return
                 }
                 if (
@@ -1307,7 +1521,7 @@ fun AppNavigation(
                             )
                         ) return@launch
                         if (isVertical) {
-                            if (cardTransitionEnabled) {
+                            if (appearance.cardTransitionEnabled) {
                                 navigateToVideoRouteInNavigation3(
                                     route = videoKey.copy(
                                         autoPortrait = true,
@@ -1326,7 +1540,8 @@ fun AppNavigation(
                                         cid = videoKey.cid,
                                         coverUrl = videoKey.coverUrl
                                     ),
-                                    sourceRoute = sourceRoute
+                                    sourceRoute = sourceRoute,
+                                    pendingTransitionSession = transitionSession,
                                 )
                             }
                         } else {
@@ -1345,32 +1560,18 @@ fun AppNavigation(
             // Resolve redirects first. Reserving the debounce slot before delegating to
             // Story (or a cached direction lookup) makes that same click reject itself.
             if (!canNavigate(false)) return
-            val videoBvid = videoKey?.bvid.orEmpty()
-            navigation3ReturnSession = navigation3ReturnSession
-                .recordTransitionSession(
-                    session = transitionSession,
-                    preserveCurrentSession = navigation3BackStack.any {
-                        it is BiliPaiNavKey.VideoDetail
-                    },
-                )
-                .markDetailEntered(SystemClock.uptimeMillis())
-            prearmVideoCardOpening(transitionSession)
-            miniPlayerManager?.isNavigatingToVideo = true
-            // 合集列表 / 详情压详情：进新片前立刻挂起上一级仍在响的 player，避免只听见旧声音。
-            if (videoBvid.isNotBlank()) {
-                miniPlayerManager?.haltForeignPlaybackForIncomingVideo(videoBvid)
-            }
-            miniPlayerManager?.exitMiniMode(animate = false)
             val key = when (parsedKey) {
                 is BiliPaiNavKey.VideoDetail -> {
                     val morphDirectPortrait = resolveDirectPortraitDetailMorphEntry(
                         directPortraitStoryEntry = playerInteractionSettings.directPortraitStoryEntry,
-                        cardTransitionEnabled = cardTransitionEnabled,
+                        cardTransitionEnabled = appearance.cardTransitionEnabled,
                         isVerticalVideo = parsedKey.initialVertical || parsedKey.directPortraitEntry,
                         coverUrl = parsedKey.coverUrl,
                         startAudio = parsedKey.startAudio,
                     ) || parsedKey.directPortraitEntry
                     parsedKey.copy(
+                        // 点击会话已校验来源身份；首帧标题与动画是否启用无关。
+                        title = parsedKey.title.ifBlank { transitionSession.sourceChromeSnapshot?.title.orEmpty() },
                         sourceRoute = transitionSession.sourceRoute,
                         autoPortrait = parsedKey.autoPortrait || morphDirectPortrait,
                         initialVertical = parsedKey.initialVertical || morphDirectPortrait,
@@ -1379,7 +1580,52 @@ fun AppNavigation(
                 }
                 else -> parsedKey
             }
-            pushNavigation3Key(key)
+            fun commitInAppVideoNavigation() {
+                val videoBvid = videoKey?.bvid.orEmpty()
+                navigation3ReturnSession = navigation3ReturnSession
+                    .recordTransitionSession(
+                        session = transitionSession,
+                        preserveCurrentSession = navigation3BackStack.any {
+                            it is BiliPaiNavKey.VideoDetail
+                        },
+                    )
+                    .markDetailEntered(SystemClock.uptimeMillis())
+                miniPlayerManager?.isNavigatingToVideo = true
+                // 合集列表 / 详情压详情：进新片前立刻挂起上一级仍在响的 player，避免只听见旧声音。
+                if (videoBvid.isNotBlank()) {
+                    miniPlayerManager?.haltForeignPlaybackForIncomingVideo(videoBvid)
+                }
+                miniPlayerManager?.exitMiniMode(animate = false)
+                pushNavigation3Key(key)
+            }
+            if (key is BiliPaiNavKey.VideoDetail &&
+                com.android.purebilibili.feature.video.SystemVideoCardTransition.canAttempt(
+                    systemCardTransitionEnabled, transitionSession, hostActivity,
+                )
+            ) {
+                coroutineScope.launch {
+                    val isCurrent = {
+                        videoNavigationRequests.isCurrent(
+                            navigationRequest, navigation3BackStack, navigation3ReturnSession.sourceGeneration,
+                        )
+                    }
+                    val opened = com.android.purebilibili.feature.video.SystemVideoCardTransition.tryOpen(
+                        activity = hostActivity,
+                        request = com.android.purebilibili.feature.video.VideoOpenRequest.fromKey(key),
+                        source = transitionSession,
+                        realtimeBlurEnabled = videoTransitionRealtimeBlurEnabled,
+                        sourceBackgroundColor = backgroundColor.toArgb(),
+                        isCurrent = isCurrent,
+                    )
+                    if (opened) {
+                        officialVideoChildActive = true
+                    } else if (isCurrent() && hostActivity.window.decorView.hasWindowFocus()) {
+                        commitInAppVideoNavigation()
+                    }
+                }
+            } else {
+                commitInAppVideoNavigation()
+            }
         }
         fun navigateToVideoInNavigation3(
             bvid: String,
@@ -1396,6 +1642,7 @@ fun AppNavigation(
             skipPortraitStoryResolution: Boolean = false,
             useRecordedCardSource: Boolean = true,
             pendingTransitionSession: VideoCardTransitionSession? = null,
+            title: String = "",
         ) {
             val navigationRequest = videoNavigationRequests.begin(
                 navigation3BackStack, navigation3ReturnSession.sourceGeneration,
@@ -1405,6 +1652,12 @@ fun AppNavigation(
             val navigationVertical = initialVertical ||
                 com.android.purebilibili.data.repository.VideoRepository
                     .getCachedVerticalFlag(bvid) == true
+            if (tryOpenCompanionVideoDetail(BiliPaiNavKey.VideoDetail(
+                    bvid = bvid, cid = cid, coverUrl = coverUrl, title = title,
+                    fullscreen = fullscreen, startAudio = startAudio, autoPortrait = autoPortrait,
+                    resumePositionMs = resumePositionMs, initialVertical = navigationVertical,
+                    directPortraitEntry = directPortraitEntry, sourceRoute = sourceRoute,
+                ))) return
             val transitionSession = pendingTransitionSession ?: captureVideoCardNavigationSession(
                 bvid = bvid,
                 sourceRoute = sourceRoute,
@@ -1413,7 +1666,7 @@ fun AppNavigation(
             )
             val morphDirectPortrait = resolveDirectPortraitDetailMorphEntry(
                 directPortraitStoryEntry = playerInteractionSettings.directPortraitStoryEntry,
-                cardTransitionEnabled = cardTransitionEnabled,
+                cardTransitionEnabled = appearance.cardTransitionEnabled,
                 isVerticalVideo = initialVertical || directPortraitEntry,
                 coverUrl = coverUrl,
                 startAudio = startAudio,
@@ -1426,9 +1679,9 @@ fun AppNavigation(
                     bvid = bvid,
                     cid = cid,
                     coverUrl = coverUrl,
-                    cardTransitionEnabled = cardTransitionEnabled,
+                    cardTransitionEnabled = appearance.cardTransitionEnabled,
                 )?.let { seed ->
-                    navigateToPortraitStoryInNavigation3(seed, sourceRoute = sourceRoute)
+                    navigateToPortraitStoryInNavigation3(seed, sourceRoute = sourceRoute, pendingTransitionSession = transitionSession)
                     return
                 }
             }
@@ -1454,6 +1707,7 @@ fun AppNavigation(
                         skipPortraitStoryResolution = skipPortraitStoryResolution,
                         useRecordedCardSource = useRecordedCardSource,
                         pendingTransitionSession = transitionSession,
+                        title = title,
                     )
                 }
                 return
@@ -1483,6 +1737,7 @@ fun AppNavigation(
                 resumePositionMs = resumePositionMs,
                 initialVertical = navigationVertical || morphDirectPortrait,
                 directPortraitEntry = morphDirectPortrait,
+                title = title,
             )
             if (
                 !skipPortraitStoryResolution &&
@@ -1516,6 +1771,7 @@ fun AppNavigation(
                                 skipPortraitStoryResolution = true,
                                 useRecordedCardSource = useRecordedCardSource,
                                 pendingTransitionSession = transitionSession,
+                                title = title,
                             )
                         } else {
                             navigateToPortraitStoryInNavigation3(
@@ -1524,7 +1780,8 @@ fun AppNavigation(
                                     cid = cid,
                                     coverUrl = coverUrl
                                 ),
-                                sourceRoute = sourceRoute
+                                sourceRoute = sourceRoute,
+                                pendingTransitionSession = transitionSession,
                             )
                         }
                     } else {
@@ -1557,6 +1814,7 @@ fun AppNavigation(
                                 bvid = intent.bvid,
                                 cid = intent.cid,
                                 coverUrl = intent.coverUrl,
+                                title = request.title,
                                 autoPortrait = true,
                                 initialVertical = intent.isVerticalVideo,
                                 sourceRoute = intent.sourceRoute ?: ScreenRoutes.Home.route
@@ -1574,7 +1832,7 @@ fun AppNavigation(
                     pushNavigation3Route(ScreenRoutes.DynamicDetail.createRoute(target.dynamicId))
                 }
                 is HomeNavigationTarget.BangumiDetail -> {
-                    pushNavigation3Key(BiliPaiNavKey.BangumiDetail(seasonId = 0L, epId = target.episodeId))
+                    navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiDetail(seasonId = 0L, epId = target.episodeId))
                 }
                 null -> Unit
             }
@@ -1726,7 +1984,7 @@ fun AppNavigation(
         // A transparent sidebar still reserves space in the Row.
         val sideBarMountGate = shouldMountSidebarForNavigation(
             routeAllowsSidebar = sideBarRouteGate,
-            isVideoDetailDestination = isVideoDetailDestination
+            isVideoDetailDestination = isVideoDetailDestination || companionFullscreenActive
         )
         val showBottomBar = shouldShowBottomBarForNavigation(
             activeRoute = bottomBarMountRoute,
@@ -1789,7 +2047,8 @@ fun AppNavigation(
         val audioPlaylistIndex by PlaylistManager.currentIndex.collectAsStateWithLifecycle()
         val audioNowPlayingItem = audioPlaylist.getOrNull(audioPlaylistIndex)
         var linkedDockPhase by rememberSaveable { mutableStateOf(LinkedDockPhase.Expanded) }
-        val hasActiveAudioPlayback = audioNowPlayingActive && audioNowPlayingItem != null && audioNowPlayingBarEnabled
+        val hasActiveAudioPlayback = audioNowPlayingActive && audioNowPlayingItem != null &&
+            audioNowPlayingBarEnabled && !companionVideoDetailVisible
         val linkedSearchMergeEnabled = bottomBarHomeSettings.isBottomBarSearchEnabled &&
             bottomBarHomeSettings.linkedDockMergeOnScrollEnabled
         LaunchedEffect(hasActiveAudioPlayback, linkedSearchMergeEnabled) {
@@ -1803,7 +2062,7 @@ fun AppNavigation(
         // Shared scroll position is also used by non-home destinations to drive the
         // linked playback dock without forcing the bottom bar itself to disappear.
         val scrollOffsetState = remember { androidx.compose.runtime.mutableFloatStateOf(0f) }
-        val finalBottomBarVisible = showBottomBar &&
+        val finalBottomBarVisible = !companionFullscreenActive && showBottomBar &&
             (driveBottomBarByProgress || videoCardSourceChromeVisible) &&
             resolveBottomBarVisibleForMode(
                 mode = bottomBarVisibilityMode,
@@ -1826,7 +2085,8 @@ fun AppNavigation(
         val bottomBarVisibilityState = remember { MutableTransitionState(finalBottomBarVisible) }
         bottomBarVisibilityState.targetState = finalBottomBarVisible
         val bottomBarCanMount =
-            bottomBarVisibilityMode != SettingsManager.BottomBarVisibilityMode.ALWAYS_HIDDEN &&
+            !companionFullscreenActive &&
+                bottomBarVisibilityMode != SettingsManager.BottomBarVisibilityMode.ALWAYS_HIDDEN &&
                 (
                     bottomBarMountGate ||
                         driveBottomBarByProgress ||
@@ -1921,6 +2181,13 @@ fun AppNavigation(
                     BottomNavItem.WATCHLATER -> watchLaterScrollChannel.trySend(Unit)
                     else -> Unit
                 }
+            }
+        }
+        // ⌨️ Ctrl+数字：按当前底栏可见顺序切换，复用 dock 点击语义（含重选回顶部）。
+        LaunchedEffect(pendingAppShortcutNavIndex) {
+            pendingAppShortcutNavIndex?.let { index ->
+                visibleBottomBarItems.getOrNull(index)?.let(handleNavItemClick)
+                onPendingAppShortcutNavIndexConsumed(index)
             }
         }
         fun pushSearchRouteInNavigation3(keyword: String) {
@@ -2151,7 +2418,8 @@ fun AppNavigation(
             androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val effectiveAudioDockRoute = bottomBarMountRoute ?: currentRoute
-        val isPlayerNowPlayingDestination = isAudioNowPlayingPlayerDestination(effectiveAudioDockRoute)
+        val isPlayerNowPlayingDestination = companionVideoDetailVisible ||
+            isAudioNowPlayingPlayerDestination(effectiveAudioDockRoute)
         val showAudioNowPlayingInDock = resolveAudioNowPlayingVisible(
             sessionActive = audioNowPlayingActive,
             isOnAudioModeScreen = currentNavigation3Key is BiliPaiNavKey.AudioMode,
@@ -2165,7 +2433,8 @@ fun AppNavigation(
         )
         val isReturningSameAudioVideo = navigation3ReturnSession.isReturningFromDetail &&
             navigation3ReturnSession.transitionSession?.bvid == audioNowPlayingItem?.bvid
-        val isPlayerIndependentDestination = isAudioNowPlayingPlayerDestination(currentRoute) || isReturningSameAudioVideo
+        val isPlayerIndependentDestination = companionVideoDetailVisible ||
+            isAudioNowPlayingPlayerDestination(currentRoute) || isReturningSameAudioVideo
         val showAudioNowPlayingIndependent = resolveAudioNowPlayingVisible(
             sessionActive = audioNowPlayingActive,
             isOnAudioModeScreen = currentNavigation3Key is BiliPaiNavKey.AudioMode,
@@ -2182,41 +2451,50 @@ fun AppNavigation(
         // [LayerBackdrop] Create backdrop for bottom bar refraction effect.
         // Capture the wallpaper and navigation content together so transparent wallpaper-aware
         // pages feed the same background into the floating dock as Home.
-        // 仅玻璃开启时绕过网页采集，关闭后的原生模糊和背景录制保持原有行为。
-        // 网页有独立渲染树；页面关闭采集后，祖先也不能再次把它录入背景层。
+        // 网页有独立渲染树；玻璃和原生模糊都不能由祖先再次把它录入背景层。
         // 检查整个栈，覆盖网页上方的详情页及返回网页过程，避免来回切换录制状态。
-        val navigationBackdropCaptureEnabled = !homeSettings.androidNativeLiquidGlassEnabled ||
-            navigation3BackStack.none {
-                it is BiliPaiNavKey.Web &&
-                    !com.android.purebilibili.feature.web.shouldOpenWebUrlExternally(it.url)
-            }
+        val navigationGlassEnabled = homeSettings.bottomDockGlassEnabled || homeSettings.nowPlayingGlassEnabled
+        val navigationBackdropCaptureEnabled = navigation3BackStack.none {
+            it is BiliPaiNavKey.Web &&
+                !com.android.purebilibili.feature.web.shouldOpenWebUrlExternally(it.url)
+        }
         val floatingBackdropDemand = remember { com.android.purebilibili.core.ui.blur.FloatingChromeBackdropDemand() }
         val shouldCaptureBottomBarBackdrop = navigationBackdropCaptureEnabled &&
-            (homeSettings.androidNativeLiquidGlassEnabled || isBottomBarBlurEnabled)
-        val bottomBarBackdropSource = if (shouldCaptureBottomBarBackdrop) {
-            // Bind the shared recording to every frame of the app theme palette,
-            // rather than waiting for navigation/layout to invalidate a static page.
-            rememberChromeBackdropSource(
-                recordingBackground = backgroundColor,
-                isolateContentDrawing = true,
-            )
-        } else {
-            null
-        }
-        val bottomBarBackdrop = bottomBarBackdropSource?.backdrop
+            (navigationGlassEnabled || isBottomBarBlurEnabled)
         // 玻璃仅为实际挂载或正在进出的控件录制；保留源身份，恢复时重新挂回录制。
         // 原生模糊仍沿用原有背景源。退出动画结束前不能只看 finalBottomBarVisible。
         val hasBottomBarBackdropConsumer = bottomBarCanMount &&
             (bottomBarVisibilityState.currentState || bottomBarVisibilityState.targetState ||
                 !bottomBarVisibilityState.isIdle)
         val recordBottomBarBackdrop = com.android.purebilibili.core.ui.transition.shouldRecordVideoCardFloatingBackdrop(
-            liquidGlassEnabled = homeSettings.androidNativeLiquidGlassEnabled,
+            liquidGlassEnabled = navigationGlassEnabled,
             isVideoDetailDestination = isVideoDetailDestination,
             exposure = videoCardChromeExposure,
             hasBottomBarConsumer = hasBottomBarBackdropConsumer,
             hasAudioBarConsumer = !bottomBarCanMount && showAudioNowPlayingIndependent,
             hasFloatingConsumer = floatingBackdropDemand.isRequired,
         )
+        // 只有玻璃卡片转场复用导航视口的合成纹理；关闭玻璃后的 MD3、Miuix
+        // 仍共享绘制指令，不增加离屏纹理。无消费者、落位或取消恢复结束后归还 Auto。
+        val rasterizeNavigationBackdrop =
+            com.android.purebilibili.core.ui.transition.shouldRasterizeVideoCardChromeBackdrop(
+                liquidGlassEnabled = navigationGlassEnabled,
+                cardTransitionEnabled = cardTransitionEnabled,
+                reduceMotion = systemReduceMotion,
+                recordingAllowed = recordBottomBarBackdrop,
+                exposure = videoCardChromeExposure,
+            )
+        val bottomBarBackdropSource = if (shouldCaptureBottomBarBackdrop) {
+            rememberChromeBackdropSource(
+                recordingBackground = backgroundColor,
+                isolateContentDrawing = true,
+                recordingEnabled = recordBottomBarBackdrop,
+                rasterizeContent = rasterizeNavigationBackdrop,
+            )
+        } else {
+            null
+        }
+        val bottomBarBackdrop = bottomBarBackdropSource?.backdrop
         val componentMotionEnabled = com.android.purebilibili.core.ui.resolveComponentMotionEnabled(
             entranceEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.uiEntranceAnimationEnabled,
             cardEntranceEnabled = homeSettings.cardAnimationEnabled,
@@ -2236,6 +2514,8 @@ fun AppNavigation(
             com.android.purebilibili.core.ui.components.LocalAppTopBarIconDecorator provides
                 com.android.purebilibili.core.ui.components.BiliPaiTopBarIconDecorator,
             com.android.purebilibili.core.ui.LocalSystemReduceMotion provides systemReduceMotion,
+            com.android.purebilibili.core.ui.transition.LocalVideoCardSourceTrackingEnabled provides
+                videoCardSourceTrackingEnabled,
             com.android.purebilibili.core.ui.LocalAppPopupSurfaceRenderer provides
                 com.android.purebilibili.core.ui.components.BiliPaiPopupSurfaceRenderer,
             com.android.purebilibili.core.ui.blur.LocalFloatingChromeBackdrop provides
@@ -2280,6 +2560,7 @@ fun AppNavigation(
                 val fromRoute = navigation3BackStack.lastOrNull()?.toLegacyRoute()
                 val targetRoute = targetKey?.toLegacyRoute()
                 if (isVideoDetailRoute(fromRoute) && isVideoCardReturnTargetRoute(targetRoute)) {
+                    refreshVideoCardReturnGeometry()
                     markVideoReturnSession()
                 }
             }
@@ -2339,8 +2620,36 @@ fun AppNavigation(
             }
 
             var liveNavigationExitPending by remember { mutableStateOf(false) }
+            // 📺⌨️ 伴随面板：Expanded+ 窗口内普通横屏视频不推返回栈，feed 驻留左侧。
+            // 面板内容挂在主宿主层，整卡转场时钟与返回会话零接触（P0 隔离）。
+            fun currentCompanionVideoKey(): BiliPaiNavKey.VideoDetail? {
+                val entry = companionVideoDetailKey ?: return null
+                val (bvid, cid) = companionPlaybackIdentity ?: (entry.bvid to entry.cid)
+                val manager = miniPlayerManager?.takeIf {
+                    it.currentBvid == bvid && (cid <= 0L || it.currentCid == cid)
+                }
+                return entry.copy(
+                    bvid = bvid,
+                    cid = manager?.currentCid ?: cid,
+                    coverUrl = manager?.currentCover ?: entry.coverUrl.takeIf { bvid == entry.bvid }.orEmpty(),
+                    title = manager?.currentTitle ?: entry.title.takeIf { bvid == entry.bvid }.orEmpty(),
+                    resumePositionMs = manager?.player?.currentPosition?.coerceAtLeast(0L)
+                        ?: entry.resumePositionMs.takeIf { bvid == entry.bvid && cid == entry.cid } ?: 0L,
+                )
+            }
+            fun closeCompanionVideoDetail() {
+                val key = currentCompanionVideoKey() ?: return
+                companionVideoDetailKey = null
+                companionPlaybackIdentity = null
+                companionSourceKey = null
+                onVideoDetailExit()
+                prepareVideoPlaybackForNavigationExit(key, navigation3BackStack.lastOrNull())
+            }
             val performSystemBackAction: () -> Unit = {
-                when (systemBackAction) {
+                if (companionSessionVisible) {
+                    if (companionPaneState.mode != CompanionPaneMode.Split) companionPaneState.restoreSplit()
+                    else closeCompanionVideoDetail()
+                } else when (systemBackAction) {
                     AppSystemBackAction.RETURN_TO_HOME_TAB -> {
                         val homeIndex = visibleBottomBarItems.indexOf(BottomNavItem.HOME)
                         if (homeIndex >= 0) {
@@ -2387,7 +2696,7 @@ fun AppNavigation(
                 }
             }
             com.android.purebilibili.core.ui.popup.AppGlassPopupHost(
-                glassAvailable = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled &&
+                glassAvailable = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.popupGlassEnabled &&
                     com.android.purebilibili.core.ui.blur.shouldAllowHomeChromeLiquidGlass(android.os.Build.VERSION.SDK_INT),
                 tuning = liquidGlassRenderConfig.tuning,
             ) {
@@ -2657,6 +2966,7 @@ fun AppNavigation(
                                         if (applyHostOwnedSnapshotOnRoute) {
                                             pinnedModifier.videoCardTransitionBackgroundEffect(
                                                 progressProvider = backgroundState.progressProvider,
+                                                maskProgressProvider = backgroundState.maskProgressProvider,
                                                 phaseProvider = backgroundState.phaseProvider,
                                                 exposureProvider = backgroundState.exposureProvider,
                                                 isGestureRestoreInProgressProvider = backgroundState.isGestureRestoreInProgressProvider,
@@ -2734,7 +3044,7 @@ fun AppNavigation(
                             onBack = onBack,
                             onVideoClick = { bvid -> navigateToVideoInNavigation3(bvid, 0L, "") },
                             onBangumiClick = { seasonId, epId ->
-                                pushNavigation3Key(
+                                navigateToSystemCardWindowOrPush(
                                     BiliPaiNavKey.BangumiDetail(seasonId = seasonId, epId = epId)
                                 )
                             },
@@ -2756,7 +3066,7 @@ fun AppNavigation(
                                 )
                             },
                             onLiveClick = { roomId, title, uname ->
-                                pushNavigation3Key(
+                                navigateToSystemCardWindowOrPush(
                                     BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname)
                                 )
                             },
@@ -2832,7 +3142,7 @@ fun AppNavigation(
                         },
                         onBangumiClick = { seasonId ->
                             if (seasonId > 0L) {
-                                pushNavigation3Key(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
+                                navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
                             }
                         },
                         onCheeseClick = { seasonId ->
@@ -2856,11 +3166,11 @@ fun AppNavigation(
                             })
                         },
                         onWebClick = { url, title ->
-                            pushNavigation3Key(BiliPaiNavKey.Web(url = url, title = title))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Web(url = url, title = title))
                         },
                         onLiveClick = { roomId, title, uname ->
                             if (roomId > 0L) {
-                                pushNavigation3Key(
+                                navigateToSystemCardWindowOrPush(
                                     BiliPaiNavKey.Live(
                                         roomId = roomId.toString(),
                                         title = title,
@@ -2979,7 +3289,7 @@ fun AppNavigation(
                         mediaId = bangumiKey.mediaId,
                         onBack = onBack,
                         onEpisodeClick = { actionSeasonId, episode ->
-                            pushNavigation3Key(
+                            navigateToSystemCardWindowOrPush(
                                 BiliPaiNavKey.BangumiPlayer(
                                     seasonId = actionSeasonId,
                                     epId = episode.id,
@@ -3019,8 +3329,11 @@ fun AppNavigation(
                 fun RenderHomeEntryContent(key: BiliPaiNavKey, isBottomPagerPageActive: Boolean, isBottomPagerPageVisibleDuringNavigation: Boolean) {
                     HomeScreen(
                         viewModel = homeViewModel,
+                        availableFeedWidth = companionFeedWidth,
                         onWeeklySeriesClick = { pushNavigation3Key(BiliPaiNavKey.WeeklySeries()) },
                         onVideoClick = { request -> navigateToHomeVideoInNavigation3(request) },
+                        companionPaneEnabled = videoCompanionEnabled,
+                        onCompanionVideoClick = { request -> navigateToHomeVideoInNavigation3(request) },
                         onSearchClick = {
                             if (canNavigate(false)) pushNavigation3Key(BiliPaiNavKey.Search)
                         },
@@ -3061,7 +3374,7 @@ fun AppNavigation(
                             )
                         },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Route(ScreenRoutes.Live.createRoute(roomId, title, uname))
+                            navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.Live.createRoute(roomId, title, uname)))
                         },
                         onBangumiClick = { initialType ->
                             pushNavigation3Route(ScreenRoutes.Bangumi.createRoute(initialType))
@@ -3086,13 +3399,13 @@ fun AppNavigation(
                             )
                         },
                         onBangumiSeasonClick = { seasonId ->
-                            pushNavigation3Key(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
                         },
                         onBangumiPlayFollow = { seasonId ->
-                            pushNavigation3Key(BiliPaiNavKey.BangumiPlayer(seasonId = seasonId, epId = 0L))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiPlayer(seasonId = seasonId, epId = 0L))
                         },
                         onBangumiEpisodeClick = { seasonId, epId ->
-                            pushNavigation3Key(
+                            navigateToSystemCardWindowOrPush(
                                 BiliPaiNavKey.BangumiDetail(seasonId = seasonId, epId = epId)
                             )
                         },
@@ -3109,7 +3422,7 @@ fun AppNavigation(
                         isTopLevelActive = isBottomPagerPageActive &&
                             currentNavigation3Key == BiliPaiNavKey.MainHost &&
                             currentBottomNavItem == BottomNavItem.HOME,
-                        pageOnScreen = currentNavigation3Key == BiliPaiNavKey.MainHost &&
+                        pageOnScreen = feedPaneVisible && currentNavigation3Key == BiliPaiNavKey.MainHost &&
                             currentBottomNavItem == BottomNavItem.HOME,
                         visibleDuringNavigation = isBottomPagerPageVisibleDuringNavigation,
                         isReturningFromVideoDetail = navigation3ReturnSession.isReturningFromDetail,
@@ -3202,6 +3515,14 @@ fun AppNavigation(
                         } else {
                             null
                         },
+                        onRecapUpsClick = { window, stats ->
+                            pushNavigation3Key(
+                                BiliPaiNavKey.PersonalRecapUps(
+                                    window = window,
+                                    stats = stats.copy(watchTimestampsMs = emptyList()),
+                                )
+                            )
+                        },
                         onUpClick = { mid -> pushNavigation3Route(ScreenRoutes.Space.createRoute(mid)) },
                         onVideoClick = { lookupKey, cid, cover, isVertical ->
                             val historyItem = historyViewModel.getHistoryItem(lookupKey)
@@ -3213,9 +3534,9 @@ fun AppNavigation(
                             when (resolveHistoryNavigationKind(historyItem)) {
                                 HistoryNavigationKind.PGC -> {
                                     if (historyItem != null && historyItem.epid > 0 && historyItem.seasonId > 0) {
-                                        pushNavigation3Route(ScreenRoutes.BangumiPlayer.createRoute(historyItem.seasonId, historyItem.epid))
+                                        navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.BangumiPlayer.createRoute(historyItem.seasonId, historyItem.epid)))
                                     } else if (historyItem != null && (historyItem.seasonId > 0 || historyItem.epid > 0)) {
-                                        pushNavigation3Route(ScreenRoutes.BangumiDetail.createRoute(historyItem.seasonId, historyItem.epid))
+                                        navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.BangumiDetail.createRoute(historyItem.seasonId, historyItem.epid)))
                                     } else {
                                         navigateToVideoInNavigation3(
                                             lookupKey,
@@ -3309,14 +3630,14 @@ fun AppNavigation(
                             if (seasonId > 0L || epId > 0L) {
                                 if (epId > 0L) {
                                     // 动态里的番剧卡带集数信息，直接播放该集
-                                    pushNavigation3Key(
+                                    navigateToSystemCardWindowOrPush(
                                         BiliPaiNavKey.BangumiPlayer(
                                             seasonId = seasonId,
                                             epId = epId
                                         )
                                     )
                                 } else {
-                                    pushNavigation3Route(ScreenRoutes.BangumiDetail.createRoute(seasonId, epId))
+                                    navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.BangumiDetail.createRoute(seasonId, epId)))
                                 }
                             }
                         },
@@ -3336,7 +3657,7 @@ fun AppNavigation(
                             pushSearchRouteInNavigation3(keyword)
                         },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Route(ScreenRoutes.Live.createRoute(roomId, title, uname))
+                            navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.Live.createRoute(roomId, title, uname)))
                         },
                         onMusicClick = { musicId ->
                             if (musicId > 0L) pushNavigation3Key(BiliPaiNavKey.MusicDetail(musicId))
@@ -3425,7 +3746,7 @@ fun AppNavigation(
                                 onUpClick = { mid -> pushNavigation3Route(ScreenRoutes.Space.createRoute(mid)) },
                                 onBangumiClick = { seasonId ->
                                     if (seasonId > 0L) {
-                                        pushNavigation3Route(ScreenRoutes.BangumiDetail.createRoute(seasonId))
+                                        navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.BangumiDetail.createRoute(seasonId)))
                                     }
                                 },
                                 onUpResultClick = openUpResult,
@@ -3441,7 +3762,7 @@ fun AppNavigation(
                                     )
                                 },
                                 onLiveClick = { roomId, title, uname ->
-                                    pushNavigation3Route(ScreenRoutes.Live.createRoute(roomId, title, uname))
+                                    navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.Live.createRoute(roomId, title, uname)))
                                 },
                                 onTopicClick = { topicId ->
                                     if (topicId > 0L) {
@@ -3525,14 +3846,14 @@ fun AppNavigation(
                             if (seasonId > 0L || epId > 0L) {
                                 if (epId > 0L) {
                                     // 动态里的番剧卡带集数信息，直接播放该集
-                                    pushNavigation3Key(
+                                    navigateToSystemCardWindowOrPush(
                                         BiliPaiNavKey.BangumiPlayer(
                                             seasonId = seasonId,
                                             epId = epId
                                         )
                                     )
                                 } else {
-                                    pushNavigation3Key(
+                                    navigateToSystemCardWindowOrPush(
                                         BiliPaiNavKey.BangumiDetail(seasonId = seasonId, epId = epId)
                                     )
                                 }
@@ -3551,7 +3872,7 @@ fun AppNavigation(
                             pushSearchRouteInNavigation3(keyword)
                         },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         },
                         onMusicClick = { musicId ->
                             if (musicId > 0L) pushNavigation3Key(BiliPaiNavKey.MusicDetail(musicId))
@@ -3647,14 +3968,14 @@ fun AppNavigation(
                             if (seasonId > 0L || epId > 0L) {
                                 if (epId > 0L) {
                                     // 动态里的番剧卡带集数信息，直接播放该集
-                                    pushNavigation3Key(
+                                    navigateToSystemCardWindowOrPush(
                                         BiliPaiNavKey.BangumiPlayer(
                                             seasonId = seasonId,
                                             epId = epId
                                         )
                                     )
                                 } else {
-                                    pushNavigation3Key(
+                                    navigateToSystemCardWindowOrPush(
                                         BiliPaiNavKey.BangumiDetail(seasonId = seasonId, epId = epId)
                                     )
                                 }
@@ -3754,6 +4075,7 @@ fun AppNavigation(
                     VideoDetailScreen(
                         bvid = videoKey.bvid,
                         coverUrl = videoKey.coverUrl,
+                        title = videoKey.title,
                         cid = videoKey.cid,
                         onUpClick = { mid -> pushNavigation3Route(ScreenRoutes.Space.createRoute(mid)) },
                         onUpClickWithVideo = { mid, targetBvid ->
@@ -3761,10 +4083,11 @@ fun AppNavigation(
                         },
                         miniPlayerManager = miniPlayerManager,
                         isInPipMode = isInPipMode,
-                        isVisible = videoDetailPlaybackSessionActive &&
+                        isVisible = videoDetailPlaybackSessionActive && videoActivityWindowVisible && !officialVideoChildActive &&
                             navigation3BackStack.lastOrNull() !is BiliPaiNavKey.AudioMode,
-                        isPlaybackSessionActive = videoDetailPlaybackSessionActive,
-                        isOrientationOwner = navigation3BackStack.lastOrNull() == videoKey,
+                        isPlaybackSessionActive = videoDetailPlaybackSessionActive && videoActivityPlaybackActive &&
+                            !officialVideoChildActive,
+                        isOrientationOwner = videoActivityWindowVisible && navigation3BackStack.lastOrNull() == videoKey,
                         startInFullscreen = videoKey.fullscreen,
                         startAudioFromRoute = videoKey.startAudio,
                         autoEnterPortraitFromRoute = videoKey.autoPortrait,
@@ -3799,7 +4122,8 @@ fun AppNavigation(
                             }
                         },
                         onHomeClick = {
-                            popVideoDetailWithSharedReturnState(
+                            if (onVideoActivityHome != null) onVideoActivityHome()
+                            else popVideoDetailWithSharedReturnState(
                                 videoKey = videoKey,
                                 targetKey = BiliPaiNavKey.MainHost
                             ) {
@@ -3907,6 +4231,152 @@ fun AppNavigation(
                 }
 
                 @Composable
+                fun RenderVideoDetailCompanionEntryContent(key: BiliPaiNavKey) {
+                    val videoKey = key as BiliPaiNavKey.VideoDetail
+                    // 面板每次换视频都配一个独立 ViewModelStoreOwner，
+                    // 避免上一部视频的 ViewModel 状态被主宿主作用域复用。
+                    val paneViewModelStoreOwner = remember(videoKey, application) {
+                        object : androidx.lifecycle.ViewModelStoreOwner,
+                            androidx.lifecycle.HasDefaultViewModelProviderFactory {
+                            override val viewModelStore: androidx.lifecycle.ViewModelStore =
+                                androidx.lifecycle.ViewModelStore()
+                            // 详情各 ViewModel 共用面板作用域，并通过 Application 工厂创建。
+                            override val defaultViewModelProviderFactory: androidx.lifecycle.ViewModelProvider.Factory =
+                                androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+                        }
+                    }
+                    DisposableEffect(paneViewModelStoreOwner) {
+                        onDispose { paneViewModelStoreOwner.viewModelStore.clear() }
+                    }
+                    CompositionLocalProvider(
+                        androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner provides paneViewModelStoreOwner,
+                    ) {
+                        VideoDetailScreen(
+                            bvid = videoKey.bvid,
+                            coverUrl = videoKey.coverUrl,
+                            title = videoKey.title,
+                            cid = videoKey.cid,
+                            onUpClick = { mid -> pushNavigation3Route(ScreenRoutes.Space.createRoute(mid)) },
+                            onUpClickWithVideo = { mid, targetBvid ->
+                                pushNavigation3Key(BiliPaiNavKey.Space(mid = mid, targetBvid = targetBvid))
+                            },
+                            miniPlayerManager = miniPlayerManager,
+                            isInPipMode = isInPipMode,
+                            // 搜索、空间等页面覆盖主宿主后，面板停止可见页面工作。
+                            isVisible = companionVideoDetailVisible,
+                            isPlaybackSessionActive = companionSessionVisible,
+                            isOrientationOwner = companionVideoDetailVisible,
+                            onImmersivePlaybackChanged = { companionImmersivePlayback = it },
+                            onPlaybackIdentityChanged = { bvid, cid -> companionPlaybackIdentity = bvid to cid },
+                            startInFullscreen = videoKey.fullscreen,
+                            startAudioFromRoute = videoKey.startAudio,
+                            autoEnterPortraitFromRoute = videoKey.autoPortrait,
+                            initialVerticalFromRoute = videoKey.initialVertical,
+                            directPortraitEntryFromRoute = videoKey.directPortraitEntry,
+                            resumePositionMsFromRoute = videoKey.resumePositionMs,
+                            openCommentRootRpidFromRoute = videoKey.commentRootRpid,
+                            openCommentTargetRpidFromRoute = videoKey.commentTargetRpid,
+                            sourceRouteForSharedElement = videoKey.sourceRoute,
+                            keepLoadedContentForBackPreview = false,
+                            bindLivePlayerForBackPreview = false,
+                            predictiveBackCancelRecoveryGeneration = 0,
+                            isReturningFromDetail = false,
+                            isQuickReturningFromDetail = false,
+                            onMarkReturningFromDetail = {},
+                            onClearReturningFromDetail = {},
+                            // 面板不参与整卡 morph：转场时钟路径（P0）完全隔离。
+                            transitionEnabled = false,
+                            onBack = { closeCompanionVideoDetail() },
+                            onHomeClick = { closeCompanionVideoDetail() },
+                            onNavigateToAudioMode = {
+                                closeCompanionVideoDetail()
+                                pushNavigation3Key(
+                                    BiliPaiNavKey.AudioMode(
+                                        sourceBvid = videoKey.bvid,
+                                        sourceCid = videoKey.cid,
+                                        sourceResumePositionMs = videoKey.resumePositionMs
+                                    )
+                                )
+                            },
+                            onNavigateToSearch = { pushNavigation3Key(BiliPaiNavKey.Search) },
+                            onSearchKeywordClick = submitSearchKeywordInNavigation3,
+                            onOpenBilibiliLink = ::openBilibiliLinkInNavigation3,
+                            onRedirectToBangumi = { url -> openBilibiliLinkInNavigation3(url) },
+                            onReplaceVideoDetail = { targetBvid, targetCid, targetCover, resumePositionMs ->
+                                val normalizedBvid = targetBvid.trim()
+                                if (normalizedBvid.isBlank() || normalizedBvid == videoKey.bvid) {
+                                    false
+                                } else {
+                                    companionVideoDetailKey = BiliPaiNavKey.VideoDetail(
+                                        bvid = normalizedBvid,
+                                        cid = targetCid.coerceAtLeast(0L),
+                                        coverUrl = targetCover,
+                                        resumePositionMs = resumePositionMs.coerceAtLeast(0L),
+                                    )
+                                    true
+                                }
+                            },
+                            onVideoClick = { vid, options ->
+                                val targetCid = options?.getLong(
+                                    com.android.purebilibili.feature.video.screen.VIDEO_NAV_TARGET_CID_KEY
+                                ) ?: 0L
+                                val coverUrl = options?.getString(
+                                    com.android.purebilibili.feature.video.screen.VIDEO_NAV_COVER_URL_KEY
+                                ).orEmpty()
+                                // 面板内点相关视频：替换面板内容，不进返回栈。
+                                companionVideoDetailKey = BiliPaiNavKey.VideoDetail(
+                                    bvid = vid,
+                                    cid = targetCid,
+                                    coverUrl = coverUrl,
+                                    fullscreen = com.android.purebilibili.feature.video.screen
+                                        .resolveVideoNavigationStartInFullscreen(options),
+                                    initialVertical = com.android.purebilibili.feature.video.screen
+                                        .resolveVideoNavigationIsVertical(options) ?: false,
+                                    sourceRoute = "video/${videoKey.bvid}",
+                                )
+                            },
+                            onBgmClick = { bgm ->
+                                val musicId = bgm.musicId.ifBlank {
+                                    (BilibiliNavigationTargetParser.parse(bgm.jumpUrl) as? BilibiliNavigationTarget.Music)?.musicId.orEmpty()
+                                }
+                                if (musicId.isNotBlank()) {
+                                    pushNavigation3Key(BiliPaiNavKey.BgmDetail(musicId, cid = videoKey.cid))
+                                } else if (bgm.jumpUrl.isNotBlank()) {
+                                    pushNavigation3Key(BiliPaiNavKey.Web(bgm.jumpUrl, "发现音乐"))
+                                }
+                            },
+                        )
+                    }
+                }
+
+                @Composable
+                fun VideoDetailCompanionPane(modifier: Modifier = Modifier) {
+                    val paneKey = companionVideoDetailKey ?: return
+                    Box(
+                        modifier = modifier.background(MaterialTheme.colorScheme.background),
+                    ) {
+                        CompositionLocalProvider(
+                            // 详情只使用右栏的布局宽度；底栏占位由左侧列表独立承担。
+                            com.android.purebilibili.feature.video.screen.LocalVideoCompanionPane provides true,
+                            LocalWindowSizeClass provides windowSizeClass.copy(
+                                widthDp = companionPaneWidth,
+                                widthSizeClass = com.android.purebilibili.core.util
+                                    .resolveWindowWidthSizeClass(companionPaneWidth),
+                            ),
+                            com.android.purebilibili.core.ui.LocalVisualWorkAllowed provides (
+                                com.android.purebilibili.core.ui.LocalVisualWorkAllowed.current && companionVideoDetailVisible
+                            ),
+                            com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed provides
+                                companionVideoDetailVisible,
+                            LocalBottomBarVisible provides false,
+                            LocalBottomBarContentPadding provides 0.dp,
+                        ) {
+                            RenderVideoDetailCompanionEntryContent(paneKey)
+                        }
+                    }
+                }
+
+                @Composable
                 fun RenderOnboardingEntryContent(key: BiliPaiNavKey) {
                     com.android.purebilibili.feature.onboarding.OnboardingScreen(
                         onFinish = {
@@ -3951,6 +4421,7 @@ fun AppNavigation(
                             onWebDavBackupClick = { pushNavigation3Key(BiliPaiNavKey.WebDavBackup) },
                             onNavigateToBottomBarSettings = { pushNavigation3Key(BiliPaiNavKey.BottomBarSettings) },
                             onTipsClick = { pushNavigation3Key(BiliPaiNavKey.TipsSettings) },
+                            onKeyboardShortcutsClick = { pushNavigation3Key(BiliPaiNavKey.KeyboardShortcutsSettings) },
                             onReplayOnboardingClick = { pushNavigation3Route(ScreenRoutes.Onboarding.route) },
                             onCategoryClick = { category ->
                                 pushNavigation3Key(resolveSettingsCategoryNavKey(category))
@@ -3995,6 +4466,7 @@ fun AppNavigation(
                             onWebDavBackupClick = { pushNavigation3Key(BiliPaiNavKey.WebDavBackup) },
                             onNavigateToBottomBarSettings = { pushNavigation3Key(BiliPaiNavKey.BottomBarSettings) },
                             onTipsClick = { pushNavigation3Key(BiliPaiNavKey.TipsSettings) },
+                            onKeyboardShortcutsClick = { pushNavigation3Key(BiliPaiNavKey.KeyboardShortcutsSettings) },
                             onReplayOnboardingClick = { pushNavigation3Route(ScreenRoutes.Onboarding.route) },
                             onCategoryClick = { category ->
                                 pushNavigation3Key(resolveSettingsCategoryNavKey(category))
@@ -4207,6 +4679,15 @@ fun AppNavigation(
                 }
 
                 @Composable
+                fun RenderKeyboardShortcutsSettingsEntryContent(key: BiliPaiNavKey) {
+                    SettingsTabletEntry(key) {
+                        com.android.purebilibili.feature.settings.KeyboardShortcutsSettingsScreen(
+                            onBack = { performSystemBackAction() }
+                        )
+                    }
+                }
+
+                @Composable
                 fun RenderAicuQueryEntryContent(key: BiliPaiNavKey) {
                     val aicuKey = key as BiliPaiNavKey.AicuQuery
                     com.android.purebilibili.feature.aicu.AicuRoute(
@@ -4355,7 +4836,7 @@ fun AppNavigation(
                         showNavigationBack = false,
                         scrollToTopChannel = liveScrollChannel,
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         },
                         onSearchClick = { pushNavigation3Key(BiliPaiNavKey.LiveSearch) },
                         onMatchClick = { pushNavigation3Key(BiliPaiNavKey.LiveMatch) },
@@ -4380,7 +4861,7 @@ fun AppNavigation(
                     com.android.purebilibili.feature.live.LiveSearchScreen(
                         onBack = { performSystemBackAction() },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         },
                         onUserClick = { mid -> pushNavigation3Key(BiliPaiNavKey.Space(mid)) }
                     )
@@ -4390,7 +4871,7 @@ fun AppNavigation(
                 fun RenderLiveAreaEntryContent(key: BiliPaiNavKey) {
                     com.android.purebilibili.feature.live.LiveAreaScreen(
                         onBack = { performSystemBackAction() },
-                        onAreaContainerClick = { target -> pushNavigation3Key(target) },
+                        onAreaContainerClick = { target -> navigateToSystemCardWindowOrPush(target) },
                         onAreaClick = { parentAreaId, areaId, title ->
                             pushNavigation3Key(
                                 BiliPaiNavKey.LiveAreaDetail(
@@ -4422,7 +4903,7 @@ fun AppNavigation(
                             )
                         },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         }
                     )
                 }
@@ -4434,7 +4915,7 @@ fun AppNavigation(
                     com.android.purebilibili.feature.live.LiveMatchScreen(
                         onBack = { performSystemBackAction() },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         },
                         onVideoClick = { bvid -> pushNavigation3Key(BiliPaiNavKey.VideoDetail(bvid = bvid)) },
                         onLoginClick = { pushNavigation3Key(BiliPaiNavKey.Login) },
@@ -4458,7 +4939,7 @@ fun AppNavigation(
                     com.android.purebilibili.feature.live.LiveFollowingScreen(
                         onBack = { performSystemBackAction() },
                         onLiveClick = { roomId, title, uname ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString(), title = title, uname = uname))
                         }
                     )
                 }
@@ -4581,7 +5062,7 @@ fun AppNavigation(
                             pushNavigation3Route(ScreenRoutes.Space.createRoute(mid))
                         },
                         onFavoriteBangumiClick = { seasonId ->
-                            pushNavigation3Key(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
                         },
                         onFavoriteCheeseClick = { seasonId ->
                             pushNavigation3Key(
@@ -4781,7 +5262,7 @@ fun AppNavigation(
                             )
                         },
                         onBangumiSeasonClick = { seasonId ->
-                            pushNavigation3Route(ScreenRoutes.BangumiDetail.createRoute(seasonId))
+                            navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(ScreenRoutes.BangumiDetail.createRoute(seasonId)))
                         },
                         onBangumiClick = { initialType ->
                             pushNavigation3Route(ScreenRoutes.Bangumi.createRoute(initialType))
@@ -4882,13 +5363,13 @@ fun AppNavigation(
                     com.android.purebilibili.feature.bangumi.BangumiScreen(
                         onBack = { performSystemBackAction() },
                         onBangumiClick = { seasonId ->
-                            pushNavigation3Key(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiDetail(seasonId = seasonId))
                         },
                         onPlayFollow = { seasonId ->
-                            pushNavigation3Key(BiliPaiNavKey.BangumiPlayer(seasonId = seasonId, epId = 0L))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.BangumiPlayer(seasonId = seasonId, epId = 0L))
                         },
                         onBangumiEpisodeClick = { seasonId, epId ->
-                            pushNavigation3Key(
+                            navigateToSystemCardWindowOrPush(
                                 BiliPaiNavKey.BangumiDetail(
                                     seasonId = seasonId,
                                     epId = epId
@@ -4896,7 +5377,7 @@ fun AppNavigation(
                             )
                         },
                         onPlayEpisode = { seasonId, episode ->
-                            pushNavigation3Key(
+                            navigateToSystemCardWindowOrPush(
                                 BiliPaiNavKey.BangumiPlayer(
                                     seasonId = seasonId,
                                     epId = episode.id,
@@ -5096,7 +5577,7 @@ fun AppNavigation(
                         cid = matchKey.cid,
                         onBack = { performSystemBackAction() },
                         onLiveClick = { roomId ->
-                            pushNavigation3Key(BiliPaiNavKey.Live(roomId = roomId.toString()))
+                            navigateToSystemCardWindowOrPush(BiliPaiNavKey.Live(roomId = roomId.toString()))
                         },
                         onVideoClick = { bvid ->
                             pushNavigation3Key(BiliPaiNavKey.VideoDetail(bvid = bvid))
@@ -5189,6 +5670,12 @@ fun AppNavigation(
                 fun RenderLiveEntryContent(key: BiliPaiNavKey) {
                     val liveKey = key as BiliPaiNavKey.Live
                     val activity = context as? android.app.Activity
+                    // 从应用内小窗展开时恢复退出前的全屏方向；只在此处消费一次。
+                    val startFullscreen = remember(liveKey.roomId) {
+                        miniPlayerManager?.consumeLiveRestoreFullscreen(
+                            liveKey.roomId.toLongOrNull() ?: 0L
+                        ) == true
+                    }
                     DisposableEffect(liveKey.roomId, miniPlayerManager) {
                         onDispose {
                             val isChangingConfigurations = activity?.isChangingConfigurations == true
@@ -5209,6 +5696,7 @@ fun AppNavigation(
                         title = liveKey.title,
                         uname = liveKey.uname,
                         siteId = liveKey.siteId,
+                        startFullscreen = startFullscreen,
                         onBack = { performSystemBackAction() },
                         onUserClick = { mid -> pushNavigation3Key(BiliPaiNavKey.Space(mid)) }
                     )
@@ -5266,6 +5754,7 @@ fun AppNavigation(
                                 // GraphicsLayer.record 会递归录制自身，返回时只剩 shared 卡片、
                                 // 来源页变黑。页面路由仍通过 Local source route 提供给卡片匹配。
                                 Box(modifier = Modifier.fillMaxSize()) {
+                                    // 伴随面板打开时 feed 收窄让位，右侧驻留详情；关闭即回满宽。
                                     HorizontalPager(
                                         modifier = Modifier.fillMaxSize(),
                                         state = bottomPagerState,
@@ -5314,6 +5803,12 @@ fun AppNavigation(
                                                 resolveBottomPagerSaveableStateKey(slotItem)
                                             ) {
                                                 CompositionLocalProvider(
+                                                    LocalWindowSizeClass provides (
+                                                        if (slotItem == BottomNavItem.HOME) windowSizeClass else sourcePaneWindowSizeClass
+                                                    ),
+                                                    LocalAppWindowAdaptiveInfo provides (
+                                                        if (slotItem == BottomNavItem.HOME) appWindowAdaptiveInfo else sourcePaneAdaptiveInfo
+                                                    ),
                                                     com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed provides
                                                         com.android.purebilibili.core.ui.blur.rememberPagerChromeBackdropRecordingAllowed(
                                                             bottomPagerState, page,
@@ -5326,11 +5821,11 @@ fun AppNavigation(
                                                     ),
                                                     com.android.purebilibili.core.ui.LocalVisualWorkAllowed provides (
                                                         page == bottomPagerState.settledPage &&
-                                                            bottomPagerBackgroundWorkAllowed
+                                                            bottomPagerBackgroundWorkAllowed && feedPaneVisible
                                                     ),
                                                     LocalVideoCardSharedElementSourceRoute provides pageKey.toLegacyRoute(),
                                                     com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed provides (
-                                                        pageImageLoadingAllowed
+                                                        pageImageLoadingAllowed && feedPaneVisible
                                                     ),
                                                 ) {
                                                     MainHostTabBackScope(
@@ -5342,8 +5837,8 @@ fun AppNavigation(
                                                         RenderNavigationContent(
                                                             key = pageKey,
                                                             isBottomPagerPageActive = page == bottomPagerState.settledPage &&
-                                                                bottomPagerBackgroundWorkAllowed,
-                                                            isBottomPagerPageVisibleDuringNavigation = pageVisibleDuringNavigation,
+                                                                bottomPagerBackgroundWorkAllowed && feedPaneVisible,
+                                                            isBottomPagerPageVisibleDuringNavigation = pageVisibleDuringNavigation && feedPaneVisible,
                                                             isBottomPagerHosted = true,
                                                         )
                                                     }
@@ -5360,6 +5855,15 @@ fun AppNavigation(
                             RenderHomeEntryContent(key, isBottomPagerPageActive, isBottomPagerPageVisibleDuringNavigation)
                         BiliPaiNavEntryContentRole.LISTEN_VIDEO ->
                             RenderListenVideoEntryContent(key)
+                        BiliPaiNavEntryContentRole.PERSONAL_RECAP_UPS -> {
+                            val recapKey = key as BiliPaiNavKey.PersonalRecapUps
+                            com.android.purebilibili.feature.list.PersonalRecapUpsScreen(
+                                window = recapKey.window,
+                                stats = recapKey.stats,
+                                onBack = { performSystemBackAction() },
+                                onUpClick = { mid -> pushNavigation3Key(BiliPaiNavKey.Space(mid)) },
+                            )
+                        }
                         BiliPaiNavEntryContentRole.HISTORY ->
                             RenderHistoryEntryContent(key, isBottomPagerPageActive, isBottomPagerHosted)
                         BiliPaiNavEntryContentRole.DYNAMIC ->
@@ -5416,6 +5920,8 @@ fun AppNavigation(
                             RenderWebDavBackupEntryContent(key)
                         BiliPaiNavEntryContentRole.TIPS_SETTINGS ->
                             RenderTipsSettingsEntryContent(key)
+                        BiliPaiNavEntryContentRole.KEYBOARD_SHORTCUTS_SETTINGS ->
+                            RenderKeyboardShortcutsSettingsEntryContent(key)
                         BiliPaiNavEntryContentRole.AICU_QUERY ->
                             RenderAicuQueryEntryContent(key)
                         BiliPaiNavEntryContentRole.WATCH_LATER ->
@@ -5514,11 +6020,59 @@ fun AppNavigation(
                     }
                 }
 
+                val companionKey = companionVideoDetailKey
+                LaunchedEffect(
+                    companionKey,
+                    videoCompanionEnabled,
+                    companionSessionVisible,
+                    companionPaneState.mode,
+                    windowSizeClass.widthSizeClass,
+                    windowSizeClass.heightSizeClass,
+                    appWindowAdaptiveInfo.posture,
+                    appWindowAdaptiveInfo.shouldAvoidHinge,
+                ) {
+                    // 已主动收起视频时，合盖仍留在首页；恢复视频后再接管整页。
+                    if (companionKey == null) return@LaunchedEffect
+                    if (!videoCompanionEnabled) {
+                        closeCompanionVideoDetail()
+                        return@LaunchedEffect
+                    }
+                    if (!companionSessionVisible || companionPaneState.mode == CompanionPaneMode.Feed) return@LaunchedEffect
+                    // 跨断点（合盖/收窄/姿态变化）面板升级为整页接管。
+                    val presentation = resolveVideoDetailPresentation(
+                        VideoDetailPresentationInput(
+                            isExpandedWindow = windowSizeClass.isExpandedScreen &&
+                                windowSizeClass.heightSizeClass != WindowHeightSizeClass.Compact,
+                            foldPosture = appWindowAdaptiveInfo.posture,
+                            isVerticalVideo = companionKey.initialVertical,
+                            requestsLandscapeFullscreen = companionKey.fullscreen,
+                            shouldAvoidHinge = appWindowAdaptiveInfo.shouldAvoidHinge,
+                        )
+                    )
+                    if (presentation == VideoDetailPresentationMode.FULL_TAKEOVER) {
+                        // 合盖/收窄是同一播放会话换布局，不能执行普通离页停播。
+                        // 活跃播放器继续由 manager 持有，新详情沿用已有复用逻辑，
+                        // 保留 playWhenReady；实时 cid/进度也交给整页入口。
+                        val manager = miniPlayerManager
+                        val takeoverKey = currentCompanionVideoKey()?.copy(
+                            fullscreen = companionImmersivePlayback && !isInPipMode,
+                        ) ?: return@LaunchedEffect
+                        // 旧面板的销毁也应识别为详情接管，避免延后恢复方向盖过新页面。
+                        manager?.isNavigatingToVideo = true
+                        companionVideoDetailKey = null
+                        companionPlaybackIdentity = null
+                        companionSourceKey = null
+                        pushResolvedNavigation3KeyDirect(takeoverKey)
+                    }
+                }
+                Box(Modifier.fillMaxSize().then(if (companionSessionVisible) Modifier.clipToBounds() else Modifier)) {
                 BiliPaiNavDisplayHost(
                     backStack = navigation3BackStack,
-                    onOpenCardContainer = { pushNavigation3Key(it) },
+                    onOpenCardContainer = { navigateToSystemCardWindowOrPush(it) },
                     activeMainHostRoute = activeBottomTabRoute,
-                    cardTransitionEnabled = sharedVideoCardTransitionEnabled,
+                    // 系统转场未启动时，视频、直播及文章等均回退普通页面转场。
+                    cardTransitionEnabled = cardTransitionEnabled && !systemReduceMotion,
+                    videoCardTransitionEnabled = sharedVideoCardTransitionEnabled,
                     videoTransitionRealtimeBlurEnabled = videoTransitionRealtimeBlurEnabled,
                     isLightBackground = isLightBackground,
                     reduceMotion = systemReduceMotion,
@@ -5531,21 +6085,16 @@ fun AppNavigation(
                         appNavigationSettings.miuixTransitionBlurEnabled,
                     miuixPredictiveBackMaxProgressPercent =
                         appNavigationSettings.miuixPredictiveBackMaxProgressPercent,
-                    videoSharedReturnGestureFollowEnabled =
-                        appNavigationSettings.videoSharedReturnGestureFollowEnabled,
-                    videoSharedReturnGestureTranslationEnabled =
-                        appNavigationSettings.videoSharedReturnGestureTranslationEnabled,
                     sourceMetadata = navigation3SourceMetadata,
                     programmaticBackDispatcher = navigation3ProgrammaticBackDispatcher,
                     // List cover waits for the live handoff window; list info is native throughout return.
-                    videoReturnContentFollowProgressEnabled =
-                        appNavigationSettings.videoReturnContentFollowProgressEnabled,
                     settingsContainerMorphEnabled =
                         appNavigationSettings.settingsContainerMorphEnabled,
                     settingsContainerRealtimeBlurEnabled =
                         appNavigationSettings.settingsContainerRealtimeBlurEnabled,
                     preferWholeCardReturn = false,
                     onBack = { performSystemBackAction() },
+                    onPrepareVideoCardGesture = { refreshVideoCardReturnGeometry() },
                     onPrepareVideoCardSharedReturn = {
                         // 普通返回(顶部按钮/系统手势提交)兜底预热。
                         maybePrefetchHomeCoversForVideoReturn()
@@ -5571,6 +6120,16 @@ fun AppNavigation(
                     videoSourceGeneration = navigation3ReturnSession.sourceGeneration,
                     modifier = Modifier
                         .fillMaxSize()
+                        .then(
+                            if (companionSessionVisible) Modifier.layout { measurable, constraints ->
+                                val widthDp = constraints.maxWidth.toDp().value
+                                val feedWidth = (constraints.maxWidth * companionPaneState.measuredFeedFraction(widthDp)).toInt()
+                                val placeable = measurable.measure(constraints.copy(minWidth = feedWidth, maxWidth = feedWidth))
+                                layout(constraints.maxWidth, placeable.height) {
+                                    if (feedPaneVisible) placeable.placeRelative(0, 0)
+                                }
+                            } else Modifier,
+                        )
                         .onGloballyPositioned { coordinates ->
                             navigationHostOriginInRoot = coordinates.positionInRoot()
                         },
@@ -5580,14 +6139,48 @@ fun AppNavigation(
                     ) {
                         VideoCardTransitionBackgroundRouteContent(key) {
                             CompositionLocalProvider(
+                                LocalWindowSizeClass provides (
+                                    if (key == BiliPaiNavKey.MainHost) windowSizeClass else sourcePaneWindowSizeClass
+                                ),
+                                LocalAppWindowAdaptiveInfo provides (
+                                    if (key == BiliPaiNavKey.MainHost) appWindowAdaptiveInfo else sourcePaneAdaptiveInfo
+                                ),
+                                com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed provides (
+                                    com.android.purebilibili.core.ui.components.LocalPageImageLoadingAllowed.current && feedPaneVisible
+                                ),
                                 com.android.purebilibili.core.ui.LocalVisualWorkAllowed provides
-                                    (key == currentNavigation3Key),
+                                    (key == currentNavigation3Key && feedPaneVisible),
                             ) {
                                 RenderNavigationContent(key)
                             }
                         }
                     }
                 }
+                // 伴随面板：feed 驻留左侧，详情引擎整体挂主宿主层右栏。
+                if (companionVideoDetailKey != null) {
+                    VideoDetailCompanionPane(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .layout { measurable, constraints ->
+                                val widthDp = constraints.maxWidth.toDp().value
+                                // 沉浸播放临时占满内容区，不改变用户提交的分栏比例；三种材质共用。
+                                val videoWidth = if (companionFullscreenActive) constraints.maxWidth else
+                                    (constraints.maxWidth * companionPaneState.measuredVideoFraction(widthDp)).toInt()
+                                val placeable = measurable.measure(constraints.copy(minWidth = videoWidth, maxWidth = videoWidth))
+                                layout(constraints.maxWidth, placeable.height) {
+                                    if (companionSessionVisible && companionPaneState.mode != CompanionPaneMode.Feed) {
+                                        placeable.placeRelative(constraints.maxWidth - videoWidth, 0)
+                                    }
+                                }
+                            },
+                    )
+                    if (companionSessionVisible && !companionImmersivePlayback) CompanionPaneDivider(
+                        state = companionPaneState,
+                        contentWidth = companionContentWidth,
+                        modifier = Modifier.zIndex(2f),
+                    )
+                }
+                } // global companion layout
                 }
             } // End of Content Box
             } // End of navigation content row
@@ -5626,6 +6219,27 @@ fun AppNavigation(
                     .align(Alignment.BottomCenter)
                     .zIndex(1f)
                     .then(
+                        if (companionFeedWidth != null && companionSessionVisible) {
+                            // 双栏共用同一内容宽度；玻璃与原生底栏都留在列表面板内。
+                            Modifier.layout { measurable, constraints ->
+                                val feedWidth = (companionContentWidth.roundToPx() *
+                                    companionPaneState.measuredFeedFraction(companionContentWidth.value))
+                                    .toInt().coerceAtMost(constraints.maxWidth)
+                                val placeable = measurable.measure(
+                                    constraints.copy(minWidth = feedWidth, maxWidth = feedWidth),
+                                )
+                                layout(constraints.maxWidth, placeable.height) {
+                                    if (companionPaneState.mode != CompanionPaneMode.Video) {
+                                        placeable.placeRelative(
+                                            (constraints.maxWidth - companionContentWidth.roundToPx()).coerceAtLeast(0),
+                                            0,
+                                        )
+                                    }
+                                }
+                            }
+                        } else Modifier,
+                    )
+                    .then(
                         if (driveBottomBarByProgress) {
                             Modifier.videoCardTransitionChromeReveal(
                                 revealProvider = {
@@ -5644,6 +6258,9 @@ fun AppNavigation(
                     BottomBarMatchedDockVisibility(
                         visibleState = bottomBarVisibilityState,
                         edge = BottomBarMatchedDockEdge.BOTTOM,
+                        // 普通视频返回只保留滑入和淡入；玻璃与原生共用，其他显隐沿用默认缩放。
+                        animateScale = systemCardTransitionEnabled ||
+                            !navigation3ReturnSession.isReturningFromDetail,
                         enterFadeDurationMillis = navMotionSpec.slowFadeDurationMillis,
                         exitFadeDurationMillis = navMotionSpec.fastFadeDurationMillis
                     ) {
@@ -5675,7 +6292,7 @@ fun AppNavigation(
                                         onCompactClick = compactClick,
                                         isLayoutStable = layoutStable && !driveBottomBarByProgress,
                                         pauseArtworkRotation = pauseNowPlayingArtworkRotation,
-                                        captureCardSourceOnExpand = !audioNowPlayingBarOpensAudioMode,
+                                        captureCardSourceOnExpand = true,
                                         sourceRoute = currentRoute ?: ScreenRoutes.Home.route,
                                         handoff = audioNowPlayingHandoff,
                                         onExpand = {
@@ -5686,7 +6303,7 @@ fun AppNavigation(
                                                 coverUrl = audioNowPlayingItem.cover,
                                             )
                                             if (audioNowPlayingBarOpensAudioMode) {
-                                                pushNavigation3Route(expandRoute)
+                                                navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(expandRoute))
                                             } else {
                                                 navigateToVideoRouteInNavigation3(
                                                     route = expandRoute,
@@ -5716,7 +6333,7 @@ fun AppNavigation(
                                         } else {
                                             "视频详情页"
                                         },
-                                        glassEnabled = effectiveHomeSettings.androidNativeLiquidGlassEnabled,
+                                        glassEnabled = effectiveHomeSettings.nowPlayingGlassEnabled,
                                         blurEnabled = isBottomBarBlurEnabled,
                                         hazeState = if (isBottomBarBlurEnabled) mainHazeState else null,
                                         miuixBackdrop = bottomBarBackdrop,
@@ -5939,7 +6556,7 @@ fun AppNavigation(
                         }
                     } else {
                     // 独立横条退场仍需要玻璃；到本体退出组合才释放背景采样。
-                    if (effectiveHomeSettings.androidNativeLiquidGlassEnabled && bottomBarBackdrop != null) {
+                    if (effectiveHomeSettings.nowPlayingGlassEnabled && bottomBarBackdrop != null) {
                         DisposableEffect(floatingBackdropDemand) {
                             val token = Any()
                             floatingBackdropDemand.acquire(token)
@@ -5958,7 +6575,7 @@ fun AppNavigation(
                     ),
                     isLayoutStable = !driveBottomBarByProgress,
                     pauseArtworkRotation = pauseNowPlayingArtworkRotation,
-                    captureCardSourceOnExpand = !audioNowPlayingBarOpensAudioMode,
+                    captureCardSourceOnExpand = true,
                     sourceRoute = currentRoute ?: ScreenRoutes.Home.route,
                     handoff = audioNowPlayingHandoff,
                     onExpand = {
@@ -5969,7 +6586,7 @@ fun AppNavigation(
                             coverUrl = audioNowPlayingItem.cover,
                         )
                         if (audioNowPlayingBarOpensAudioMode) {
-                            pushNavigation3Route(expandRoute)
+                            navigateToSystemCardWindowOrPush(legacyRouteToBiliPaiNavKey(expandRoute))
                         } else {
                             navigateToVideoRouteInNavigation3(
                                 route = expandRoute,
@@ -5999,7 +6616,7 @@ fun AppNavigation(
                     } else {
                         "视频详情页"
                     },
-                    glassEnabled = effectiveHomeSettings.androidNativeLiquidGlassEnabled,
+                    glassEnabled = effectiveHomeSettings.nowPlayingGlassEnabled,
                     blurEnabled = isBottomBarBlurEnabled,
                     hazeState = if (isBottomBarBlurEnabled) mainHazeState else null,
                     miuixBackdrop = bottomBarBackdrop,
@@ -6021,6 +6638,11 @@ fun AppNavigation(
                     }
                 },
             )
+
+            // 主宿主只有一个返回栈条目时，先关闭右侧面板，再执行首页退出行为。
+            androidx.activity.compose.BackHandler(enabled = companionSessionVisible && !companionImmersivePlayback) {
+                performSystemBackAction()
+            }
 
             ImagePreviewOverlayHost(
                 modifier = Modifier

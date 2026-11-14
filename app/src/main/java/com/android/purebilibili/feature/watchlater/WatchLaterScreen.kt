@@ -1,11 +1,12 @@
 // 文件路径: feature/watchlater/WatchLaterScreen.kt
 package com.android.purebilibili.feature.watchlater
 
+import com.android.purebilibili.core.ui.transition.videoCardSourceAnchor
 import com.android.purebilibili.core.util.responsiveContentWidth
 
 import com.android.purebilibili.navigation.tabSelectedPage
 import com.android.purebilibili.navigation.tabIndicatorPosition
-import com.android.purebilibili.feature.home.effectiveGridColumnCount
+import com.android.purebilibili.feature.home.effectiveGridColumnCountForWindow
 import com.android.purebilibili.feature.home.effectiveGridColumnCountCompact
 import com.android.purebilibili.feature.home.gridColumnPinchEnabled
 import com.android.purebilibili.core.ui.components.VideoStatusBadges
@@ -127,7 +128,6 @@ import com.android.purebilibili.core.ui.transition.VideoCardSourceLayout
 import com.android.purebilibili.core.ui.transition.rememberNativeVideoCardSnapshotController
 import com.android.purebilibili.core.ui.transition.resolveVideoCardSharedTransitionMotionSpec
 import com.android.purebilibili.core.ui.transition.shouldUseVideoCardShellSharedBounds
-import com.android.purebilibili.core.ui.transition.videoCardShellSharedBoundsOrEmpty
 import com.android.purebilibili.core.ui.transition.withMeasuredCoverDecodeSize
 import com.android.purebilibili.feature.home.components.cards.videoCardShellReturnChromeAlpha
 import com.android.purebilibili.data.model.response.VideoItem
@@ -141,6 +141,7 @@ import com.android.purebilibili.feature.personal.PersonalMediaCardSkeleton
 import com.android.purebilibili.feature.home.components.cards.HorizontalVideoStatRow
 import com.android.purebilibili.feature.home.components.BiliPaiImmersiveTopBar
 import com.android.purebilibili.feature.home.components.shouldUseBiliPaiProgressiveTopBlur
+import com.android.purebilibili.feature.plugin.rememberSponsorFeedBadgeLabel
 import com.android.purebilibili.core.util.CardPositionManager
 import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import kotlinx.coroutines.Dispatchers
@@ -828,13 +829,13 @@ fun WatchLaterScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val accountIdentity by TokenManager.accountIdentity.collectAsStateWithLifecycle()
     val initialAccountIdentity = remember { accountIdentity }
-    // 默认单列，可通过默认列数或双指缩放调整。
+    // 手机默认单列，宽屏按卡宽自动增列；手动列数与双指缩放仍优先。
     val windowSizeClass = LocalWindowSizeClass.current
     val configuration = LocalConfiguration.current
-    val pinchColumnBounds = remember(windowSizeClass.widthSizeClass, configuration.screenWidthDp) {
+    val pinchColumnBounds = remember(windowSizeClass.widthSizeClass, windowSizeClass.widthDp) {
         resolveHomeFeedPinchColumnBounds(
             widthSizeClass = windowSizeClass.widthSizeClass,
-            contentWidthDp = configuration.screenWidthDp,
+            contentWidthDp = windowSizeClass.widthDp.value.toInt(),
         )
     }
     val context = LocalContext.current
@@ -845,10 +846,15 @@ fun WatchLaterScreen(
         settings = homeSettings,
         widthSizeClass = windowSizeClass.widthSizeClass,
         defaultColumns = com.android.purebilibili.feature.home.resolveHomeFeedStoredColumnCount(
-            windowSizeClass.widthSizeClass, homeSettings.effectiveGridColumnCountCompact, homeSettings.effectiveGridColumnCount,
-        ).takeIf { it > 0 } ?: 1,
+            windowSizeClass.widthSizeClass, homeSettings.effectiveGridColumnCountCompact, homeSettings.effectiveGridColumnCountForWindow(windowSizeClass),
+        ).takeIf { it > 0 } ?: com.android.purebilibili.feature.personal.resolvePersonalListDefaultColumns(
+            contentWidthDp = (windowSizeClass.widthDp.value - 32f).toInt(),
+            compactColumns = 1,
+            cardWidthPreset = homeSettings.homeFeedCardWidthPreset,
+            widthSizeClass = windowSizeClass.widthSizeClass,
+        ),
         bounds = resolveHomeFeedPinchColumnBounds(
-            windowSizeClass.widthSizeClass, LocalConfiguration.current.screenWidthDp,
+            windowSizeClass.widthSizeClass, windowSizeClass.widthDp.value.toInt(),
         ),
     )
     val pinchListColumns = gridColumnPreference.columns
@@ -1440,11 +1446,14 @@ fun WatchLaterScreen(
                     Box(Modifier.fillMaxSize()) {
                         when {
                             state.isLoading -> {
-                                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                                val skeletonAnimationGate = com.android.purebilibili.core.ui.rememberDecorativeAnimationGate(
+                                    respectComponentMotion = false,
+                                )
+                                BoxWithConstraints(modifier = Modifier.fillMaxSize().then(skeletonAnimationGate.modifier)) {
                                     val skeletonColumns = pinchListColumns
                                     val skeletonBlockColor = com.android.purebilibili.core.ui.skeleton
                                         .rememberContentSkeletonBlockColor(
-                                            com.android.purebilibili.core.ui.skeleton.rememberSkeletonSweepState()
+                                            com.android.purebilibili.core.ui.skeleton.rememberSkeletonSweepState(animated = skeletonAnimationGate.active)
                                         )
                                     LazyVerticalGrid(
                                         columns = GridCells.Fixed(skeletonColumns),
@@ -1766,6 +1775,7 @@ private fun WatchLaterVideoCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val sponsorStatusLabel = rememberSponsorFeedBadgeLabel(item.bvid)
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val screenWidthPx = remember(configuration.screenWidthDp, density) {
@@ -1876,17 +1886,7 @@ private fun WatchLaterVideoCard(
         },
         selected = isSelected,
         modifier = modifier
-            .videoCardShellSharedBoundsOrEmpty(
-                enabled = useCardShellSharedBounds,
-                sharedTransitionScope = sharedTransitionScope,
-                animatedVisibilityScope = animatedVisibilityScope,
-                bvid = item.bvid,
-                sourceRoute = sourceRoute,
-                motionSpec = sharedTransitionMotionSpec,
-                clipShape = cardShellShape,
-                // 让播放器接管移动中的整卡，返回时再在 morph 末段接回源卡，避免与播放器重叠。
-                crossfadeSourceContent = true,
-            )
+            .videoCardSourceAnchor(item.bvid, cardShellShape)
             .onGloballyPositioned { coordinates ->
                 cardBoundsRef.value = coordinates.videoCardSourceBoundsInRoot()
             },
@@ -1963,7 +1963,7 @@ private fun WatchLaterVideoCard(
         },
         coverOverlayContent = {
             VideoStatusBadges(
-                labels = item.statusLabels,
+                labels = item.statusLabels + listOfNotNull(sponsorStatusLabel),
                 modifier = Modifier.align(Alignment.TopEnd).padding(AppSpacingTokens.ExtraSmall),
             )
             val progressState = com.android.purebilibili.data.model.resolveWatchLaterDisplayProgressState(item)

@@ -1,7 +1,7 @@
 package com.android.purebilibili.feature.list
 
 import com.android.purebilibili.navigation.tabIndicatorPosition
-import com.android.purebilibili.feature.home.effectiveGridColumnCount
+import com.android.purebilibili.feature.home.effectiveGridColumnCountForWindow
 import com.android.purebilibili.feature.home.effectiveGridColumnCountCompact
 import com.android.purebilibili.feature.home.gridColumnPinchEnabled
 import com.android.purebilibili.core.ui.components.appActionWithFeedback
@@ -250,6 +250,7 @@ fun CommonListScreen(
     onBack: () -> Unit,
     onVideoClick: (String, Long, String, Boolean) -> Unit,
     onUpClick: ((Long) -> Unit)? = null,
+    onRecapUpsClick: ((PersonalRecapWindow, PersonalVideoRecapStats) -> Unit)? = null,
     onCollectionClick: ((FavoriteCollectionRoute) -> Unit)? = null,
     onFavoriteFolderClick: ((Long, Long, String, String) -> Unit)? = null,
     onFavoriteBangumiClick: (Long) -> Unit = {},
@@ -272,10 +273,9 @@ fun CommonListScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity
         .collectAsStateWithLifecycle()
-    // 个人列表（历史/收藏）默认单列，列数由双指缩放调节；其余页面保持双列默认。
+    // 手机保留个人列表单列；宽屏自动增列，手动列数与双指缩放仍优先。
     val personalListPage = viewModel is HistoryViewModel || viewModel is FavoriteViewModel
     val windowSizeClass = LocalWindowSizeClass.current
-    val defaultPersonalColumns = if (personalListPage) 1 else 2
     val primaryGridState = rememberCompatibleStaggeredGridState()
     val subscribedFolderListState = androidx.compose.foundation.lazy.rememberLazyListState()
     val favoriteFolderListState = androidx.compose.foundation.lazy.rememberLazyListState()
@@ -296,16 +296,21 @@ fun CommonListScreen(
         settings = homeSettings,
         widthSizeClass = windowSizeClass.widthSizeClass,
         defaultColumns = com.android.purebilibili.feature.home.resolveHomeFeedStoredColumnCount(
-            windowSizeClass.widthSizeClass, homeSettings.effectiveGridColumnCountCompact, homeSettings.effectiveGridColumnCount,
-        ).takeIf { it > 0 } ?: defaultPersonalColumns,
+            windowSizeClass.widthSizeClass, homeSettings.effectiveGridColumnCountCompact, homeSettings.effectiveGridColumnCountForWindow(windowSizeClass),
+        ).takeIf { it > 0 } ?: com.android.purebilibili.feature.personal.resolvePersonalListDefaultColumns(
+            contentWidthDp = (windowSizeClass.widthDp.value - 32f).toInt(),
+            compactColumns = if (personalListPage) 1 else 2,
+            cardWidthPreset = homeSettings.homeFeedCardWidthPreset,
+            widthSizeClass = windowSizeClass.widthSizeClass,
+        ),
         bounds = resolveHomeFeedPinchColumnBounds(
-            windowSizeClass.widthSizeClass, LocalConfiguration.current.screenWidthDp,
+            windowSizeClass.widthSizeClass, windowSizeClass.widthDp.value.toInt(),
         ),
     )
     val pinchListColumns = gridColumnPreference.columns
     val topChromePolicy = rememberAppTopChromePolicy()
     val liquidGlassEnabled = rememberAppChromeLiquidGlassEnabled(
-        androidNativeEnabled = homeSettings.androidNativeLiquidGlassEnabled,
+        androidNativeEnabled = homeSettings.otherGlassEnabled,
     )
     val deviceUiProfile = remember(windowSizeClass.widthSizeClass) {
         resolveDeviceUiProfile(
@@ -346,9 +351,11 @@ fun CommonListScreen(
         historyViewModel?.setPageActive(isCurrentPage)
         onDispose { historyViewModel?.setPageActive(false) }
     }
-    val personalRecapEnabled = if (historyViewModel != null) {
+    // 折叠选择属于历史页浏览状态，不随回顾 Lazy item 离开视口、搜索或批量管理而重置。
+    var personalRecapExpanded by rememberSaveable(accountIdentity) { mutableStateOf(false) }
+    val personalRecapEnabled: Boolean? = if (historyViewModel != null) {
         SettingsManager.getSubscriptionRecapEnabled(LocalContext.current)
-            .collectAsStateWithLifecycle(initialValue = false).value
+            .collectAsStateWithLifecycle(initialValue = null).value
     } else false
     val likedVideosViewModel = viewModel as? LikedVideosViewModel
     val isManagingLikes by likedVideosViewModel?.isManagingLikes?.collectAsStateWithLifecycle()
@@ -932,6 +939,8 @@ fun CommonListScreen(
     var commonListHeaderSettleJob by remember { androidx.compose.runtime.mutableStateOf<Job?>(null) }
     var commonListHeaderSettleTargetPx by remember { mutableFloatStateOf(0f) }
     val commonListHeaderCollapseMode = homeSettings.commonListHeaderCollapseMode
+    // 只由滚动回调写、收尾时读，不让逐帧方向记录触发重组。
+    val headerScrollDirection = remember(commonListHeaderCollapseMode, activeCommonListScrollState) { floatArrayOf(0f) }
     val commonListHeaderCollapseEnabled = supportsCollapsibleCommonListHeader &&
         commonListHeaderCollapseMode != CommonListHeaderCollapseMode.ALWAYS_VISIBLE
     val statusBarHeightPx = with(LocalDensity.current) {
@@ -1096,6 +1105,8 @@ fun CommonListScreen(
                         firstVisibleItemIndex = firstVisibleItemIndex,
                         firstVisibleItemScrollOffset = firstVisibleItemScrollOffset,
                         maxCollapsePx = commonListHeaderMaxCollapsePx,
+                        currentOffsetPx = commonListHeaderOffsetPx,
+                        lastScrollDeltaYPx = headerScrollDirection[0],
                         mode = if (supportsCollapsibleCommonListHeader) {
                             commonListHeaderCollapseMode
                         } else {
@@ -1110,7 +1121,8 @@ fun CommonListScreen(
         commonListHeaderCollapseMode,
         commonListHeaderMaxCollapsePx,
         isCommonListAtTop,
-        supportsCollapsibleCommonListHeader
+        supportsCollapsibleCommonListHeader,
+        headerScrollDirection,
     ) {
         object : NestedScrollConnection {
             // 与首页一致，在内容消费滚动前更新顶部位移，保证 Dock 与手势同帧跟随。
@@ -1123,6 +1135,7 @@ fun CommonListScreen(
                     return Offset.Zero
                 }
                 // 到顶后的剩余滚动交给展开动画，避免直接归零或被连续回调打断。
+                headerScrollDirection[0] = available.y
                 if (isCommonListAtTop && available.y > 0f) {
                     animateCommonListHeaderOffsetTo(0f)
                     return Offset.Zero
@@ -1465,6 +1478,17 @@ fun CommonListScreen(
                             beyondViewportPageCount = 0,
                         ) { pageIndex ->
                             val pageFilter = historyFilters.getOrElse(pageIndex) { HistoryContentFilter.ALL }
+                            // 开关未知时先不挂载列表，避免首批视频成为锚点后再在其前插入回顾。
+                            // 玻璃、MD3 与 Miuix 共用此数据就绪边界，不改变各自布局参数。
+                            if (personalRecapEnabled == null) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize().padding(top = headerHeightDp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    AppText("正在加载历史记录…", color = AppContentColors.secondaryText())
+                                }
+                                return@HorizontalPager
+                            }
                             val pageItems = remember(state.items, pageFilter, historyViewModel) {
                                 filterHistoryItemsByContent(
                                     items = state.items,
@@ -1479,7 +1503,7 @@ fun CommonListScreen(
                             }
 
                             val recapHeader: (@Composable () -> Unit)? = if (
-                                pageFilter == HistoryContentFilter.ALL && personalRecapEnabled &&
+                                pageFilter == HistoryContentFilter.ALL && personalRecapEnabled == true &&
                                 !isSearchDestination && searchQuery.isBlank() && !isHistoryBatchMode
                             ) {
                                 {
@@ -1487,7 +1511,10 @@ fun CommonListScreen(
                                         refreshToken = state.items,
                                         active = isCurrentPage && !state.isLoading,
                                         onUpClick = onUpClick,
-                                        snapshotCache = historyViewModel?.recapSnapshots,
+                                        expanded = personalRecapExpanded,
+                                        onExpandedChange = { personalRecapExpanded = it },
+                                        snapshotCache = historyViewModel.recapSnapshots,
+                                        onShowAllUps = onRecapUpsClick,
                                         modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
@@ -2997,7 +3024,11 @@ internal fun CommonListContent(
     val fixedHeaderInset = resolveCommonListViewportTopPadding(padding.calculateTopPadding())
     val scrollableHeaderInset = if (scrollUnderHeader) fixedHeaderInset else AppSpacingTokens.None
     // History retains its own layout; other single-column lists share a bounded content width.
+    val skeletonAnimationGate = com.android.purebilibili.core.ui.rememberDecorativeAnimationGate(
+        respectComponentMotion = false,
+    )
     val viewportModifier = Modifier
+        .then(skeletonAnimationGate.modifier)
         .then(if (columns == 1 && !isHistoryPersonalList) Modifier.responsiveContentWidth(resolveCommonListSingleColumnMaxWidth()) else Modifier)
         .fillMaxSize()
         .padding(top = if (scrollUnderHeader) AppSpacingTokens.None else fixedHeaderInset)
@@ -3010,7 +3041,7 @@ internal fun CommonListContent(
     val showInitialSkeleton = isLoading && items.isEmpty()
     val historySkeletonBlockColor = if (showInitialSkeleton && isPersonalList) {
         com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonBlockColor(
-            com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState()
+            com.android.purebilibili.core.ui.skeleton.rememberContentSkeletonPulseState(animated = skeletonAnimationGate.active)
         )
     } else {
         null

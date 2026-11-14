@@ -14,6 +14,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.android.purebilibili.core.store.MessageCenterPreferences
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -95,6 +99,19 @@ fun InboxScreen(
 ) {
     val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, viewModel, accountIdentity) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            ForegroundMessageSync.snapshot.collect { snapshot ->
+                if (snapshot != null) viewModel.refreshFromForeground(snapshot)
+            }
+        }
+    }
+    // 进消息中心本地清空角标，退出不还原（官方 cleanUnread）。
+    LaunchedEffect(accountIdentity) {
+        com.android.purebilibili.core.store.MessageBadgeCleanState
+            .clean(com.android.purebilibili.core.store.TokenManager.midCache ?: 0L)
+    }
     val outsideActionLimit = if (LocalConfiguration.current.screenWidthDp < 360) 0 else 2
     val webThemeQuery = if (AppSurfaceTokens.surface().luminance() < 0.5f) "native.theme=2&night=1" else "native.theme=1&night=0"
     val disabledLikesFlow = remember(context) { MessageCenterPreferences.disabledLikes(context) }

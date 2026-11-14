@@ -217,12 +217,23 @@ fun BottomControlBar(
     seekPositionProvider: (() -> Long)? = null,
     progressProvider: () -> PlayerProgress = { progress },
     onFloatingPanelVisibilityChange: (Boolean) -> Unit = {},
+    simplifiedPortrait: Boolean = false,
+    menuRequest: PlayerControlAnchor? = null,
+    onMenuRequestConsumed: () -> Unit = {},
+    showPlayPauseButton: Boolean = false,
+    isPlaying: Boolean = false,
+    onPlayPauseClick: () -> Unit = {},
 ) {
     val glass = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    // 玻璃时间和文字胶囊对齐圆形按钮；MD3、Miuix 保留原生 30dp 控件高度。
+    val controlContentHeight = if (glass) PlayerGlassIconButtonSize else 30.dp
+
     val menuSources = PlayerControlAnchor.entries.associateWith {
         com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource()
     }
     val widthDp = viewportWidthDpOverride ?: LocalConfiguration.current.screenWidthDp
+    val compactInline = !isFullscreen &&
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     val slotWidth = if (viewportIsLandscape && isFullscreen) 42.dp else 35.dp
     val showExtendedOptions = isFullscreen || widthDp >= 500
     // 画面宽高描述视频视口，不代表页面方向；竖屏页面播放横向视频也属于内嵌控制栏。
@@ -242,6 +253,12 @@ fun BottomControlBar(
         mutableStateMapOf<PlayerControlAnchor, IntRect>()
     }
     var localMenu by remember(isFullscreen, viewportIsLandscape) { mutableStateOf<PlayerControlAnchor?>(null) }
+    LaunchedEffect(menuRequest) {
+        if (menuRequest != null) {
+            localMenu = menuRequest
+            onMenuRequestConsumed()
+        }
+    }
     val latestVisibility by rememberUpdatedState(onFloatingPanelVisibilityChange)
     LaunchedEffect(localMenu) { latestVisibility(localMenu != null) }
     DisposableEffect(Unit) { onDispose { latestVisibility(false) } }
@@ -264,7 +281,7 @@ fun BottomControlBar(
                 WindowInsets(left = 20.dp, right = 20.dp),
             )
             val hasSegments = showViewPoints && viewPoints.isNotEmpty()
-            Box(Modifier.windowInsetsPadding(seekInsets).padding(bottom = PILI_PLAYER_PROGRESS_GAP_DP.dp)
+            Box(Modifier.windowInsetsPadding(seekInsets).padding(bottom = (if (compactInline) 2 else PILI_PLAYER_PROGRESS_GAP_DP).dp)
                 .height((if (hasSegments) PILI_PLAYER_CHAPTER_PROGRESS_HEIGHT_DP else PILI_PLAYER_PROGRESS_HEIGHT_DP).dp)) {
                 PlayerControlProgressBar(
                     progressProvider = progressProvider,
@@ -292,6 +309,7 @@ fun BottomControlBar(
                 )
                 PlayerControlViewPointSegments(
                     progressProvider = progressProvider,
+                    positionProvider = displayPosition,
                     viewPoints = if (showViewPoints) viewPoints else emptyList(),
                     onSeek = onSeek,
                     spacing = 0.dp,
@@ -301,18 +319,32 @@ fun BottomControlBar(
             }
             PiliPlayerBar(
                 groupGlassControls = false,
-                distributeActions = !isFullscreen,
+                // 竖屏按时间与工具分组收口，两种材质均不将空隙摊到每个按钮之间。
+                distributeActions = !isFullscreen && !compactInline,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp).height(PILI_PLAYER_BOTTOM_ROW_HEIGHT_DP.dp)
                     .testTag("player_control_row"),
                 left = {
+                    if (showPlayPauseButton) {
+                        PlayerControlIconAction(
+                            icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            description = if (isPlaying) "暂停播放" else "开始播放",
+                            width = slotWidth,
+                            height = 30.dp,
+                            onClick = onPlayPauseClick,
+                            modifier = Modifier.testTag("player_play_pause"),
+                        )
+                    }
                     PlayerControlGlassDock(enabled = glass, shape = androidx.compose.foundation.shape.RoundedCornerShape(50)) {
                         ProgressTimeText(
                             positionProvider = displayPosition,
                             durationProvider = { progressProvider().duration },
-                            modifier = Modifier.padding(horizontal = 8.dp).testTag("player_time_viewport"),
+                            modifier = Modifier
+                                .heightIn(min = controlContentHeight)
+                                .padding(horizontal = 8.dp)
+                                .testTag("player_time_viewport"),
                         )
                     }
-                    if (hasEpisodeEntry) {
+                    if (!simplifiedPortrait && hasEpisodeEntry) {
                         PlayerControlIconAction(
                             icon = Icons.Filled.SkipPrevious, description = "上一集",
                             width = slotWidth, height = 30.dp, onClick = onPreviousEpisodeClick,
@@ -329,12 +361,13 @@ fun BottomControlBar(
                     // 竖屏内嵌控制栏优先提供画质入口，热度曲线仍按原设置绘制。
                     if (showInlineQuality) {
                         PlayerControlTextAction(
+                            height = controlContentHeight,
                             text = currentQualityLabel.ifBlank { "画质" },
                             description = "画质",
                             onClick = onQualityClick,
                             modifier = anchor(PlayerControlAnchor.QUALITY, "player_quality_action"),
                         )
-                    } else if (pbpRidgeSamples.isNotEmpty()) {
+                    } else if (!simplifiedPortrait && pbpRidgeSamples.isNotEmpty()) {
                         PlayerControlIconAction(
                             icon = Icons.Filled.ShowChart, description = "高能进度条",
                             width = slotWidth, height = 30.dp, onClick = onHeatmapToggle,
@@ -342,15 +375,16 @@ fun BottomControlBar(
                             modifier = Modifier.testTag("player_heatmap_action"),
                         )
                     }
-                    if (anime4kAvailable) {
+                    if (!simplifiedPortrait && anime4kAvailable) {
                         PlayerControlTextAction(
+                            height = controlContentHeight,
                             text = if (!anime4kEnabled) "禁用" else if (anime4kPreset == Anime4KPreset.FAST) "效率" else "画质",
                             description = "超分辨率",
                             modifier = anchor(PlayerControlAnchor.ENHANCEMENT, "player_enhancement_action"),
                             onClick = { localMenu = PlayerControlAnchor.ENHANCEMENT },
                         )
                     }
-                    if (viewPoints.isNotEmpty()) {
+                    if (!simplifiedPortrait && viewPoints.isNotEmpty()) {
                         PlayerControlIconAction(
                             icon = Icons.AutoMirrored.Filled.ViewList, description = "分段信息",
                             width = slotWidth, height = 30.dp, onClick = onChapterClick,
@@ -359,20 +393,21 @@ fun BottomControlBar(
                             modifier = anchor(PlayerControlAnchor.CHAPTERS, "player_chapter_action"),
                         )
                     }
-                    if (hasEpisodeEntry) {
+                    if (!simplifiedPortrait && hasEpisodeEntry) {
                         PlayerControlIconAction(
                             icon = Icons.AutoMirrored.Filled.PlaylistPlay, description = "选集",
                             width = slotWidth, height = 30.dp, onClick = onEpisodeClick,
                             modifier = anchor(PlayerControlAnchor.EPISODES, "player_episode_action"),
                         )
                     }
-                    if (showExtendedOptions) {
+                    if (!simplifiedPortrait && showExtendedOptions) {
                         PlayerControlTextAction(
+                            height = controlContentHeight,
                             text = currentRatio.displayName, description = "画面比例", onClick = onRatioClick,
                             modifier = anchor(PlayerControlAnchor.RATIO, "player_ratio_action"),
                         )
                     }
-                    if (!aiAudioInfo?.items.isNullOrEmpty()) {
+                    if (!simplifiedPortrait && !aiAudioInfo?.items.isNullOrEmpty()) {
                         PlayerControlIconAction(
                             icon = Icons.Filled.Translate, description = "翻译",
                             width = slotWidth, height = 30.dp, iconSize = 18.dp,
@@ -380,7 +415,7 @@ fun BottomControlBar(
                             modifier = anchor(PlayerControlAnchor.TRANSLATION, "player_translation_action"),
                         )
                     }
-                    if (subtitleControlState.trackAvailable) {
+                    if ((!simplifiedPortrait || !isFullscreen) && subtitleControlState.trackAvailable) {
                         PlayerControlIconAction(
                             icon = if (subtitleControlState.enabled) Icons.Filled.ClosedCaption else Icons.Outlined.ClosedCaptionOff,
                             description = "字幕", width = slotWidth, height = 30.dp,
@@ -391,6 +426,7 @@ fun BottomControlBar(
                         )
                     }
                     PlayerControlTextAction(
+                        height = controlContentHeight,
                         text = "${currentSpeed}X", description = "倍速", onClick = onSpeedClick,
                         modifier = anchor(PlayerControlAnchor.SPEED, "player_speed_action"),
                     )
@@ -398,23 +434,27 @@ fun BottomControlBar(
                     if (!isFullscreen && LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT) {
                         onPortraitFullscreen?.let { enterPortrait ->
                             PlayerControlTextAction(
+                                height = controlContentHeight,
                                 text = "竖屏", description = "竖屏播放", onClick = enterPortrait,
                                 modifier = Modifier.testTag("player_portrait_fullscreen"),
                             )
                         }
                     }
-                    if (!showInlineQuality && showExtendedOptions && currentQualityLabel.isNotEmpty()) {
+                    if (!showInlineQuality && (simplifiedPortrait || showExtendedOptions) && currentQualityLabel.isNotEmpty()) {
                         PlayerControlTextAction(
+                            height = controlContentHeight,
                             text = currentQualityLabel, description = "画质", onClick = onQualityClick,
                             modifier = anchor(PlayerControlAnchor.QUALITY, "player_quality_action"),
                         )
                     }
-                    PlayerControlIconAction(
-                        icon = if (isFullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
-                        description = if (isFullscreen) "退出全屏" else "全屏",
-                        width = slotWidth, height = 30.dp, iconSize = 24.dp,
-                        onClick = onToggleFullscreen, modifier = Modifier.testTag("player_fullscreen_toggle"),
-                    )
+                    if (!isFullscreen || viewportIsLandscape) {
+                        PlayerControlIconAction(
+                            icon = if (isFullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                            description = if (isFullscreen) "退出全屏" else "全屏",
+                            width = slotWidth, height = 30.dp, iconSize = 24.dp,
+                            onClick = onToggleFullscreen, modifier = Modifier.testTag("player_fullscreen_toggle"),
+                        )
+                    }
                 },
             )
         }
@@ -427,9 +467,9 @@ fun BottomControlBar(
                 else -> "超分辨率"
             },
             showTitle = false,
-            placement = PlayerListPopupPlacement.ANCHOR_END,
+            placement = if (simplifiedPortrait) PlayerListPopupPlacement.CENTER else PlayerListPopupPlacement.ANCHOR_END,
             anchorBounds = bounds[menu],
-            source = menuSources[menu],
+            source = if (simplifiedPortrait) null else menuSources[menu],
             onDismissRequest = { localMenu = null },
         ) {
             when (menu) {

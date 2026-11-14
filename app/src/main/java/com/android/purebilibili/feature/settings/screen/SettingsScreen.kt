@@ -96,6 +96,7 @@ fun SettingsScreen(
     onWebDavBackupClick: () -> Unit = {},
     onNavigateToBottomBarSettings: () -> Unit = {},
     onTipsClick: () -> Unit = {},
+    onKeyboardShortcutsClick: () -> Unit = {},
     onReplayOnboardingClick: () -> Unit = {},
     onCategoryClick: (SettingsRootCategory) -> Unit = {},
     onSearchOpen: () -> Unit = {},
@@ -768,7 +769,7 @@ fun SettingsScreen(
     }
 
     // 页面跳转逻辑
-    CompositionLocalProvider(LocalSettingsLiquidGlassEnabled provides state.isLiquidGlassEnabled) {
+    CompositionLocalProvider(LocalSettingsLiquidGlassEnabled provides com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled) {
         if (showBlockedList) {
             BlockedListScreen(onBack = { showBlockedList = false })
         } else if (showCommentFraudHistory) {
@@ -806,6 +807,7 @@ fun SettingsScreen(
                     onMessageNotificationClick = onMessageNotificationClick,
                     onNavigateToBottomBarSettings = onNavigateToBottomBarSettings,
                     onTipsClick = onTipsClick,
+                    onKeyboardShortcutsClick = onKeyboardShortcutsClick,
                     onPluginsClick = onPluginsClick,
                     onExportLogsClick = onExportLogsAction,
                     onLicenseClick = onOpenSourceLicensesClick,
@@ -1001,6 +1003,7 @@ private fun MobileSettingsNavLayout(
     onMessageNotificationClick: () -> Unit,
     onNavigateToBottomBarSettings: () -> Unit,
     onTipsClick: () -> Unit,
+    onKeyboardShortcutsClick: () -> Unit,
     onPluginsClick: () -> Unit,
     onExportLogsClick: () -> Unit,
     onLicenseClick: () -> Unit,
@@ -1134,6 +1137,7 @@ private fun MobileSettingsNavLayout(
         onVersionClick = onVersionClick,
         onReplayOnboardingClick = onReplayOnboardingClick,
         onTipsClick = onTipsClick,
+        onKeyboardShortcutsClick = onKeyboardShortcutsClick,
         onOpenLinksClick = onOpenLinksClick,
         onPrivacyModeChange = onPrivacyModeChange,
         onSearchSuggestionsChange = onSearchSuggestionsChange,

@@ -97,6 +97,7 @@ internal data class VideoPlayerSectionState(
     val preserveSourceCardCornerDuringSharedReturn: Boolean = false,
     val suppressSubtitleOverlay: Boolean = false,
     val subtitleDisplayModePreferenceOverride: SubtitleDisplayMode? = null,
+    val moreMenuRequested: Boolean = false,
 )
 
 /**
@@ -172,4 +173,6 @@ internal data class VideoPlayerSectionActions(
     val menuActions: com.android.purebilibili.feature.video.ui.overlay.PiliPlayerMenuActions =
         com.android.purebilibili.feature.video.ui.overlay.PiliPlayerMenuActions(),
     val onQuickFavorite: () -> Unit = {},
+    val onMoreMenuRequestConsumed: () -> Unit = {},
+    val moreMenuSource: com.android.purebilibili.core.ui.components.AppGlassMenuSource? = null,
 )
