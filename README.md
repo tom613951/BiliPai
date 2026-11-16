@@ -7,7 +7,7 @@
 基于 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 同步的第三方 Bilibili Android 客户端
 
 <a href="https://github.com/jay3-yy/BiliPai"><img src="https://img.shields.io/badge/upstream-jay3--yy%2FBiliPai-FF9500?style=flat-square" alt="Upstream" /></a>
-<img src="https://img.shields.io/badge/source-v0.8.1%20(576)-007AFF?style=flat-square" alt="Source v0.8.1 (576)" />
+<img src="https://img.shields.io/badge/source-v0.8.4%20(582)-007AFF?style=flat-square" alt="Source v0.8.4 (582)" />
 <img src="https://img.shields.io/badge/license-GPLv3-FF3B30?style=flat-square" alt="GPLv3" />
 
 </div>
@@ -16,7 +16,7 @@
 
 跟随上游同步源码，叠加少量个人补丁。**只同步代码，不提供预编译 APK。**
 
-当前基线：上游 **v0.8.1**（`35135a109`，versionCode 576）。
+当前基线：上游 **v0.8.4**（`be095e6e9`，versionCode 582）。
 
 ## 个人改动
 

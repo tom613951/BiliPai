@@ -461,11 +461,12 @@ fun PortraitVideoPager(
     LaunchedEffect(danmakuManager, selectedDanmakuMenu.visible) {
         if (!selectedDanmakuMenu.visible) danmakuManager.clearTapSelection()
     }
-    LaunchedEffect(danmakuManager, selectedDanmakuMenu, danmakuManager.isTapSelectionActive) {
+    LaunchedEffect(danmakuManager, selectedDanmakuMenu, danmakuManager.isTapSelectionActive, danmakuManager.tapInteractionEnabled) {
         if (selectedDanmakuMenu.visible &&
             selectedDanmakuMenu.tapAnchor?.owner === danmakuManager.tapSelectionOwner
         ) {
-            if (selectedDanmakuMenu.expandedActions) danmakuManager.clearTapSelection()
+            if (!danmakuManager.tapInteractionEnabled) viewModel.hideDanmakuMenu()
+            else if (selectedDanmakuMenu.expandedActions) danmakuManager.clearTapSelection()
             else if (!danmakuManager.isTapSelectionActive) viewModel.hideDanmakuMenu()
         }
     }
@@ -959,6 +960,8 @@ fun PortraitVideoPager(
         isLifecycleResumed = isLifecycleResumed,
         continueInBackgroundAudio = continueInBackgroundAudio
     )
+    val latestCurrentPlayingBvid by rememberUpdatedState(currentPlayingBvid)
+    val latestCurrentPlayingCid by rememberUpdatedState(currentPlayingCid)
     val latestPortraitPlaybackAllowed by rememberUpdatedState(isPortraitPlaybackAllowed)
 
     fun capturePortraitInactivitySnapshot() {
@@ -1049,6 +1052,16 @@ fun PortraitVideoPager(
                 isLoading = false
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    val bvid = latestCurrentPlayingBvid
+                    val mediaId = exoPlayer.currentMediaItem?.mediaId
+                    val matchingMedia = bvid != null && mediaId != null &&
+                        (mediaId == resolvePortraitMediaId(bvid, latestCurrentPlayingCid) ||
+                            (useSharedPlayer && mediaId == bvid))
+                    if (matchingMedia) {
+                        isLoading = false
+                    }
+                }
                 if (playbackState == Player.STATE_READY &&
                     pendingAutoPlayGeneration == activeLoadGeneration &&
                     listenerGeneration == activeLoadGeneration &&
@@ -3289,6 +3302,8 @@ private fun VideoPageItem(
                                     containerWidthPx = size.width.toFloat(),
                                     gestureSensitivity = playerInteractionSettings.gestureSensitivity,
                                     durationMs = progressDuration,
+                                    fixedSeekEnabled = playerInteractionSettings.fullscreenSwipeSeekEnabled,
+                                    fixedSeekSeconds = playerInteractionSettings.swipeSeekSeconds,
                                 )
                                 if (seekDelta != null) {
                                     seekTargetPosition = (seekStartPosition + seekDelta)

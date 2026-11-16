@@ -238,7 +238,11 @@ internal fun createVideoLoadControl(context: Context): LoadControl {
         isOnWifi = NetworkUtils.isWifi(context),
         resilient = SettingsManager.getResilientVideoBufferSync(context),
     )
-    return FirstQuarterAwareLoadControl(
+    return createVideoLoadControl(policy)
+}
+
+internal fun createVideoLoadControl(policy: PlayerBufferPolicy): LoadControl =
+    FirstQuarterAwareLoadControl(
         delegate = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 policy.minBufferMs,
@@ -252,7 +256,6 @@ internal fun createVideoLoadControl(context: Context): LoadControl {
         bufferForPlaybackMs = policy.bufferForPlaybackMs,
         bufferForPlaybackAfterRebufferMs = policy.bufferForPlaybackAfterRebufferMs,
     )
-}
 
 internal fun shouldReuseMiniPlayerAtEntry(
     isMiniPlayerActive: Boolean,
@@ -528,6 +531,21 @@ internal fun applyAudioEventDebugInfo(
     val normalizedEvent = eventSummary.trim()
     if (normalizedEvent.isBlank()) return current
     return current.copy(lastAudioEvent = normalizedEvent)
+}
+
+private val PLAYBACK_HTTP_STATUS_REGEX = Regex("""Response code:\s*(\d{3})""")
+
+private fun resolvePlaybackHttpStatus(error: Throwable): Int? {
+    var current: Throwable? = error
+    repeat(8) {
+        val status = PLAYBACK_HTTP_STATUS_REGEX.find(current?.message.orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        if (status != null) return status
+        current = current?.cause
+    }
+    return null
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -1097,7 +1115,7 @@ fun rememberVideoPlayerState(
         } else {
             null
         }
-        val rememberedPlayer = reusedPlayer ?: run {
+        val rememberedPlayer = reusedPlayer ?: com.android.purebilibili.core.ui.transition.VideoCardTransitionDiagnostics.measureWork("player_create") {
             // 创建新的 player
             com.android.purebilibili.core.util.Logger.d("VideoPlayerState", " 创建新 player: bvid=$bvid")
             val headers = mapOf(
@@ -1140,7 +1158,7 @@ fun rememberVideoPlayerState(
                 .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
                 // 前 1/4 使用当前缓冲偏好，之后按常规阈值预缓冲。
                 .setLoadControl(
-                    createVideoLoadControl(context)
+                    createVideoLoadControl(bufferPolicy)
                 )
                 //  [性能优化] 快速 Seek：跳转到最近的关键帧而非精确位置
                 .setSeekParameters(
@@ -1201,11 +1219,13 @@ fun rememberVideoPlayerState(
         VideoPlayerState(context, player, scope)
     }
 
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(uiState) {
-        if (uiState is VideoPlaybackUiState.Success) {
-            val info = (uiState as VideoPlaybackUiState.Success).info
-            holder.updateMediaMetadata(info.title, info.owner.name, info.pic)
+    val metadataInfo by remember(viewModel) { viewModel.uiState.playerMetadataUpdates() }
+        .collectAsStateWithLifecycle(initialValue = viewModel.uiState.value.playerMetadata())
+    // 标签、推荐、画质与在线人数变化不应重发相同的媒体元数据。
+    // 保留 holder 与内容身份，换播放器或同标题切集仍会重新绑定。
+    LaunchedEffect(holder, metadataInfo) {
+        metadataInfo?.let { info ->
+            holder.updateMediaMetadata(info.title, info.artist, info.coverUrl)
         }
     }
 
@@ -1454,6 +1474,17 @@ fun rememberVideoPlayerState(
                 val currentState = viewModel.uiState.value
                 // A new load may still have the old media item's error attached.
                 if (currentState !is VideoPlaybackUiState.Success) return
+                val httpStatus = resolvePlaybackHttpStatus(error)
+                if (httpStatus == 403 && retryCountRef.count < maxRetries) {
+                    retryCountRef.count++
+                    cancelRecovery()
+                    com.android.purebilibili.core.util.Logger.d(
+                        "VideoPlayerState",
+                        "🔑 Playback URL rejected (HTTP 403), refreshing playurl (${retryCountRef.count}/$maxRetries)"
+                    )
+                    viewModel.retry()
+                    return
+                }
                 val hasCdnAlternatives = currentState.cdnCount > 1
                 val exoPlaybackError = error as? ExoPlaybackException
                 val isPremiumAudioFailure =

@@ -97,6 +97,7 @@ fun SettingsScreen(
     onNavigateToBottomBarSettings: () -> Unit = {},
     onTipsClick: () -> Unit = {},
     onKeyboardShortcutsClick: () -> Unit = {},
+    onPerformanceHistoryClick: () -> Unit = {},
     onReplayOnboardingClick: () -> Unit = {},
     onCategoryClick: (SettingsRootCategory) -> Unit = {},
     onSearchOpen: () -> Unit = {},
@@ -145,7 +146,7 @@ fun SettingsScreen(
     val autoCheckUpdateEnabled by remember(context) { SettingsManager.getAutoCheckAppUpdate(context) }
         .collectAsStateWithLifecycle(initialValue = true)
     val appUpdateChannel by remember(context) { SettingsManager.getAppUpdateChannel(context) }
-        .collectAsStateWithLifecycle(initialValue = SettingsManager.AppUpdateChannel.STABLE)
+        .collectAsStateWithLifecycle(initialValue = SettingsManager.AppUpdateChannel.BETA)
     val incrementalTimelineRefreshEnabled by remember(context) { SettingsManager.getIncrementalTimelineRefresh(context) }
         .collectAsStateWithLifecycle(initialValue = false)
     val dynamicVisibleTabIds by remember(context) { SettingsManager.getDynamicTabVisibleTabs(context) }
@@ -808,6 +809,7 @@ fun SettingsScreen(
                     onNavigateToBottomBarSettings = onNavigateToBottomBarSettings,
                     onTipsClick = onTipsClick,
                     onKeyboardShortcutsClick = onKeyboardShortcutsClick,
+                    onPerformanceHistoryClick = onPerformanceHistoryClick,
                     onPluginsClick = onPluginsClick,
                     onExportLogsClick = onExportLogsAction,
                     onLicenseClick = onOpenSourceLicensesClick,
@@ -1004,6 +1006,7 @@ private fun MobileSettingsNavLayout(
     onNavigateToBottomBarSettings: () -> Unit,
     onTipsClick: () -> Unit,
     onKeyboardShortcutsClick: () -> Unit,
+    onPerformanceHistoryClick: () -> Unit,
     onPluginsClick: () -> Unit,
     onExportLogsClick: () -> Unit,
     onLicenseClick: () -> Unit,
@@ -1138,6 +1141,7 @@ private fun MobileSettingsNavLayout(
         onReplayOnboardingClick = onReplayOnboardingClick,
         onTipsClick = onTipsClick,
         onKeyboardShortcutsClick = onKeyboardShortcutsClick,
+        onPerformanceHistoryClick = onPerformanceHistoryClick,
         onOpenLinksClick = onOpenLinksClick,
         onPrivacyModeChange = onPrivacyModeChange,
         onSearchSuggestionsChange = onSearchSuggestionsChange,
@@ -1199,7 +1203,7 @@ private fun MobileSettingsNavLayout(
     )
 
     @Composable
-    fun SettingsRootContent() {
+    fun SettingsRootContent(onAboutHeaderAppearanceClick: () -> Unit) {
         when (destination) {
             SettingsNavDestination.Home -> {
                 Column {
@@ -1224,6 +1228,7 @@ private fun MobileSettingsNavLayout(
                         category = destination.category,
                         actions = rootCategoryActions,
                         state = rootCategoryState,
+                        onAboutHeaderAppearanceClick = onAboutHeaderAppearanceClick,
                     )
                 }
             }
@@ -1231,30 +1236,59 @@ private fun MobileSettingsNavLayout(
         }
     }
 
-    com.android.purebilibili.feature.settings.ui.SettingsPageScaffold(
-        title = screenTitle,
-        onBack = onBack,
-        backContentDescription = backLabel,
-        bottomContentPadding = bottomInset,
-        topBarStyle = when {
-            destination == SettingsNavDestination.Home &&
-                com.android.purebilibili.core.ui.isMiuixNonGlassEnabled() -> {
-                com.android.purebilibili.core.ui.AppTopBarStyle.LARGE
-            }
-            destination == SettingsNavDestination.Home -> {
-                com.android.purebilibili.core.ui.AppTopBarStyle.SMALL
-            }
-            else -> {
-                com.android.purebilibili.core.ui.AppTopBarStyle.CENTERED
-            }
-        },
+    val aboutListState = rememberLazyListState()
+    @Composable
+    fun SettingsPage(
+        pageBackgroundModifier: Modifier? = null,
+        onAboutHeaderAppearanceClick: () -> Unit = {},
     ) {
-        if (rootEntranceEnabled) {
-            EntranceGroup(startWhen = rootEntranceStartWhen) {
-                SettingsRootContent()
+        com.android.purebilibili.feature.settings.ui.SettingsPageScaffold(
+            title = screenTitle,
+            listState = aboutListState,
+            pageBackgroundModifier = pageBackgroundModifier,
+            onBack = onBack,
+            backContentDescription = backLabel,
+            bottomContentPadding = bottomInset,
+            topBarStyle = when {
+                destination == SettingsNavDestination.Home &&
+                    com.android.purebilibili.core.ui.isMiuixNonGlassEnabled() -> {
+                    com.android.purebilibili.core.ui.AppTopBarStyle.LARGE
+                }
+                destination == SettingsNavDestination.Home -> {
+                    com.android.purebilibili.core.ui.AppTopBarStyle.SMALL
+                }
+                else -> {
+                    com.android.purebilibili.core.ui.AppTopBarStyle.CENTERED
+                }
+            },
+        ) {
+            if (rootEntranceEnabled) {
+                EntranceGroup(startWhen = rootEntranceStartWhen) {
+                    SettingsRootContent(onAboutHeaderAppearanceClick)
+                }
+            } else {
+                SettingsRootContent(onAboutHeaderAppearanceClick)
             }
-        } else {
-            SettingsRootContent()
         }
+    }
+    val miuixAbout = com.android.purebilibili.core.theme.LocalAppUiStyle.current ==
+        com.android.purebilibili.core.theme.AppUiStyle.MIUIX &&
+        destination is SettingsNavDestination.Category &&
+        canonicalSettingsRootCategory(destination.category) == SettingsRootCategory.SYSTEM_ABOUT
+    if (miuixAbout) {
+        MiuixAboutAppearanceHost { backgroundSettings, onCustomizeBackground ->
+            SettingsPage(
+                pageBackgroundModifier = miuixAboutBackground(
+                    settings = backgroundSettings,
+                    fieldHeight = miuixAboutHeroHeight() + 368.dp,
+                    scrollOffset = {
+                        aboutListState.firstVisibleItemScrollOffset.toFloat()
+                    },
+                ),
+                onAboutHeaderAppearanceClick = onCustomizeBackground,
+            )
+        }
+    } else {
+        SettingsPage()
     }
 }

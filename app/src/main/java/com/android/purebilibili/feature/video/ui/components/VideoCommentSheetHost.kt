@@ -1133,6 +1133,7 @@ internal fun VideoCommentMainList(
             fullReplies = fullSearchReplies,
             fullSearchState = fullSearchState,
             onLoadAllComments = { viewModel.loadAllCommentsForSearch() },
+            onSearchConsumerChanged = viewModel::setFullCommentSearchConsumer,
             upMid = state.upMid,
             onCommentClick = { reply ->
                 onReplyClick(reply)

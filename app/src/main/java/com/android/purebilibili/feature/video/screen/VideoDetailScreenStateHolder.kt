@@ -211,8 +211,6 @@ import com.android.purebilibili.feature.video.policy.shouldTrackVideoDetailColla
 import com.android.purebilibili.feature.video.subtitle.resolveSubtitlePreferenceSession
 import com.android.purebilibili.core.ui.AdaptiveLoadingIndicator
 import com.android.purebilibili.core.ui.components.AppButton
-import io.github.alexzhirkevich.cupertino.icons.CupertinoIcons
-import io.github.alexzhirkevich.cupertino.icons.outlined.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.isActive
@@ -521,6 +519,7 @@ internal fun VideoDetailScreenStateHolder(
     }
 
     val context = LocalContext.current
+    com.android.purebilibili.core.performance.PerformanceScreenProbe("video")
     val view = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val configuration = LocalConfiguration.current
@@ -1533,9 +1532,11 @@ internal fun VideoDetailScreenStateHolder(
     // The navigation rail may retain its slot for card return geometry, but immersive playback
     // must receive the entire window. Pair the route-owned request with disposal cleanup.
     val isImmersivePlayback = isFullscreenMode || isPortraitFullscreen || isPipMode
-    DisposableEffect(onImmersivePlaybackChanged, isImmersivePlayback) {
-        onImmersivePlaybackChanged(isImmersivePlayback)
-        onDispose { onImmersivePlaybackChanged(false) }
+    val latestOnImmersivePlaybackChanged by rememberUpdatedState(onImmersivePlaybackChanged)
+    // 回调更新不代表退出沉浸播放；只有播放状态变化或详情销毁才交接占屏请求。
+    DisposableEffect(isImmersivePlayback) {
+        latestOnImmersivePlaybackChanged(isImmersivePlayback)
+        onDispose { latestOnImmersivePlaybackChanged(false) }
     }
     ManualFullscreenRequestLifecycleEffect(
         manualFullscreenRequested = userRequestedFullscreen,
@@ -1892,9 +1893,21 @@ internal fun VideoDetailScreenStateHolder(
         coverTakeoverBeforeBackDelayMillis,
         topBarActionHandler,
         detailShellSharedBoundsEnabled,
+        activity,
     ) {
         action@{ action: VideoDetailTopBarAction ->
             if (isActuallyLeaving) return@action
+            // 系统窗口回卡保留当前视口、播放帧和系统栏，关闭后的播放清理由窗口负责。
+            // 仅根详情使用此路径；详情内部导航仍由页面共享转场处理。
+            if ((activity as? com.android.purebilibili.feature.video.VideoActivity)
+                    ?.usesOfficialCardReturnAtRoot == true
+            ) {
+                when (action) {
+                    VideoDetailTopBarAction.BACK -> latestOnBack()
+                    VideoDetailTopBarAction.HOME -> latestOnHomeClick()
+                }
+                return@action
+            }
             isActuallyLeaving = true // 标记确实是用户通过点击或返回键离开
             isScreenActive = false  // 标记页面正在退出
             latestOnMarkReturningFromDetail()
@@ -2194,22 +2207,6 @@ internal fun VideoDetailScreenStateHolder(
     var hasDeferredPortraitRestoreAfterExternalNavigation by rememberSaveable { mutableStateOf(false) }
     var pendingMainReloadBvidAfterPortrait by rememberSaveable { mutableStateOf<String?>(null) }
     var portraitPendingSelectionBvid by rememberSaveable { mutableStateOf<String?>(null) }
-    val systemReturnContentOwner = remember { Any() }
-    val systemReturnActivity = activity as? com.android.purebilibili.feature.video.VideoActivity
-    androidx.compose.runtime.SideEffect {
-        if (isOrientationOwner) {
-            systemReturnActivity?.bindOfficialReturnContent(systemReturnContentOwner, bvid) {
-                if (isPortraitFullscreen) {
-                    portraitPendingSelectionBvid ?: viewModel.peekWindowReturnBvid() ?: currentBvid
-                } else {
-                    viewModel.peekWindowReturnBvid() ?: currentBvid
-                }
-            }
-        }
-    }
-    DisposableEffect(systemReturnActivity, systemReturnContentOwner, isOrientationOwner) {
-        onDispose { systemReturnActivity?.unbindOfficialReturnContent(systemReturnContentOwner) }
-    }
     // 返回 morph 中栈已 pop 时 isVisible=false，仍须保活 surface，避免壳缩前半段黑掉。
     val playbackSessionActiveForMorph = shouldKeepPlaybackSessionActiveForSharedReturnMorph(
         isVisible = isPlaybackSessionActive,
@@ -2691,8 +2688,18 @@ internal fun VideoDetailScreenStateHolder(
 
     // 📱 [优化] 综合合并路由初值、API 信息与 PlayerState 维度，确保第 0 帧即可识别竖屏
     val isVerticalFromPlayer by playerState.isVerticalVideo.collectAsStateWithLifecycle()
-    val isVerticalFromInfo = (uiState as? VideoPlaybackUiState.Success)?.info?.dimension?.isVertical == true
-    val isVerticalVideo = initialVerticalFromRoute || isVerticalFromPlayer || isVerticalFromInfo
+    val infoDimension = (uiState as? VideoPlaybackUiState.Success)?.info?.dimension
+    val isVerticalFromInfo = infoDimension?.isVertical == true
+    val hasLandscapeInfo = !initialVerticalFromRoute &&
+        infoDimension != null &&
+        infoDimension.width > 0 &&
+        infoDimension.height > 0 &&
+        !infoDimension.isVertical
+    val isVerticalVideo = when {
+        hasLandscapeInfo -> false
+        initialVerticalFromRoute || isVerticalFromInfo -> true
+        else -> isVerticalFromPlayer
+    }
     val continuousFullscreenTransitionEnabled = transitionEnabled &&
         isOrientationDrivenFullscreen &&
         orientationPolicyDevice &&
@@ -3487,7 +3494,12 @@ internal fun VideoDetailScreenStateHolder(
                 }
                 // This only assigns the state reference; no background serialization is needed.
                 // Keep cache, metadata and player identity in the same main-thread handoff.
-                miniPlayerManager.syncCurrentVideoInfo(success, expectedPlayer = playerState.player)
+                miniPlayerManager.syncCurrentVideoInfo(
+                    success,
+                    expectedPlayer = playerState.player,
+                    // 返回或重新接管会话时必须重发通知，不能仅凭相同文本跳过。
+                    forceMetadataRefresh = shouldReclaimSession,
+                )
             } else if (miniPlayerManager == null) {
                 android.util.Log.w("VideoDetailScreen", "miniPlayerManager is null")
             }
@@ -3618,7 +3630,9 @@ internal fun VideoDetailScreenStateHolder(
     val localBackEventState = rememberNavigationEventState(NavigationEventInfo.None)
     NavigationBackHandler(
         state = localBackEventState,
-        isBackEnabled = localBackTarget != VideoDetailLocalBackTarget.NAVIGATE_BACK,
+        // 保留的分栏详情仍在组合中；隐藏或已交出页面控制权后不能截获前台页面的返回。
+        isBackEnabled = isVisible && isOrientationOwner &&
+            localBackTarget != VideoDetailLocalBackTarget.NAVIGATE_BACK,
         onBackCompleted = {
             com.android.purebilibili.core.util.Logger.d("VideoInputTrace") {
                 "local_back_completed target=$localBackTarget fullscreen=$isFullscreenMode portraitFs=$isPortraitFullscreen"
@@ -3997,6 +4011,7 @@ internal fun VideoDetailScreenStateHolder(
                             onSortModeChange = commentActions.setSortMode,
                             onUpClick = navigateToUserSpaceFromVideo,
                             onSubReplyClick = commentActions.openSubReply,
+                            onRootCommentClick = playbackActions.openRootCommentComposer,
                             onCommentReplyClick = playbackActions.replyTo, onLoadMoreReplies = commentActions.loadComments,
                             onRefreshReplies = commentActions.refreshComments,
                             onDeleteComment = commentActions.deleteComment, onDissolveStart = commentActions.startDissolve,
@@ -4199,7 +4214,10 @@ internal fun VideoDetailScreenStateHolder(
                                 predictiveBackCancelRecoveryGeneration = predictiveBackCancelRecoveryGeneration,
                                 liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
                                 isPlayerSurfaceReady = isPlayerSurfaceReady,
-                                paneControlsEnabled = isTransitionFinished,
+                                // 两种材质共用首次挂载阶段；不改变原有分栏尺寸与样式。
+                                primaryContentReady = isTransitionFinished,
+                                commentsContentReady = entryCommentsReady,
+                                relatedContentReady = entryRelatedReady,
                                 videoAiSummaryEntryEnabled = videoAiSummaryEntryEnabled,
                                 videoNoteEnabled = videoNoteEnabled,
                                 videoNoteDefaultCollapsed = videoNoteDefaultCollapsed,
@@ -4271,7 +4289,9 @@ internal fun VideoDetailScreenStateHolder(
                             predictiveBackCancelRecoveryGeneration = predictiveBackCancelRecoveryGeneration,
                             liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
                             isPlayerSurfaceReady = isPlayerSurfaceReady,
-                            paneControlsEnabled = isTransitionFinished,
+                            primaryContentReady = isTransitionFinished,
+                            commentsContentReady = entryCommentsReady,
+                            relatedContentReady = entryRelatedReady,
                             videoAiSummaryEntryEnabled = videoAiSummaryEntryEnabled,
                             videoNoteEnabled = videoNoteEnabled,
                             videoNoteDefaultCollapsed = videoNoteDefaultCollapsed,
@@ -4306,6 +4326,12 @@ internal fun VideoDetailScreenStateHolder(
                             windowWidthDp = configuration.screenWidthDp.toFloat(),
                             windowHeightDp = configuration.screenHeightDp.toFloat(),
                             isFoldableCoverWindow = displayContext.isFoldableCoverWindow,
+                            // 三种材质共用内容比例；不改变竖屏视频专用布局与大屏分栏参数。
+                            videoAspectRatio = resolvePhoneInlineVideoAspectRatio(
+                                info = detailContentState?.info,
+                                bvid = currentBvid,
+                                cid = playbackTargetCid,
+                            ),
                         ).dp
                         val playerChromeProfile = rememberAppPlayerChromeProfile()
                         val liquidGlassTabMotion = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
@@ -4593,13 +4619,16 @@ internal fun VideoDetailScreenStateHolder(
                                 .nestedScroll(nestedScrollConnection)
                         ) {
 
-                        // 下滑折叠后返回：布局必须先展开完整封面，否则 Crop 只显示一截。
+                        // 页面内共享返回展开完整封面；系统窗口返回保留当前收缩视口。
                         // 读手势/phase 用 derivedStateOf，预测返回首帧就能展开，不依赖整页重组。
                         val miuixReturnState =
                             com.android.purebilibili.core.ui.transition
                                 .LocalMiuixVideoCardTransitionState.current
                         val expandPlayerForSharedReturn by remember(
                             isExitTransitionInProgress,
+                            isCommittedCardReturn,
+                            keepLoadedContentForBackPreview,
+                            isOrientationOwner,
                             detailShellSharedBoundsEnabled,
                             sharedBoundsActive,
                             liveReturnMorph,
@@ -4618,6 +4647,8 @@ internal fun VideoDetailScreenStateHolder(
                                     VideoCardTransitionBackgroundPhase.IDLE
                                 }
                                 shouldExpandPlayerViewportForSharedReturn(
+                                    isCommittedCardReturn = isCommittedCardReturn,
+                                    keepLoadedContentForBackPreview = keepLoadedContentForBackPreview,
                                     isExitTransitionInProgress = isExitTransitionInProgress ||
                                         miuixGesture ||
                                         phase == VideoCardTransitionBackgroundPhase.RETURNING,
@@ -4659,9 +4690,7 @@ internal fun VideoDetailScreenStateHolder(
                             derivedStateOf { layoutCollapseProgress.value >= 0.98f }
                         }
                         SideEffect { playerChromeCollapsedByScroll = chromeCollapsed }
-                        LaunchedEffect(expandPlayerForSharedReturn) {
-                            if (expandPlayerForSharedReturn) inlinePlayerCollapseState.reset()
-                        }
+                        // 返回只覆盖布局折叠进度；不清空手势位移，取消返回后仍保留原收起位置。
                         val expandedViewportWidth = if (useOfficialInlinePortraitDetailExperience) {
                             expandedPortraitInlineSpec.widthDp.dp
                         } else {
@@ -5495,6 +5524,8 @@ internal fun VideoDetailScreenStateHolder(
                                                 motionSpec = motionSpec,
                                                 hazeState = hazeState,
                                                 relatedContentReady = entryRelatedReady,
+                                                // 屏外评论页跟随评论阶段，当前选中的评论页照常显示。
+                                                commentPagePreloadReady = entryCommentsReady,
                                                 isTransitionFinished = isTransitionFinished ||
                                                     keepLoadedContentForBackPreview ||
                                                     suppressEnterFadeAfterBackPreview,

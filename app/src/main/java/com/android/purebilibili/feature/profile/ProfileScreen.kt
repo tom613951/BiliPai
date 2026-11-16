@@ -21,6 +21,7 @@ import com.android.purebilibili.core.ui.resolveFilledButtonContentColor
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.appGentleActionClickable
 import com.android.purebilibili.core.ui.components.AppText
+import com.android.purebilibili.core.ui.components.AppCircularProgressIndicator
 import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 import com.android.purebilibili.core.ui.AppSpacingTokens
 
@@ -482,7 +483,7 @@ private fun ProfileScreenContent(
     }
     val isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val isLoggedOut = state is ProfileUiState.LoggedOut
-    val privacyModeEnabled by SettingsManager.getPrivacyModeEnabled(context)
+    val privacyModeEnabled by remember(context) { SettingsManager.getPrivacyModeEnabled(context) }
         .collectAsStateWithLifecycle(initialValue = SettingsManager.isPrivacyModeEnabledSync(context))
     val profileActionScope = androidx.compose.runtime.rememberCoroutineScope()
     val togglePrivacyMode: () -> Unit = {
@@ -571,13 +572,14 @@ private fun ProfileScreenContent(
         }
     }
 
-    DisposableEffect(viewModel, isCurrentPage) {
-        viewModel.setProfilePageActive(isCurrentPage)
+    val profileDataWorkActive = isCurrentPage && com.android.purebilibili.core.ui.rememberVisualWorkActive()
+    DisposableEffect(viewModel, profileDataWorkActive) {
+        viewModel.setProfilePageActive(profileDataWorkActive)
         onDispose { viewModel.setProfilePageActive(false) }
     }
 
-    LaunchedEffect(viewModel, isCurrentPage, accountSessionRefreshGeneration) {
-        if (isCurrentPage) {
+    LaunchedEffect(viewModel, profileDataWorkActive, accountSessionRefreshGeneration) {
+        if (profileDataWorkActive) {
             val force = shouldForceProfileLoadForAccountSessionRefresh(
                 isCurrentPage = isCurrentPage,
                 accountSessionRefreshGeneration = accountSessionRefreshGeneration,
@@ -945,7 +947,7 @@ private fun ProfileScreenContent(
                             onWatchLaterClick = onWatchLaterClick,
                             onInboxClick = onInboxClick,
                             onVideoClick = onVideoClick,
-                            onContributionRetry = viewModel::retryProfileContributions,
+                            onContentRetry = viewModel::retrySelectedProfileContent,
                             onDynamicDeleteClick = { action ->
                                 viewModel.deleteProfileDynamic(action) { _, message ->
                                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
@@ -999,7 +1001,7 @@ private fun BoxScope.ProfileBackground(
     val hasSkinVideo = !skinVideoBackgroundPath.isNullOrBlank()
     val hasWallpaper = user.topPhoto.isNotEmpty() || hasSkinVideo
     val headerMotion = LocalProfileBackgroundMotion.current
-    val bgTransform by viewModel.getProfileBgTransform(isTablet).collectAsStateWithLifecycle(initialValue = ProfileWallpaperTransform())
+    val bgTransform by remember(viewModel, isTablet) { viewModel.getProfileBgTransform(isTablet) }.collectAsStateWithLifecycle(initialValue = ProfileWallpaperTransform())
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
@@ -1204,7 +1206,7 @@ private fun ProfileSpaceContent(
     onWatchLaterClick: () -> Unit,
     onInboxClick: () -> Unit,
     onVideoClick: (String) -> Unit,
-    onContributionRetry: () -> Unit,
+    onContentRetry: () -> Unit,
     onDynamicDeleteClick: (DynamicDeleteAction) -> Unit,
     onBangumiClick: (Long, Long) -> Unit,
     onBangumiMoreClick: () -> Unit,
@@ -1239,10 +1241,10 @@ private fun ProfileSpaceContent(
     var showAccountSexDialog by remember(user.mid) { mutableStateOf(false) }
     var showAdjustmentSheet by remember { mutableStateOf(false) }
     var tempSelectedUri by remember { mutableStateOf<Uri?>(null) }
-    val customBackgroundUri by viewModel.getProfileBgUri().collectAsStateWithLifecycle(initialValue = null
+    val customBackgroundUri by remember(viewModel) { viewModel.getProfileBgUri() }.collectAsStateWithLifecycle(initialValue = null
         )
     val context = LocalContext.current
-    val showProfileEditButton by SettingsManager.getShowProfileEditButton(context)
+    val showProfileEditButton by remember(context) { SettingsManager.getShowProfileEditButton(context) }
         .collectAsStateWithLifecycle(initialValue = false)
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = PickGalleryVisualMedia()
@@ -1596,7 +1598,7 @@ private fun ProfileSpaceContent(
                     onBangumiClick = onBangumiClick,
                     onBangumiMoreClick = onBangumiMoreClick,
                     onVideoClick = onVideoClick,
-                    onContributionRetry = onContributionRetry,
+                    onContentRetry = onContentRetry,
                     onHistoryClick = onHistoryClick,
                     showHistoryService = showHistoryService,
                     onDownloadClick = onDownloadClick,
@@ -1738,7 +1740,7 @@ private fun ProfileSpaceContent(
                             onBangumiClick = onBangumiClick,
                             onBangumiMoreClick = onBangumiMoreClick,
                             onVideoClick = onVideoClick,
-                            onContributionRetry = onContributionRetry,
+                            onContentRetry = onContentRetry,
                             onHistoryClick = onHistoryClick,
                             showHistoryService = showHistoryService,
                             onDownloadClick = onDownloadClick,
@@ -1950,7 +1952,7 @@ private fun ProfileSpaceFeedColumn(
     onBangumiClick: (Long, Long) -> Unit,
     onBangumiMoreClick: () -> Unit,
     onVideoClick: (String) -> Unit,
-    onContributionRetry: () -> Unit,
+    onContentRetry: () -> Unit,
     onHistoryClick: () -> Unit,
     showHistoryService: Boolean,
     onDownloadClick: () -> Unit,
@@ -2024,7 +2026,7 @@ private fun ProfileSpaceFeedColumn(
                 onBangumiClick = onBangumiClick,
                 onBangumiMoreClick = onBangumiMoreClick,
                 onVideoClick = onVideoClick,
-                onContributionRetry = onContributionRetry,
+                onContentRetry = onContentRetry,
                 onHistoryClick = onHistoryClick,
                 showHistoryService = showHistoryService,
                 onDownloadClick = onDownloadClick,
@@ -2632,7 +2634,7 @@ private fun ProfileSpaceTabBody(
     onBangumiClick: (Long, Long) -> Unit,
     onBangumiMoreClick: () -> Unit,
     onVideoClick: (String) -> Unit,
-    onContributionRetry: () -> Unit,
+    onContentRetry: () -> Unit,
     onHistoryClick: () -> Unit,
     showHistoryService: Boolean,
     onDownloadClick: () -> Unit,
@@ -2644,6 +2646,27 @@ private fun ProfileSpaceTabBody(
     contentChrome: ProfileContentChrome,
     embeddedInPanel: Boolean = false
 ) {
+    val hasSelectedContent = when (space.selectedTab) {
+        ProfileSpaceMainTab.DYNAMIC -> space.dynamicItems.isNotEmpty()
+        ProfileSpaceMainTab.FAVORITE -> space.favoriteFolders.isNotEmpty()
+        ProfileSpaceMainTab.BANGUMI -> space.bangumiItems.isNotEmpty()
+        else -> true
+    }
+    val contentError = space.contentErrors[space.selectedTab]
+    if (!hasSelectedContent && contentError != null) {
+        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            AppText(contentError)
+            AppTextButton(onClick = onContentRetry) { AppText("重试") }
+        }
+        return
+    }
+    val waitingForInitialContent = space.selectedTab in space.loadingTabs && !hasSelectedContent
+    if (waitingForInitialContent) {
+        Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+            AppCircularProgressIndicator()
+        }
+        return
+    }
     when (space.selectedTab) {
         ProfileSpaceMainTab.HOME -> ProfileSpaceHome(
             user = user,
@@ -2674,7 +2697,7 @@ private fun ProfileSpaceTabBody(
             videos = space.contributionVideos,
             loadState = space.contributionLoadState,
             onVideoClick = onVideoClick,
-            onRetry = onContributionRetry
+            onRetry = onContentRetry
         )
         ProfileSpaceMainTab.FAVORITE -> ProfileFavoriteFolderList(user.mid, space.favoriteFolders, onFavoriteFolderClick)
         ProfileSpaceMainTab.BANGUMI -> ProfileBangumiList(
@@ -4042,7 +4065,7 @@ private fun MobileProfileContent(
     // [New] Adjustment Sheet State
     var showAdjustmentSheet by remember { mutableStateOf(false) }
     var tempSelectedUri by remember { mutableStateOf<Uri?>(null) }
-    val customBackgroundUri by viewModel.getProfileBgUri().collectAsStateWithLifecycle(initialValue = null
+    val customBackgroundUri by remember(viewModel) { viewModel.getProfileBgUri() }.collectAsStateWithLifecycle(initialValue = null
         )
 
     val photoPickerLauncher = rememberLauncherForActivityResult(

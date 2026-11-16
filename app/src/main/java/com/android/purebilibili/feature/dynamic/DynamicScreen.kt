@@ -315,20 +315,18 @@ fun DynamicScreen(
         )
     }
     //  [新增] 动态 Feed 布局模式（瀑布流 / 列表）
-    val dynamicFeedLayoutMode by SettingsManager.getDynamicFeedLayoutMode(context)
+    val dynamicFeedLayoutMode by remember(context) { SettingsManager.getDynamicFeedLayoutMode(context) }
         .collectAsStateWithLifecycle(initialValue = SettingsManager.DynamicFeedLayoutMode.WATERFALL)
 
-    val dynamicVisibleTabIds by SettingsManager.getDynamicTabVisibleTabs(context)
+    val dynamicVisibleTabIds by remember(context) { SettingsManager.getDynamicTabVisibleTabs(context) }
         .collectAsStateWithLifecycle(initialValue = defaultDynamicTabVisibleIds)
-    val dynamicTabOrder by SettingsManager.getDynamicTabOrder(context)
+    val dynamicTabOrder by remember(context) { SettingsManager.getDynamicTabOrder(context) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val dynamicTopBarCollapseOnScroll by SettingsManager
-        .getDynamicTopBarCollapseOnScroll(context)
+    val dynamicTopBarCollapseOnScroll by remember(context) { SettingsManager.getDynamicTopBarCollapseOnScroll(context) }
         .collectAsStateWithLifecycle(initialValue = false)
     // Keep the restored inset while DataStore reconnects after returning from a child page.
     var restoredTopActionsCollapsed by rememberSaveable { mutableStateOf(false) }
-    val dynamicTopActionsCollapsed by SettingsManager
-        .getDynamicTopActionsCollapsed(context)
+    val dynamicTopActionsCollapsed by remember(context) { SettingsManager.getDynamicTopActionsCollapsed(context) }
         .collectAsStateWithLifecycle(initialValue = restoredTopActionsCollapsed)
     SideEffect { restoredTopActionsCollapsed = dynamicTopActionsCollapsed }
     val visibleTabs = remember(dynamicVisibleTabIds, dynamicTabOrder, authorFeedTabEnabled) {
@@ -366,7 +364,6 @@ fun DynamicScreen(
     val displayedTabIndex = pagerState.settledPage.coerceIn(0, visibleTabs.lastIndex.coerceAtLeast(0))
     val displayedLogicalTab = resolveDynamicSettledLogicalTab(displayedTabIndex, visibleTabs)
         ?: activeSelectedTab
-    val shouldShowUpPanel = shouldShowDynamicUpPanel(displayedLogicalTab)
     val activeListState = listStates[displayedLogicalTab]
     val pagerMotionSpec = AppMotionTokens.emphasizedSpec<Float>()
 
@@ -401,13 +398,7 @@ fun DynamicScreen(
     val upListVisible by remember(context) {
         com.android.purebilibili.core.store.home.DynamicSettingsStore.observeUpListVisible(context)
     }.collectAsStateWithLifecycle(initialValue = true)
-    val shouldShowHorizontalUserList = remember(displayMode, displayedLogicalTab, upListVisible) {
-        upListVisible &&
-        shouldShowDynamicHorizontalUserList(
-            isHorizontalMode = displayMode.isHorizontalUserList(),
-            selectedTab = displayedLogicalTab
-        )
-    }
+    val shouldShowHorizontalUserList = upListVisible && displayMode.isHorizontalUserList()
 
     val appThemeConfig = com.android.purebilibili.core.ui.LocalAppThemeConfig.current
     // 顶部高斯模糊使用独立 Haze 源；液态玻璃的 Backdrop 渐进模糊仍单独由
@@ -451,7 +442,7 @@ fun DynamicScreen(
 
     val density = LocalDensity.current
     val statusBarHeight = WindowInsets.statusBars.getTop(density).let { with(density) { it.toDp() } }
-    val appNavigationSettings by SettingsManager.getAppNavigationSettings(context)
+    val appNavigationSettings by remember(context) { SettingsManager.getAppNavigationSettings(context) }
         .collectAsStateWithLifecycle(initialValue = AppNavigationSettings())
     val shouldAutoCollapseBottomBar = shouldAutoCollapseDynamicBottomBar(
         visibilityMode = appNavigationSettings.bottomBarVisibilityMode
@@ -517,7 +508,7 @@ fun DynamicScreen(
     }
     val handleUserSelection = remember(selectedUserId, displayedLogicalTab) {
         { clickedUserId: Long? ->
-            val targetTab = if (shouldShowDynamicUpPanel(displayedLogicalTab)) displayedLogicalTab else 0
+            val targetTab = resolveDynamicAuthorSelectionTab(displayedLogicalTab)
             // 番剧内的作者搜索回到全部；投稿和专栏的作者选择保留当前分类。
             if (targetTab == 0) authorFeedTabEnabled = true
             viewModel.setSelectedTab(targetTab)
@@ -808,7 +799,7 @@ fun DynamicScreen(
                             DynamicSidebar(
                                 chromeBackdrop = dynamicDockBackdrop,
                                 users = displayUsers,
-                                selectedUserId = selectedUserId,
+                                selectedUserId = selectedUserId.takeIf { isSelectedUserTabActive },
                                 selfUid = selfUid,
                                 isExpanded = isSidebarExpanded,
                                 userListState = sidebarUserListState,
@@ -840,7 +831,7 @@ fun DynamicScreen(
                                 .fillMaxSize()
                                 .padding(padding)
                         ) {
-                        if (shouldShowUpPanel && !sidebarOnRight && (!targetMode.isDrawer() || isSidebarExpanded)) {
+                        if (!sidebarOnRight && (!targetMode.isDrawer() || isSidebarExpanded)) {
                             UpPanelSidebar()
                         }
 
@@ -1027,7 +1018,7 @@ fun DynamicScreen(
                                 modifier = Modifier.align(Alignment.Center)
                             )
 
-                            if (shouldShowUpPanel && targetMode.isDrawer() && !isSidebarExpanded) {
+                            if (targetMode.isDrawer() && !isSidebarExpanded) {
                                 AppSmallFloatingActionButton(
                                     onClick = { viewModel.toggleSidebar() },
                                     modifier = Modifier
@@ -1041,7 +1032,7 @@ fun DynamicScreen(
                                 }
                             }
                         }
-                        if (shouldShowUpPanel && sidebarOnRight && (!targetMode.isDrawer() || isSidebarExpanded)) {
+                        if (sidebarOnRight && (!targetMode.isDrawer() || isSidebarExpanded)) {
                             UpPanelSidebar()
                         }
                     }
@@ -1232,7 +1223,7 @@ fun DynamicScreen(
                                 }
                                 HorizontalUserList(
                                     users = displayUsers,
-                                    selectedUserId = selectedUserId,
+                                    selectedUserId = selectedUserId.takeIf { isSelectedUserTabActive },
                                     selfUid = selfUid,
                                     listState = horizontalUserListState,
                                     showHiddenUsers = showHiddenUsers,

@@ -77,7 +77,6 @@ import com.android.purebilibili.feature.home.components.FrostedSideBar
 import com.android.purebilibili.feature.home.components.CategoryTabRow
 import com.android.purebilibili.feature.home.components.HomeHeader
 import com.android.purebilibili.feature.home.components.HomeRefreshIndicator
-import com.android.purebilibili.feature.home.components.Md3ScreenshotRefreshIndicator
 import com.android.purebilibili.feature.home.components.nativeMd3TopTabSelectionSpec
 import com.android.purebilibili.feature.home.components.HomeInteractionMotionBudget
 import com.android.purebilibili.feature.home.components.rememberHomeUiSkinDecoration
@@ -270,6 +269,7 @@ fun HomeScreen(
     onVideoDetailReturnAnimationConsumed: () -> Unit = {}
 ) {
     if (!rememberHomeMemoryRecoveryReady(viewModel)) return
+    com.android.purebilibili.core.performance.PerformanceScreenProbe("home")
     val pendingMemoryRecovery by viewModel.pendingMemoryRecovery.collectAsStateWithLifecycle()
     val feedNavigation = rememberHomeFeedNavigationCallbacks(onVideoClick, onSpaceClick, onLiveClick)
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
@@ -356,9 +356,9 @@ fun HomeScreen(
         .collectAsStateWithLifecycle()
     val installedPlugins by com.android.purebilibili.core.plugin.PluginManager.pluginsFlow
         .collectAsStateWithLifecycle()
-    val isSubscriptionPluginPersistedEnabled by com.android.purebilibili.core.plugin.PluginStore
-        .isEnabledFlow(context, BuiltinPluginIds.SUBSCRIPTION_FEED)
-        .collectAsStateWithLifecycle(initialValue = false)
+    val isSubscriptionPluginPersistedEnabled by remember(context) {
+        com.android.purebilibili.core.plugin.PluginStore.isEnabledFlow(context, BuiltinPluginIds.SUBSCRIPTION_FEED)
+    }.collectAsStateWithLifecycle(initialValue = false)
     val subscriptionFeedsEnabled = remember(
         subscriptionRevision,
         installedPlugins,
@@ -1121,7 +1121,8 @@ fun HomeScreen(
         )
     }
     //  [修复] 动态计算内容顶部边距，防止被头部遮挡
-    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    // 首页在沉浸播放页下仍保留状态栏占位，返回时顶栏、列表和卡片落点不随可见性跳动。
+    val statusBarHeight = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
     val homeStartupElapsedAt = remember { SystemClock.elapsedRealtime() }
 
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
@@ -1382,10 +1383,16 @@ fun HomeScreen(
     val collapseSearchOnScroll = headerCollapseMode.collapseSearch
     val collapseTabsOnScroll = headerCollapseMode.collapseTabs
     val isAnyHeaderCollapseEnabled = headerCollapseMode.hasAnyCollapse
-    // 模式变化立即清理旧偏移，始终显示不依赖下一次滚动才能恢复。
+    var appliedHeaderCollapseMode by rememberSaveable {
+        mutableStateOf(homeSettings.homeHeaderCollapseMode)
+    }
+    // 只在模式真正改变时清理偏移；切换底部栏目后重新挂载应保留已保存的折叠位置。
     LaunchedEffect(headerCollapseMode) {
-        headerScrollState.setOffsetImmediately(0f)
-        headerScrollState.tabsCollapsed = false
+        if (appliedHeaderCollapseMode != homeSettings.homeHeaderCollapseMode) {
+            headerScrollState.setOffsetImmediately(0f)
+            headerScrollState.tabsCollapsed = false
+            appliedHeaderCollapseMode = homeSettings.homeHeaderCollapseMode
+        }
     }
     val headerAutoCollapseDistancePx = if (isAnyHeaderCollapseEnabled) {
         searchCollapseDistancePx
@@ -1855,7 +1862,6 @@ fun HomeScreen(
 
                         //  独立的 PullToRefreshState，避免所有页面共享一个状态导致冲突
                         val pullRefreshState = rememberPullToRefreshState()
-                        val pullDistanceFraction = pullRefreshState.distanceFraction
                         val isPageRefreshing = isRefreshing && currentCategory == category
                         val currentPageRefreshing by rememberUpdatedState(isPageRefreshing)
                         val refreshInteractionProvider = remember(pullRefreshState) {
@@ -1872,42 +1878,14 @@ fun HomeScreen(
                                 }
                             }
                         }
-                        var stablePullOffsetFraction by remember { mutableFloatStateOf(0f) }
-
-                        //  下拉物理由策略区分：MD3 截图式跟随当前手指距离回收，旧 iOS 弹性保留防抖滞后。
-                        val resolvedStablePullOffsetFraction = resolveStablePullContentOffsetFraction(
-                            distanceFraction = pullDistanceFraction,
+                        val animatedDragOffsetFraction = rememberHomePullContentOffset(
+                            state = pullRefreshState,
                             isRefreshing = isPageRefreshing,
-                            isStateAnimating = pullRefreshState.isAnimating,
-                            previousOffsetFraction = stablePullOffsetFraction,
                             motionStyle = pullRefreshMotionStyle,
-                            indicatorStyle = pullRefreshIndicatorStyle
-                        )
-                        SideEffect {
-                            stablePullOffsetFraction = resolvedStablePullOffsetFraction
-                        }
-
-                        //  使用 animateFloatAsState 包装偏移量
-                        val animatedDragOffsetFraction = androidx.compose.animation.core.animateFloatAsState(
-                            targetValue = resolvedStablePullOffsetFraction,
-                            animationSpec = if (
-                                systemReduceMotion || !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.uiEntranceAnimationEnabled ||
-                                shouldSnapPullOffsetToFinger(
-                                    distanceFraction = pullDistanceFraction,
-                                    isRefreshing = isPageRefreshing,
-                                    isStateAnimating = pullRefreshState.isAnimating,
-                                    indicatorStyle = pullRefreshIndicatorStyle
-                                )
-                            ) {
-                                androidx.compose.animation.core.snap()
-                            } else {
-                                com.android.purebilibili.core.ui.components.scrollFeedbackSpring(
-                                    com.android.purebilibili.core.ui.components.LocalScrollFeedbackPreset.current,
-                                    damping = 0.96f,
-                                    stiffness = 520f,
-                                )
-                            },
-                            label = "pull_bounce"
+                            indicatorStyle = pullRefreshIndicatorStyle,
+                            reduceMotion = systemReduceMotion ||
+                                !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.uiEntranceAnimationEnabled,
+                            active = pageWork.runActiveWork && homeVisualWorkActive,
                         )
 
                         //  Defers calculation to graphicsLayer
@@ -1957,31 +1935,11 @@ fun HomeScreen(
                                     }
                                     AppPullRefreshIndicatorStyle.MIUIX_NATIVE -> Unit
                                     AppPullRefreshIndicatorStyle.MATERIAL_SCREENSHOT_HANDLE -> {
-                                        val indicatorHeight = resolveMd3ScreenshotRefreshIndicatorHeightDp(
-                                            progress = pullDistanceFraction,
-                                            isRefreshing = isPageRefreshing
-                                        ).dp
-                                        val indicatorTotalHeight = resolveMd3ScreenshotRefreshIndicatorTotalHeightDp(
-                                            indicatorHeightDp = indicatorHeight.value,
-                                            hasHintText = pullDistanceFraction > 0f || isPageRefreshing
-                                        ).dp
-                                        Md3ScreenshotRefreshIndicator(
+                                        HomeScreenshotRefreshIndicator(
                                             state = pullRefreshState,
                                             isRefreshing = isPageRefreshing,
-                                            indicatorHeight = indicatorHeight,
-                                            modifier = Modifier
-                                                .align(Alignment.TopCenter)
-                                                .padding(top = homeRefreshIndicatorTopInset)
-                                                .zIndex(1f)
-                                                .graphicsLayer {
-                                                    val currentDragOffset = calculateDragOffset()
-                                                    translationY = resolveMd3ScreenshotRefreshIndicatorTranslationY(
-                                                        dragOffsetPx = currentDragOffset,
-                                                        indicatorTotalHeightPx = indicatorTotalHeight.toPx(),
-                                                        minGapPx = AppSpacingTokens.Small.toPx()
-                                                    )
-                                                }
-                                                .fillMaxWidth()
+                                            topInset = homeRefreshIndicatorTopInset,
+                                            calculateDragOffset = calculateDragOffset,
                                         )
                                     }
                                     AppPullRefreshIndicatorStyle.CUPERTINO -> {
