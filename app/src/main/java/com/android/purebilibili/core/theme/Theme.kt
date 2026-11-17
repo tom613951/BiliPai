@@ -877,6 +877,7 @@ fun PureBiliBiliTheme(
     appFontWeightPreset: AppFontWeightPreset = AppFontWeightPreset.FOLLOW_THEME,
     appFontFileName: String = "",
     appIconStyle: AppIconStyle = AppIconStyle.AUTO,
+    appLineIconColor: Int? = null,
     appListItemStyle: AppListItemStyle = AppListItemStyle.AUTO,
     liquidGlassEnabled: Boolean = true,
     themeTransitionEnabled: Boolean = true,
@@ -1097,6 +1098,7 @@ fun PureBiliBiliTheme(
         }
     }
 
+    val platformOverscrollFactory = androidx.compose.foundation.rememberPlatformOverscrollFactory()
     val wallpaperPreviewSchemes = remember(dynamicLightBaseScheme, dynamicDarkBaseScheme) {
         ThemeWallpaperPreviewSchemes(dynamicLightBaseScheme, dynamicDarkBaseScheme)
     }
@@ -1107,6 +1109,7 @@ fun PureBiliBiliTheme(
         LocalWallpaperColorCompatibility provides wallpaperCompatibility,
         LocalBaseThemeRoleOverrides provides baseThemeRoleOverrides,
         com.android.purebilibili.core.ui.LocalLiquidControlThemeColor provides animatedPalette.liquidAccent,
+        com.android.purebilibili.core.ui.LocalAppLineIconColor provides (appLineIconColor?.let { Color(it) } ?: Color.Unspecified),
         LocalAppIconStyle provides resolveAppIconStyle(
             iconStyle = appIconStyle,
             uiStyle = uiStyle
@@ -1129,11 +1132,21 @@ fun PureBiliBiliTheme(
                 shapes = shapes,
                 motionScheme = materialMotionScheme,
                 content = {
-                    com.android.purebilibili.core.ui.ProvideAppContentColors(
-                        nativeInteractionColors = com.android.purebilibili.core.ui.isMiuixNonGlassEnabled(uiStyle, liquidGlassEnabled),
-                        miuixContentColors = uiStyle == AppUiStyle.MIUIX,
-                        content = content,
-                    )
+                    // Both themes are mounted for shared color tokens. Explicitly select
+                    // scrolling physics so MD3 does not inherit the enclosing Miuix factory.
+                    // Glass changes surfaces only; it retains the selected native scroll style.
+                    CompositionLocalProvider(
+                        androidx.compose.foundation.LocalOverscrollFactory provides
+                            if (uiStyle == AppUiStyle.MIUIX) {
+                                top.yukonga.miuix.kmp.utils.MiuixOverscrollFactory
+                            } else platformOverscrollFactory,
+                    ) {
+                        com.android.purebilibili.core.ui.ProvideAppContentColors(
+                            nativeInteractionColors = com.android.purebilibili.core.ui.isMiuixNonGlassEnabled(uiStyle, liquidGlassEnabled),
+                            miuixContentColors = uiStyle == AppUiStyle.MIUIX,
+                            content = content,
+                        )
+                    }
                 }
             )
         }
