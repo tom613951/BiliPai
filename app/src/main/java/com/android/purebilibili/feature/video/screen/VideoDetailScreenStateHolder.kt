@@ -505,7 +505,8 @@ internal fun VideoDetailScreenStateHolder(
     composerViewModel: VideoComposerViewModel = viewModel(),
     supplementViewModel: VideoSupplementViewModel = viewModel(),
     commentViewModel: VideoCommentViewModel = viewModel(),
-    onBgmClick: (BgmInfo) -> Unit = {}
+    onBgmClick: (BgmInfo) -> Unit = {},
+    takePreparedPlayer: (() -> androidx.media3.exoplayer.ExoPlayer?)? = null,
 ) {
     // 详情页打开期间抑制历史/收藏列表刷新:播放心跳会持续触发
     // HistoryRefreshBus,若父级列表在预测性返回手势动画中重新加载,
@@ -972,6 +973,18 @@ internal fun VideoDetailScreenStateHolder(
         val success = uiState as? VideoPlaybackUiState.Success
         if (success?.info?.bvid == normalizedBvid && (safeCid <= 0L || success.info.cid == safeCid)) {
             return
+        }
+        if (success?.info?.bvid == normalizedBvid) {
+            val pageIndex = resolveInitialPageIndex(
+                requestedCid = safeCid,
+                currentCid = success.info.cid,
+                pages = success.info.pages,
+            )
+            if (pageIndex != null) {
+                // 合集中的分 P 直达复用选集切换，成功后统一提交 CID 和媒体状态。
+                viewModel.switchPage(pageIndex, autoPlay = autoPlay)
+                return
+            }
         }
         // Capture episode cover before Success is replaced by Loading.
         val switchedCover = resolveUgcSeasonEpisodeCoverUrl(
@@ -2215,6 +2228,7 @@ internal fun VideoDetailScreenStateHolder(
     )
     // 初始化播放器状态
     val playerState = rememberVideoPlayerState(
+        takePreparedPlayer = takePreparedPlayer,
         context = context,
         viewModel = viewModel,
         bvid = currentBvid,
@@ -2639,6 +2653,7 @@ internal fun VideoDetailScreenStateHolder(
     LaunchedEffect(uiState, currentBvid, playbackTargetCid, hasAppliedInitialPageSwitch) {
         if (hasAppliedInitialPageSwitch) return@LaunchedEffect
         val success = uiState as? VideoPlaybackUiState.Success ?: return@LaunchedEffect
+        if (!viewModel.isCurrentPlaybackSnapshot(success)) return@LaunchedEffect
         if (success.info.bvid != currentBvid) return@LaunchedEffect
 
         val targetPageIndex = resolveInitialPageIndex(
@@ -3352,6 +3367,7 @@ internal fun VideoDetailScreenStateHolder(
     LaunchedEffect(uiState, currentBvid, currentBvidCid, isPortraitFullscreen, bvid, isVisible) {
         if (!isVisible) return@LaunchedEffect
         val success = uiState as? VideoPlaybackUiState.Success ?: return@LaunchedEffect
+        if (!viewModel.isCurrentPlaybackSnapshot(success)) return@LaunchedEffect
         val managerBvid = miniPlayerManager?.currentBvid.orEmpty()
         val managerCid = miniPlayerManager?.currentCid ?: 0L
         if (
@@ -3463,6 +3479,7 @@ internal fun VideoDetailScreenStateHolder(
         if (uiState is VideoPlaybackUiState.Success) {
             val info = (uiState as VideoPlaybackUiState.Success).info
             val success = uiState as VideoPlaybackUiState.Success
+            if (!viewModel.isCurrentPlaybackSnapshot(success)) return@LaunchedEffect
 
             // 📱 [双重验证] 从 API dimension 字段设置预判断值
             info.dimension?.let { dim ->

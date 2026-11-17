@@ -39,6 +39,7 @@ internal enum class SettingsIconRole {
     DARK_IMAGE_DIM,
     SCROLL_FEEDBACK,
     PLAYER_CONTROLS_TIMEOUT,
+    REFRESH_LOCATOR_DURATION,
     PLAYER_ADJUSTMENT_PERSISTENCE,
     PLAYER_ROTATION_SENSITIVITY,
     DYNAMIC_VISIBILITY_CHECK,
@@ -142,6 +143,7 @@ internal enum class SettingsIconRole {
     CARD_TRANSITION_ANIMATION,
     LIVE_SURFACE_TRANSITION,
     PREDICTIVE_BACK,
+    PREDICTIVE_BACK_GESTURE,
     MIUIX_TRANSITION_BLUR,
     TOP_DOCK_GLASS,
     HOME_SEARCH_GLASS,
@@ -375,6 +377,7 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.PLAYER_ADJUSTMENT_PERSISTENCE -> R.drawable.ic_settings_player_adjustments_24
     SettingsIconRole.PLAYER_ROTATION_SENSITIVITY -> R.drawable.ic_settings_rotation_sensitivity_24
     SettingsIconRole.PLAYER_CONTROLS_TIMEOUT -> R.drawable.ic_settings_player_controls_timeout_24
+    SettingsIconRole.REFRESH_LOCATOR_DURATION -> R.drawable.ic_settings_refresh_locator_duration_24
     SettingsIconRole.DYNAMIC_VISIBILITY_CHECK -> R.drawable.ic_settings_dynamic_visibility_check_24
     SettingsIconRole.SCROLL_FEEDBACK -> R.drawable.ic_settings_scroll_feedback_24
     SettingsIconRole.RECOMMEND_RETENTION -> R.drawable.ic_settings_recommend_retention_24
@@ -473,6 +476,7 @@ internal fun resolveSettingsMaterialSymbolResource(role: SettingsIconRole): Int 
     SettingsIconRole.CARD_TRANSITION_ANIMATION -> R.drawable.ms_sync_alt_24
     SettingsIconRole.LIVE_SURFACE_TRANSITION -> R.drawable.ms_movie_24
     SettingsIconRole.PREDICTIVE_BACK -> R.drawable.ms_arrow_back_24
+    SettingsIconRole.PREDICTIVE_BACK_GESTURE -> R.drawable.ic_settings_predictive_back_24
     SettingsIconRole.MIUIX_TRANSITION_BLUR -> R.drawable.ms_gradient_24
     SettingsIconRole.TOP_DOCK_GLASS -> R.drawable.ms_layers_24
     SettingsIconRole.HOME_SEARCH_GLASS -> R.drawable.ms_manage_search_24
