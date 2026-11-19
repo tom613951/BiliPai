@@ -21,8 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.android.purebilibili.core.ui.components.LocalAppScrollToTopFeedbackAllowed
-import top.yukonga.miuix.kmp.basic.RefreshState
 import top.yukonga.miuix.kmp.basic.PullToRefresh as MiuixPullToRefresh
 import top.yukonga.miuix.kmp.basic.rememberPullToRefreshState as rememberMiuixPullToRefreshState
 
@@ -90,8 +88,16 @@ fun AdaptivePullToRefreshBox(
                     )
                 }
             }
+            val mountMiuixRefresh = shouldMountMiuixPullToRefresh(
+                enabled = enabled,
+                isRefreshing = isRefreshing,
+                allowContentScrollWhileRefreshing = allowContentScrollWhileRefreshing,
+                reduceMotion = reduceMotion,
+                inViewport = refreshGate.inViewport,
+                resumed = refreshGate.resumed,
+            )
             Box(modifier = modifier.then(refreshGate.modifier), contentAlignment = contentAlignment) {
-                if (enabled && refreshGate.active && !((allowContentScrollWhileRefreshing || reduceMotion) && isRefreshing)) {
+                if (mountMiuixRefresh) {
                     // The native container owns its drag/refresh animation scope. Discard that
                     // state with the container when player expansion temporarily disables refresh;
                     // otherwise a cancelled Pulling/RefreshComplete session can consume later
@@ -107,15 +113,7 @@ fun AdaptivePullToRefreshBox(
                             color = AppSurfaceTokens.primary(),
                             refreshTexts = resolveMiuixPullToRefreshTexts(),
                             content = {
-                                // Native refresh owns drag and release displacement. Its spring
-                                // starts at the actual pull distance; do not add a fixed return pulse.
-                                // Scope this to the native Miuix path, leaving MD3/glass unchanged.
-                                CompositionLocalProvider(
-                                    LocalHapticFeedback provides contentHaptic,
-                                    LocalAppScrollToTopFeedbackAllowed provides
-                                        (LocalAppScrollToTopFeedbackAllowed.current &&
-                                            miuixState.refreshState == RefreshState.Idle),
-                                ) {
+                                CompositionLocalProvider(LocalHapticFeedback provides contentHaptic) {
                                     stableContent(contentAlignment, content)
                                 }
                             },
@@ -123,14 +121,16 @@ fun AdaptivePullToRefreshBox(
                     }
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = contentAlignment) {
-                        CompositionLocalProvider(
-                            LocalAppScrollToTopFeedbackAllowed provides
-                                (LocalAppScrollToTopFeedbackAllowed.current && !isRefreshing),
-                        ) {
-                            stableContent(contentAlignment, content)
-                        }
+                        stableContent(contentAlignment, content)
                         // 非阻塞刷新或减少动态效果时，静态提示与列表分开，避免保留旋转任务。
-                        if (refreshGate.active && (allowContentScrollWhileRefreshing || reduceMotion) && isRefreshing) {
+                        if (shouldShowMiuixNonBlockingRefreshHint(
+                                allowContentScrollWhileRefreshing = allowContentScrollWhileRefreshing,
+                                reduceMotion = reduceMotion,
+                                isRefreshing = isRefreshing,
+                                inViewport = refreshGate.inViewport,
+                                resumed = refreshGate.resumed,
+                            )
+                        ) {
                             com.android.purebilibili.core.ui.components.AppText(
                                 text = "正在刷新…",
                                 color = AppSurfaceTokens.primary(),
@@ -153,9 +153,16 @@ fun AdaptivePullToRefreshBox(
                     modifier = modifier.then(refreshGate.modifier),
                     state = state,
                     contentAlignment = contentAlignment,
-                    enabled = enabled && refreshGate.active,
+                    enabled = enabled,
                     indicator = {
-                        if (refreshGate.active) {
+                        if (shouldRenderMaterialPullToRefreshIndicator(
+                                gateActive = refreshGate.active,
+                                distanceFraction = state.distanceFraction,
+                                isRefreshing = isRefreshing,
+                                inViewport = refreshGate.inViewport,
+                                resumed = refreshGate.resumed,
+                            )
+                        ) {
                             if (reduceMotion && isRefreshing) {
                                 com.android.purebilibili.core.ui.components.AppText(
                                     text = "正在刷新…",
