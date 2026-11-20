@@ -1,8 +1,10 @@
 package com.android.purebilibili.feature.home.components.cards
 
+import com.android.purebilibili.core.ui.transition.NavigationReturnLandingStyle
 import com.android.purebilibili.core.ui.common.copyPlainTextToClipboard
 import com.android.purebilibili.core.ui.components.VideoStatusBadges
 import com.android.purebilibili.core.ui.AppContentColors
+import com.android.purebilibili.core.ui.ClientAiSummaryIcon
 
 
 import android.os.Build
@@ -17,6 +19,7 @@ import com.android.purebilibili.core.ui.components.AppDropdownMenuItem
 import com.android.purebilibili.core.ui.components.appGlassMenuSource
 import com.android.purebilibili.core.ui.components.rememberAppGlassMenuSource
 import com.android.purebilibili.core.ui.components.AppSurface
+import com.android.purebilibili.core.ui.components.AppIconButton
 import com.android.purebilibili.core.ui.components.AppTextButton
 
 import com.android.purebilibili.core.ui.MediaContrastPalette
@@ -110,6 +113,7 @@ import androidx.compose.animation.core.tween
 import com.android.purebilibili.core.ui.LocalSharedTransitionScope
 import com.android.purebilibili.core.ui.LocalAnimatedVisibilityScope
 import com.android.purebilibili.core.ui.LocalSharedTransitionEnabled
+import com.android.purebilibili.core.ui.transition.videoCardSourceCaptureEnabled
 import com.android.purebilibili.core.ui.videoCardTitleMaxLines
 import com.android.purebilibili.core.ui.videoCardTitleOverflow
 import com.android.purebilibili.core.ui.AppShapes
@@ -394,14 +398,41 @@ internal fun VideoCardDurationPublishRow(
     publishTimeColor: Color,
     topSpacing: Dp,
     singleLine: Boolean = false,
+    modifier: Modifier = Modifier,
+    reserveTextLine: Boolean = false,
+    trailingContent: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    if (durationText.isBlank() && publishTimeText.isBlank()) return
+    val hasText = durationText.isNotBlank() || publishTimeText.isNotBlank()
+    if (!hasText && trailingContent == null && !reserveTextLine) return
     val contentTypography = feedContentTypography()
 
     Spacer(modifier = Modifier.height(topSpacing))
+    if (trailingContent != null) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(AppSpacingTokens.ExtraSmall),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (hasText) {
+                AppText(
+                    text = listOf(publishTimeText, durationText).filter { it.isNotBlank() }.joinToString(" · "),
+                    style = contentTypography.statistic,
+                    color = publishTimeColor,
+                    maxLines = if (singleLine) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            trailingContent()
+        }
+        return
+    }
     if (singleLine) {
         AppText(
             text = listOf(publishTimeText, durationText).filter { it.isNotBlank() }.joinToString(" · "),
+            modifier = modifier,
             style = contentTypography.statistic,
             color = publishTimeColor,
             maxLines = 1,
@@ -411,7 +442,7 @@ internal fun VideoCardDurationPublishRow(
         return
     }
     FlowRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         itemVerticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro),
         verticalArrangement = Arrangement.spacedBy(AppSpacingTokens.Micro)
@@ -564,6 +595,7 @@ internal fun ElegantVideoCard(
     titleMaxLines: Int = 2,
     // Home's regular grid bounds metadata to rows; other lists retain wrapping metadata.
     regularGridMetadata: Boolean = false,
+    compactCornerFooter: Boolean = false,
     // Only equal-height rows should consume spare height; carousels remain content-sized.
     bottomAlignedMetadata: Boolean = false,
     highlightedTitle: AnnotatedString? = null,
@@ -685,7 +717,9 @@ internal fun ElegantVideoCard(
             }
             if (video.cid > 0L && video.bvid.isNotBlank()) {
                 add(com.android.purebilibili.core.ui.components.AppWindowAction(
-                    label = "AI总结", onClick = { launchAiSummary() },
+                    label = "AI总结",
+                    onClick = launchAiSummary,
+                    iconContent = { ClientAiSummaryIcon(it.size(20.dp)) },
                 ))
             }
             if (video.owner.mid > 0L) {
@@ -1077,7 +1111,7 @@ internal fun ElegantVideoCard(
     val hasTrailingCardAction = onUnfavorite != null || hasOverflowMenu
     // 所有列表仅在输入准备期间或持有当前导航源身份时挂载转场图层。
     // 玻璃、MD3 和 Miuix 共用来源交接，材质与布局仍由各自分支决定。
-    val sourceEnabled = transitionEnabled && LocalSharedTransitionEnabled.current
+    val sourceEnabled = transitionEnabled && videoCardSourceCaptureEnabled()
     val sourceInteraction = remember(video.bvid, video.cid, effectiveSharedElementSourceRoute) {
         VideoCardSourceInteraction()
     }
@@ -1290,7 +1324,7 @@ internal fun ElegantVideoCard(
         propagateMinConstraints = true,
         modifier = modifier
             .fillMaxWidth()
-            .videoCardSourceAnchor(video.bvid, adaptiveHoverShape)
+            .videoCardSourceAnchor(video.bvid, adaptiveHoverShape, landingStyle = NavigationReturnLandingStyle.VIDEO_CARD)
             .then(cardVisibility.observerModifier)
             .adaptiveCardHoverEffect(shape = adaptiveHoverShape)
             // 进场动画：挂载门控已含滚动/返回/切分类；与过渡并存时仅淡入不改几何
@@ -2019,6 +2053,53 @@ internal fun ElegantVideoCard(
         } else {
             AppSpacingTokens.Small
         }
+        val nativeMiuix = com.android.purebilibili.core.ui.isMiuixNonGlassEnabled()
+        val infoHorizontalPadding = if (nativeMiuix) AppSpacingTokens.Small else 6.dp
+        val infoTopPadding = if (nativeMiuix) AppSpacingTokens.Small else infoBottomPadding
+        val cornerActionSize = 29.dp
+        val nativeActionSize = top.yukonga.miuix.kmp.basic.IconButtonDefaults.MinWidth
+        val cornerActionWidth = if (nativeMiuix) nativeActionSize else cornerActionSize
+        val trailingActionCount = (if (onUnfavorite != null) 1 else 0) + (if (hasOverflowMenu) 1 else 0)
+        // 数据贴封面时，时长已随统计行显示，不再在信息区重复。
+        val footerDuration = durationText
+            .takeIf { showDurationOutside && !scrollLitePolicy.showCompactStatsOnCover }
+            .orEmpty()
+        val reservePublishTimeLine = compactCornerFooter && showPublishTime && video.canFetchVideoCardPublishTime()
+        val hasCompactFooter = compactCornerFooter &&
+            (reservePublishTimeLine || publishTimeRowText.isNotBlank() || footerDuration.isNotBlank())
+        val cornerActionClearance = if (hasTrailingCardAction) {
+            cornerActionWidth * trailingActionCount - infoHorizontalPadding + AppSpacingTokens.Micro
+        } else AppSpacingTokens.None
+        // 保留原生按钮的触控区域，图标与其他材质使用同一个右下角视觉落点。
+        val nativeCornerOffset = (nativeActionSize - cornerActionSize) / 2
+        val nativeGlyphModifier = if (compactCornerFooter) {
+            Modifier.offset(x = nativeCornerOffset, y = nativeCornerOffset)
+        } else Modifier
+        val nativeTrailingActions: @Composable RowScope.() -> Unit = {
+            if (onUnfavorite != null) {
+                AppIconButton(onClick = { showUnfavoriteDialog = true }) {
+                    AppIcon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "从收藏夹移除",
+                        modifier = nativeGlyphModifier.size(AppSpacingTokens.Large),
+                        tint = adaptiveContentColors.subtitleColor.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            if (hasOverflowMenu) {
+                AppIconButton(
+                    onClick = { openDismissMenu(menuButtonCoordsRef.value, null) },
+                    modifier = Modifier.onPlaced { menuButtonCoordsRef.value = it },
+                ) {
+                    AppIcon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "更多操作",
+                        tint = adaptiveContentColors.subtitleColor,
+                        modifier = nativeGlyphModifier.size(17.dp),
+                    )
+                }
+            }
+        }
 
         Box(
             modifier = infoContainerModifier
@@ -2038,14 +2119,14 @@ internal fun ElegantVideoCard(
             modifier = Modifier
                 .then(if (bottomAlignedMetadata) Modifier.fillMaxHeight() else Modifier)
                 .padding(
-                start = 6.dp,
-                top = if (useCardEffectSurface) infoBottomPadding else AppSpacingTokens.None,
-                end = 6.dp,
-                bottom = infoBottomPadding,
-            )
+                    start = infoHorizontalPadding,
+                    top = if (useCardEffectSurface) infoTopPadding else AppSpacingTokens.None,
+                    end = infoHorizontalPadding,
+                    bottom = infoBottomPadding,
+                )
         ) {
         if (!useCardEffectSurface) {
-            Spacer(modifier = Modifier.height(if (compactMetadata) AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro else AppSpacingTokens.Small))
+            Spacer(modifier = Modifier.height(infoTopPadding))
         }
 
         // 鼠标右键与长按共用同一入口（预览/操作菜单），触屏路径不受影响。
@@ -2117,9 +2198,13 @@ internal fun ElegantVideoCard(
         Spacer(modifier = Modifier.height(if (compactMetadata) AppSpacingTokens.ExtraSmall else AppSpacingTokens.ExtraSmall + AppSpacingTokens.Micro))
 
         Column(
-            modifier = resolveVideoCardMetadataModifier(
-                (if (onUnfavorite != null) 1 else 0) + (if (hasOverflowMenu) 1 else 0)
-            )
+            modifier = when {
+                compactCornerFooter -> Modifier
+                    .fillMaxWidth()
+                    .padding(end = if (hasCompactFooter) AppSpacingTokens.None else cornerActionClearance)
+                nativeMiuix -> Modifier.fillMaxWidth()
+                else -> resolveVideoCardMetadataModifier(trailingActionCount)
+            },
         ) {
         val metadataColors = resolveHomeVideoCardMetadataColors(
             onSurfaceColor = adaptiveContentColors.titleColor,
@@ -2182,79 +2267,86 @@ internal fun ElegantVideoCard(
         }
 
         VideoCardDurationPublishRow(
-            // 数据贴封面时，时长已随统计行以 pill 呈现，不再在信息区重复显示
-            durationText = durationText
-                .takeIf { showDurationOutside && !scrollLitePolicy.showCompactStatsOnCover }
-                .orEmpty(),
+            durationText = footerDuration,
             publishTimeText = publishTimeRowText,
             emphasizePublishTime = emphasizePublishTime,
             publishTimeColor = metadataColors.publishTimeColor,
-            topSpacing = if (compactMetadata) {
-                AppSpacingTokens.ExtraSmall
-            } else {
-                AppSpacingTokens.Small - AppSpacingTokens.Micro
+            topSpacing = when {
+                compactCornerFooter -> AppSpacingTokens.Micro
+                compactMetadata -> AppSpacingTokens.ExtraSmall
+                else -> AppSpacingTokens.Small - AppSpacingTokens.Micro
             },
-            singleLine = regularGridMetadata,
+            singleLine = regularGridMetadata || compactCornerFooter,
+            modifier = if (hasCompactFooter) Modifier.padding(end = cornerActionClearance) else Modifier,
+            // 等待发布时间时保留一行，数据到达不会撑高卡片或移动角落按钮。
+            reserveTextLine = reservePublishTimeLine,
+            trailingContent = nativeTrailingActions.takeIf {
+                nativeMiuix && !compactCornerFooter && hasTrailingCardAction
+            },
         )
 
         }
         }
 
-        if (hasTrailingCardAction) {
+        if (hasTrailingCardAction && (compactCornerFooter || !nativeMiuix)) {
             Row(
                 modifier = Modifier.align(Alignment.BottomEnd),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (onUnfavorite != null) {
-                    Box(
-                        modifier = Modifier
-                            .size(29.dp)
-                            .appActionClickable {
-                                haptic(HapticType.MEDIUM)
-                                showUnfavoriteDialog = true
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // 语义是“从收藏夹移除”，用 ✕ 而不是 ThumbUp——
-                        // 后者会被理解为点赞，与行为不符。
-                        AppIcon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "从收藏夹移除",
-                            modifier = Modifier.size(AppSpacingTokens.Large),
-                            tint = adaptiveContentColors.subtitleColor.copy(alpha = 0.7f)
-                        )
+                if (nativeMiuix) {
+                    nativeTrailingActions()
+                } else {
+                    if (onUnfavorite != null) {
+                        Box(
+                            modifier = Modifier
+                                .size(cornerActionSize)
+                                .appActionClickable {
+                                    haptic(HapticType.MEDIUM)
+                                    showUnfavoriteDialog = true
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // 语义是“从收藏夹移除”，用 ✕ 而不是 ThumbUp——
+                            // 后者会被理解为点赞，与行为不符。
+                            AppIcon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = "从收藏夹移除",
+                                modifier = Modifier.size(AppSpacingTokens.Large),
+                                tint = adaptiveContentColors.subtitleColor.copy(alpha = 0.7f)
+                            )
+                        }
                     }
-                }
 
-                if (hasOverflowMenu) {
-                    Box(
-                        modifier = Modifier
-                            .size(29.dp)
-                            .semantics { contentDescription = "更多操作" }
-                            .onPlaced { coordinates ->
-                                menuButtonCoordsRef.value = coordinates
-                            }
-                            // 玻璃开启时按住即从按钮源图层展开菜单；关闭时 source 短路，仅剩 clickable。
-                            .then(if (overflowMenuSource != null) {
-                                Modifier.appGlassMenuSource(overflowMenuSource, onOpen = {
+                    if (hasOverflowMenu) {
+                        Box(
+                            modifier = Modifier
+                                .size(cornerActionSize)
+                                .semantics { contentDescription = "更多操作" }
+                                .onPlaced { coordinates ->
+                                    menuButtonCoordsRef.value = coordinates
+                                }
+                                // 玻璃开启时按住即从按钮源图层展开菜单；关闭时 source 短路，仅剩 clickable。
+                                .then(if (overflowMenuSource != null) {
+                                    Modifier.appGlassMenuSource(overflowMenuSource, onOpen = {
+                                        haptic(HapticType.LIGHT)
+                                        openDismissMenu(menuButtonCoordsRef.value, null)
+                                    })
+                                } else Modifier)
+                                .appActionClickable {
                                     haptic(HapticType.LIGHT)
                                     openDismissMenu(menuButtonCoordsRef.value, null)
-                                })
-                            } else Modifier)
-                            .appActionClickable {
-                                haptic(HapticType.LIGHT)
-                                openDismissMenu(menuButtonCoordsRef.value, null)
-                            },
-                        // 两种材质共用此布局；图标居中留出内边距，避开卡片右下圆角裁切。
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AppIcon(
-                            imageVector = Icons.Outlined.MoreVert,
-                            contentDescription = null,
-                            tint = adaptiveContentColors.subtitleColor,
-                            modifier = Modifier
-                                .size(17.dp)
-                        )
+                                },
+                            // 两种材质共用此布局；图标居中留出内边距，避开卡片右下圆角裁切。
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AppIcon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = null,
+                                tint = adaptiveContentColors.subtitleColor,
+                                modifier = Modifier
+                                    .size(17.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -2314,7 +2406,7 @@ internal fun ElegantVideoCard(
                         // AI 总结（需要 cid 才能请求）
                         if (video.cid > 0L && video.bvid.isNotBlank()) {
                             AppDropdownMenuItem(
-                                leadingIcon = { AppIcon(Icons.Outlined.AutoAwesome, contentDescription = null, modifier = Modifier.size(20.dp), tint = AppContentColors.primaryText()) },
+                                leadingIcon = { ClientAiSummaryIcon(Modifier.size(20.dp)) },
                                 text = { AppText("AI总结", color = AppContentColors.primaryText()) },
                                 onClick = {
                                     menu.expanded = false

@@ -48,7 +48,6 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
                 ScreenRoutes.Search.route
             }
         }
-        BiliPaiNavKey.Search -> ScreenRoutes.Search.route
         BiliPaiNavKey.SearchTrending -> ScreenRoutes.SearchTrending.route
         is BiliPaiNavKey.TopicDetail -> ScreenRoutes.TopicDetail.createRoute(topicId)
         BiliPaiNavKey.Settings -> ScreenRoutes.Settings.route
@@ -66,6 +65,9 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         BiliPaiNavKey.LoginActivitySettings -> ScreenRoutes.LoginActivitySettings.route
         BiliPaiNavKey.MessageNotificationSettings -> ScreenRoutes.MessageNotificationSettings.route
         is BiliPaiNavKey.PluginsSettings -> ScreenRoutes.PluginsSettings.createRoute(importUrl)
+        is BiliPaiNavKey.BuiltinPluginSettings -> "${routeBase}/${encodeRouteValue(pluginId)}"
+        is BiliPaiNavKey.JsonPluginEditor -> pluginId?.let { "${routeBase}/${encodeRouteValue(it)}" } ?: routeBase
+        BiliPaiNavKey.PluginSkinCatalog,
         BiliPaiNavKey.ContentFilterHistory -> routeBase
         is BiliPaiNavKey.JsPluginContent -> ScreenRoutes.JsPluginContent.createRoute(pluginId)
         is BiliPaiNavKey.ExternalMedia -> ScreenRoutes.ExternalMedia.createRoute(launchId)
@@ -93,7 +95,6 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
         } else {
             ScreenRoutes.LikedVideos.route
         }
-        BiliPaiNavKey.LikedVideos -> ScreenRoutes.LikedVideos.route
         BiliPaiNavKey.WatchLater -> ScreenRoutes.WatchLater.route
         is BiliPaiNavKey.WatchLaterSearch -> "watch_later_search?query=${encodeRouteValue(query)}"
         BiliPaiNavKey.Onboarding -> ScreenRoutes.Onboarding.route
@@ -158,6 +159,8 @@ internal fun BiliPaiNavKey.toLegacyRoute(): String {
             resumePositionMs = resumePositionMs,
             commentRootRpid = commentRootRpid,
             commentTargetRpid = commentTargetRpid,
+            linkStartPositionMs = linkStartPositionMs,
+            suppressPortraitAutoEnter = suppressPortraitAutoEnter,
             initialVertical = initialVertical,
             directPortraitEntry = directPortraitEntry,
         )
@@ -192,14 +195,7 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
         normalized == ScreenRoutes.Home.route -> BiliPaiNavKey.Home
         normalized == ScreenRoutes.ListenVideo.route -> BiliPaiNavKey.ListenVideo
         normalized == ScreenRoutes.Dynamic.route -> BiliPaiNavKey.Dynamic
-        routeBase == ScreenRoutes.Search.route -> {
-            val keyword = query["keyword"].orEmpty()
-            if (keyword.isNotEmpty()) {
-                BiliPaiNavKey.Search(keyword = keyword)
-            } else {
-                BiliPaiNavKey.Search
-            }
-        }
+        routeBase == ScreenRoutes.Search.route -> BiliPaiNavKey.Search(keyword = query["keyword"].orEmpty())
         normalized == ScreenRoutes.SearchTrending.route -> BiliPaiNavKey.SearchTrending
         segments.firstOrNull() == "topic" && segments.size >= 2 -> {
             BiliPaiNavKey.TopicDetail(topicId = segments[1].toLongOrNull() ?: 0L)
@@ -223,6 +219,11 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
         normalized == ScreenRoutes.LoginActivitySettings.route -> BiliPaiNavKey.LoginActivitySettings
         normalized == ScreenRoutes.MessageNotificationSettings.route -> BiliPaiNavKey.MessageNotificationSettings
         routeBase == "plugins_settings" -> BiliPaiNavKey.PluginsSettings(importUrl = query["importUrl"])
+        segments.firstOrNull() == "builtin_plugin_settings" && segments.size >= 2 ->
+            BiliPaiNavKey.BuiltinPluginSettings(decodeRouteValue(segments[1]))
+        segments.firstOrNull() == "json_plugin_editor" ->
+            BiliPaiNavKey.JsonPluginEditor(segments.getOrNull(1)?.let(::decodeRouteValue))
+        normalized == BiliPaiNavKey.PluginSkinCatalog.routeBase -> BiliPaiNavKey.PluginSkinCatalog
         normalized == BiliPaiNavKey.ContentFilterHistory.routeBase -> BiliPaiNavKey.ContentFilterHistory
         segments.firstOrNull() == "js_plugin" && segments.size >= 2 -> {
             BiliPaiNavKey.JsPluginContent(pluginId = decodeRouteValue(segments[1]))
@@ -272,7 +273,7 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
                     isCoinArchive = isCoinArchive,
                 )
             } else {
-                BiliPaiNavKey.LikedVideos
+                BiliPaiNavKey.LikedVideos()
             }
         }
         normalized == ScreenRoutes.WatchLater.route -> BiliPaiNavKey.WatchLater
@@ -385,6 +386,8 @@ internal fun legacyRouteToBiliPaiNavKey(route: String?): BiliPaiNavKey {
                 title = query["title"].orEmpty(),
                 cid = query["cid"]?.toLongOrNull() ?: 0L,
                 coverUrl = query["cover"].orEmpty(),
+                linkStartPositionMs = query["linkStartPositionMs"]?.toLongOrNull()?.takeIf { it >= 0L },
+                suppressPortraitAutoEnter = query["suppressPortraitAutoEnter"]?.toBooleanStrictOrNull() ?: false,
                 startAudio = query["startAudio"]?.toBooleanStrictOrNull() ?: false,
                 autoPortrait = query["autoPortrait"]?.toBooleanStrictOrNull() ?: false,
                 fullscreen = query["fullscreen"]?.toBooleanStrictOrNull() ?: false,
@@ -499,7 +502,6 @@ internal fun isCardReturnTargetNavKey(key: BiliPaiNavKey): Boolean {
         BiliPaiNavKey.MainHost,
         BiliPaiNavKey.Dynamic,
         is BiliPaiNavKey.Search,
-        BiliPaiNavKey.Search,
         BiliPaiNavKey.History,
         is BiliPaiNavKey.HistorySearch,
         BiliPaiNavKey.Favorite,
@@ -507,7 +509,6 @@ internal fun isCardReturnTargetNavKey(key: BiliPaiNavKey): Boolean {
         BiliPaiNavKey.FavoriteSubscribed,
         is BiliPaiNavKey.FavoriteSearch,
         is BiliPaiNavKey.LikedVideos,
-        BiliPaiNavKey.LikedVideos,
         BiliPaiNavKey.WatchLater,
         is BiliPaiNavKey.WatchLaterSearch,
         BiliPaiNavKey.Partition,

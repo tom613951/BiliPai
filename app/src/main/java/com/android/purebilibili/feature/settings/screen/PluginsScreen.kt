@@ -20,11 +20,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -36,8 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.android.purebilibili.R
-import com.android.purebilibili.core.plugin.ExternalPluginInstallDecision
-import com.android.purebilibili.core.plugin.evaluateExternalPluginInstall
 import com.android.purebilibili.core.plugin.js.BiliPaiJsPluginInstallStore
 import com.android.purebilibili.core.plugin.js.BiliPaiJsPluginManifest
 import com.android.purebilibili.core.plugin.js.BiliPaiJsRuntime
@@ -47,7 +47,6 @@ import com.android.purebilibili.core.plugin.js.InstalledBiliPaiJsPlugin
 import com.android.purebilibili.core.plugin.js.isPlayable
 import com.android.purebilibili.core.plugin.js.resolveBiliPaiJsPluginCapabilities
 import com.android.purebilibili.core.plugin.kotlinpkg.ExternalKotlinPluginInstallStore
-import com.android.purebilibili.core.plugin.kotlinpkg.ExternalKotlinPluginPackagePreview
 import com.android.purebilibili.core.network.NetworkModule
 import com.android.purebilibili.core.plugin.skin.UiSkinImportPackageResolver
 import com.android.purebilibili.core.plugin.skin.UiSkinImportMode
@@ -69,7 +68,8 @@ import com.android.purebilibili.core.store.SettingsManager
 import com.android.purebilibili.core.theme.iOSPink  // 插件图标色
 import com.android.purebilibili.core.theme.resolveAccessibleContainerColors
 import com.android.purebilibili.feature.plugin.BiliPaiFeedFilterPlugin
-import com.android.purebilibili.feature.settings.SettingsLocalBackHandler
+import com.android.purebilibili.feature.settings.SettingsNavigationContainerOrigin
+import com.android.purebilibili.navigation3.BiliPaiNavKey
 import com.android.purebilibili.feature.settings.screen.SkinCatalogScreen
 import com.android.purebilibili.feature.settings.ui.SettingsBottomBarScrollEffect
 import com.android.purebilibili.feature.settings.ui.SettingsPageScaffold
@@ -177,59 +177,15 @@ private fun PluginCenterSectionTitle(title: String, modifier: Modifier = Modifie
  */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun PluginsScreen(
+internal fun PluginsScreen(
     onBack: () -> Unit,
-    onOpenFilterHistory: () -> Unit,
-    isActive: Boolean,
+    onNavigate: (BiliPaiNavKey) -> Unit,
     initialImportUrl: String? = null,
-    onOpenJsPlugin: (String) -> Unit = {}
 ) {
-    // Top-level state for managing plugins and editing
     val plugins by PluginManager.pluginsFlow.collectAsStateWithLifecycle()
     val jsonPlugins by com.android.purebilibili.core.plugin.json.JsonPluginManager.plugins.collectAsStateWithLifecycle()
     val screenTitle = stringResource(R.string.plugins_center_title)
     val backLabel = stringResource(R.string.common_back)
-
-    //  编辑插件状态
-    var editingPlugin by remember { mutableStateOf<com.android.purebilibili.core.plugin.json.JsonRulePlugin?>(null) }
-    var creatingJsonPlugin by remember { mutableStateOf(false) }
-    var selectedBuiltInPluginId by rememberSaveable { mutableStateOf<String?>(null) }
-    var showSkinCatalog by remember { mutableStateOf(false) }
-
-    //  如果正在编辑插件，显示编辑器全屏覆盖 (Mobile behavior)
-    //  In Tablet, this will be handled differently.
-    if (creatingJsonPlugin || editingPlugin != null) {
-        val closeEditor = { creatingJsonPlugin = false; editingPlugin = null }
-        SettingsLocalBackHandler { closeEditor() }
-        JsonRuleSourceEditorScreen(
-            plugin = editingPlugin,
-            onBack = closeEditor,
-        )
-        return
-    }
-
-    selectedBuiltInPluginId?.let { pluginId ->
-        val pluginInfo = plugins.firstOrNull { it.plugin.id == pluginId }
-        if (pluginInfo != null) {
-            // 过滤记录转场期间，底层插件详情仍可能保留在组合中。
-            SettingsLocalBackHandler(enabled = isActive) { selectedBuiltInPluginId = null }
-            PluginDetailScreen(
-                pluginInfo = pluginInfo,
-                onBack = { selectedBuiltInPluginId = null },
-                onOpenFilterHistory = onOpenFilterHistory,
-            )
-            return
-        }
-    }
-
-    if (showSkinCatalog) {
-        SettingsLocalBackHandler { showSkinCatalog = false }
-        SkinCatalogScreen(
-            onBack = { showSkinCatalog = false },
-            onInstalled = { showSkinCatalog = false }
-        )
-        return
-    }
 
     val bottomContentPadding = LocalBottomBarContentPadding.current
 
@@ -243,12 +199,12 @@ fun PluginsScreen(
         PluginsContent(
             plugins = plugins,
             jsonPlugins = jsonPlugins,
-            onOpenBuiltInPlugin = { selectedBuiltInPluginId = it },
-            onEditJsonPlugin = { editingPlugin = it },
-            onCreateJsonPlugin = { creatingJsonPlugin = true },
+            onOpenBuiltInPlugin = { onNavigate(BiliPaiNavKey.BuiltinPluginSettings(it)) },
+            onEditJsonPlugin = { onNavigate(BiliPaiNavKey.JsonPluginEditor(it.id)) },
+            onCreateJsonPlugin = { onNavigate(BiliPaiNavKey.JsonPluginEditor()) },
             initialImportUrl = initialImportUrl,
-            onOpenJsPlugin = onOpenJsPlugin,
-            onOpenSkinCatalog = { showSkinCatalog = true },
+            onOpenJsPlugin = { onNavigate(BiliPaiNavKey.JsPluginContent(it)) },
+            onOpenSkinCatalog = { onNavigate(BiliPaiNavKey.PluginSkinCatalog) },
         )
     }
 }
@@ -327,18 +283,13 @@ fun PluginsContent(
     val jsRuntime = remember(context) {
         BiliPaiJsRuntime(context)
     }
+    val kotlinPluginEntryState = remember { resolveExternalKotlinPluginEntryUiState() }
     var installedKotlinPackages by remember {
         mutableStateOf(kotlinPluginStore.listInstalledPackages())
     }
     var installedJsPlugins by remember {
         mutableStateOf(jsPluginStore.listInstalledPlugins())
     }
-    var kotlinPreview by remember {
-        mutableStateOf<Pair<ExternalKotlinPluginPackagePreview, ExternalPluginInstallDecision>?>(null)
-    }
-    var kotlinPackageBytes by remember { mutableStateOf<ByteArray?>(null) }
-    var kotlinImportError by remember { mutableStateOf<String?>(null) }
-    var isKotlinPackageLoading by remember { mutableStateOf(false) }
     var showJsImportDialog by remember { mutableStateOf(false) }
     var jsImportUrl by remember { mutableStateOf("") }
     var jsImportError by remember { mutableStateOf<String?>(null) }
@@ -401,34 +352,6 @@ fun PluginsContent(
     var testingPluginId by remember { mutableStateOf<String?>(null) }
     var testResult by remember { mutableStateOf<Triple<Int, Int, List<com.android.purebilibili.data.model.response.VideoItem>>?>(null) }
     var testingSampleVideos by remember { mutableStateOf<List<com.android.purebilibili.data.model.response.VideoItem>>(emptyList()) }
-    val kotlinPackagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        isKotlinPackageLoading = true
-        kotlinImportError = null
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: throw IllegalArgumentException("无法读取插件包")
-                    val preview = kotlinPluginStore.previewPackage(bytes).getOrThrow()
-                    val decision = evaluateExternalPluginInstall(
-                        packageDescriptor = preview.descriptor,
-                        trustedSignerSha256 = emptySet()
-                    )
-                    bytes to (preview to decision)
-                }
-            }
-            isKotlinPackageLoading = false
-            result.onSuccess { (bytes, previewAndDecision) ->
-                kotlinPackageBytes = bytes
-                kotlinPreview = previewAndDecision
-            }.onFailure { error ->
-                kotlinImportError = error.message ?: "预览失败"
-            }
-        }
-    }
     val jsPluginPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
@@ -589,12 +512,22 @@ fun PluginsContent(
                     Column {
                         entries.forEachIndexed { index, pluginInfo ->
                             key(pluginInfo.plugin.id) {
-                                PluginItem(
-                                    pluginInfo = pluginInfo,
-                                    iconTint = rememberPluginEntryIconTint(plugins.indexOf(pluginInfo)),
-                                    onToggle = { enabled -> scope.launch { PluginManager.setEnabled(pluginInfo.plugin.id, enabled) } },
-                                    onOpen = { onOpenBuiltInPlugin(pluginInfo.plugin.id) },
-                                )
+                                val pluginId = pluginInfo.plugin.id
+                                SettingsNavigationContainerOrigin(
+                                    target = BiliPaiNavKey.BuiltinPluginSettings(pluginId),
+                                    first = index == 0,
+                                    last = index == entries.lastIndex,
+                                    flatGroup = true,
+                                    onClick = { onOpenBuiltInPlugin(pluginId) },
+                                ) { contentModifier, open ->
+                                    PluginItem(
+                                        pluginInfo = pluginInfo,
+                                        iconTint = rememberPluginEntryIconTint(plugins.indexOf(pluginInfo)),
+                                        onToggle = { enabled -> scope.launch { PluginManager.setEnabled(pluginId, enabled) } },
+                                        onOpen = open,
+                                        contentModifier = contentModifier,
+                                    )
+                                }
                             }
                             if (index < entries.lastIndex) AppPreferenceDivider()
                         }
@@ -618,12 +551,19 @@ fun PluginsContent(
             item(key = "rules-heading") { PluginCenterSectionTitle("自定义规则") }
             item(key = "rule-actions") {
                 AppPreferenceGroup(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    AppPreference(
-                        icon = rememberSettingsVector(R.drawable.ph_note_pencil_24, R.drawable.ms_edit_note_24),
-                        title = "编写 JSON 规则",
-                        subtitle = "粘贴或编写规则，实时测试过滤结果",
+                    SettingsNavigationContainerOrigin(
+                        target = BiliPaiNavKey.JsonPluginEditor(),
                         onClick = onCreateJsonPlugin,
-                    )
+                        last = false,
+                    ) { contentModifier, open ->
+                        AppPreference(
+                            icon = rememberSettingsVector(R.drawable.ph_note_pencil_24, R.drawable.ms_edit_note_24),
+                            title = "编写 JSON 规则",
+                            subtitle = "粘贴或编写规则，实时测试过滤结果",
+                            onClick = open,
+                            contentModifier = contentModifier,
+                        )
+                    }
                     AppPreferenceDivider()
                     AppPreference(
                         icon = rememberSettingsVector(R.drawable.ph_cloud_arrow_down_24, R.drawable.ms_cloud_download_24),
@@ -803,22 +743,21 @@ fun PluginsContent(
 
             item(key = "kotlin-import") {
                 Spacer(Modifier.height(12.dp))
-                AppPreferenceGroup(modifier = Modifier.padding(horizontal = 16.dp)) {
+                AppPreferenceGroup(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .alpha(0.55f),
+                ) {
                     AppPreference(
                         icon = rememberSettingsVector(R.drawable.ph_file_arrow_up_24, R.drawable.ms_upload_file_fill_24),
-                        title = "安装 Kotlin 插件包",
-                        subtitle = if (isKotlinPackageLoading) "正在读取插件包…" else "选择本地 .bpplugin 文件，预览后安装",
-                        onClick = if (isKotlinPackageLoading) null else ({ kotlinPackagePicker.launch("*/*") }),
-                    )
-                }
-            }
-            if (kotlinImportError != null) {
-                item {
-                    AppText(
-                        text = kotlinImportError ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppContentColors.error(),
-                        modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
+                        title = kotlinPluginEntryState.title,
+                        subtitle = kotlinPluginEntryState.subtitle,
+                        iconTint = AppContentColors.secondaryText().copy(alpha = 0.6f),
+                        textColor = AppContentColors.secondaryText(),
+                        subtitleColor = AppContentColors.secondaryText().copy(alpha = 0.85f),
+                        showChevron = false,
+                        onClick = null,
+                        trailingContent = { LockedFeatureBadge(kotlinPluginEntryState.badgeText) },
                     )
                 }
             }
@@ -836,27 +775,45 @@ fun PluginsContent(
                         Column {
                             buildInstalledExternalPluginUiModels(installedKotlinPackages)
                                 .forEachIndexed { index, installed ->
-                                    Column(
+                                    Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(horizontal = 16.dp, vertical = 12.dp),
-                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        AppText(
-                                            text = installed.title,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = AppContentColors.primaryText()
-                                        )
-                                        AppText(
-                                            text = "${installed.subtitle} · ${installed.stateText}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = AppContentColors.secondaryText()
-                                        )
-                                        AppText(
-                                            text = installed.packageHashText,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = AppContentColors.secondaryText()
-                                        )
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            AppText(
+                                                text = installed.title,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = AppContentColors.primaryText()
+                                            )
+                                            AppText(
+                                                text = "${installed.subtitle} · ${installed.stateText}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = AppContentColors.secondaryText()
+                                            )
+                                            AppText(
+                                                text = installed.packageHashText,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = AppContentColors.secondaryText()
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        AppTextButton(
+                                            onClick = {
+                                                kotlinPluginStore.removeInstalledPackage(installed.pluginId)
+                                                kotlinPluginStore.revokeAuthorization(
+                                                    installed.pluginId,
+                                                    installed.packageSha256,
+                                                )
+                                                installedKotlinPackages = kotlinPluginStore.listInstalledPackages()
+                                            }
+                                        ) {
+                                            AppText("移除")
+                                        }
                                     }
                                     if (index < installedKotlinPackages.lastIndex) {
                                         Box(
@@ -876,12 +833,19 @@ fun PluginsContent(
             item(key = "skins-heading") { PluginCenterSectionTitle("界面装扮") }
             item(key = "skin-actions") {
                 AppPreferenceGroup(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    AppPreference(
-                        icon = rememberSettingsVector(R.drawable.ph_cloud_24, R.drawable.ms_cloud_fill_24),
-                        title = "在线装扮",
-                        subtitle = "浏览装扮，预览后安装",
+                    SettingsNavigationContainerOrigin(
+                        target = BiliPaiNavKey.PluginSkinCatalog,
                         onClick = onOpenSkinCatalog,
-                    )
+                        last = false,
+                    ) { contentModifier, open ->
+                        AppPreference(
+                            icon = rememberSettingsVector(R.drawable.ph_cloud_24, R.drawable.ms_cloud_fill_24),
+                            title = "在线装扮",
+                            subtitle = "浏览装扮，预览后安装",
+                            onClick = open,
+                            contentModifier = contentModifier,
+                        )
+                    }
                     AppPreferenceDivider()
                     AppPreference(
                         icon = rememberSettingsVector(R.drawable.ph_paint_brush_24, R.drawable.ms_brush_fill_24),
@@ -1410,93 +1374,6 @@ fun PluginsContent(
         }
     }
 
-    kotlinPreview?.let { (preview, decision) ->
-        val previewModel = buildExternalPluginInstallPreview(decision)
-        AppAlertDialog(
-            onDismissRequest = {
-                if (!isImporting) {
-                    kotlinPreview = null
-                    kotlinPackageBytes = null
-                }
-            },
-            icon = { SettingsFunctionIcon(rememberSettingsVector(R.drawable.ph_shield_24, R.drawable.ms_shield_fill_24), title = "Kotlin 插件包预览") },
-            title = { AppText("Kotlin 插件包预览") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AppText(
-                        text = previewModel.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppContentColors.primaryText()
-                    )
-                    AppText(
-                        text = previewModel.subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppContentColors.secondaryText()
-                    )
-                    AppText(
-                        text = previewModel.packageHashText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppContentColors.secondaryText()
-                    )
-                    AppText(
-                        text = "${previewModel.signerText} · ${buildExternalPluginPayloadSummary(preview.payloadEntries)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppContentColors.secondaryText()
-                    )
-                    PluginCapabilityDetailSection(
-                        capabilities = preview.descriptor.manifest.capabilities
-                    )
-                    if (decision is ExternalPluginInstallDecision.Rejected) {
-                        AppText(
-                            text = decision.reason,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AppContentColors.error()
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                AppTextButton(
-                    enabled = decision is ExternalPluginInstallDecision.RequiresUserApproval,
-                    onClick = {
-                        val bytes = kotlinPackageBytes ?: return@AppTextButton
-                        val result = kotlinPluginStore.installPreview(
-                            preview = preview,
-                            packageBytes = bytes,
-                            grantedCapabilities = preview.descriptor.manifest.capabilities
-                        )
-                        result.onSuccess {
-                            installedKotlinPackages = kotlinPluginStore.listInstalledPackages()
-                            kotlinPreview = null
-                            kotlinPackageBytes = null
-                            android.widget.Toast.makeText(
-                                context,
-                                "插件包已保存，当前不会运行",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }.onFailure { error ->
-                            kotlinImportError = error.message ?: "安装失败"
-                            kotlinPreview = null
-                            kotlinPackageBytes = null
-                        }
-                    }
-                ) {
-                    AppText("保存授权")
-                }
-            },
-            dismissButton = {
-                AppTextButton(
-                    onClick = {
-                        kotlinPreview = null
-                        kotlinPackageBytes = null
-                    }
-                ) {
-                    AppText("取消")
-                }
-            }
-        )
-    }
-
     uiSkinPreview?.let { preview ->
         val previewModel = buildUiSkinPackagePreview(preview)
         val imagePreviewItems = buildUiSkinImagePreviewItems(uiSkinPreviewAssetFiles)
@@ -1925,6 +1802,7 @@ private fun PluginItem(
     onToggle: (Boolean) -> Unit,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    contentModifier: Modifier = Modifier,
 ) {
     val plugin = pluginInfo.plugin
     val effectiveIconTint = rememberAdaptivePreferenceIconContainerColor(iconTint)
@@ -1946,6 +1824,7 @@ private fun PluginItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { onOpen() }
+                .then(contentModifier)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2032,6 +1911,49 @@ private fun PluginItem(
             )
         }
 
+    }
+}
+
+@Composable
+internal fun PluginCenterDetailScreen(
+    key: BiliPaiNavKey,
+    onBack: () -> Unit,
+    onOpenFilterHistory: () -> Unit,
+) {
+    when (key) {
+        is BiliPaiNavKey.BuiltinPluginSettings -> {
+            val plugins by PluginManager.pluginsFlow.collectAsStateWithLifecycle()
+            val pluginInfo = plugins.firstOrNull { it.plugin.id == key.pluginId }
+            if (pluginInfo != null) {
+                PluginDetailScreen(pluginInfo, onBack, onOpenFilterHistory)
+            } else {
+                MissingPluginCenterItem("插件详情", "插件已不可用", onBack)
+            }
+        }
+        is BiliPaiNavKey.JsonPluginEditor -> {
+            val plugins by com.android.purebilibili.core.plugin.json.JsonPluginManager.plugins.collectAsStateWithLifecycle()
+            val plugin = plugins.firstOrNull { it.plugin.id == key.pluginId }?.plugin
+            if (key.pluginId == null || plugin != null) {
+                JsonRuleSourceEditorScreen(plugin = plugin, onBack = onBack)
+            } else {
+                MissingPluginCenterItem("编辑 JSON 规则", "找不到该规则", onBack)
+            }
+        }
+        BiliPaiNavKey.PluginSkinCatalog -> SkinCatalogScreen(onBack = onBack, onInstalled = onBack)
+        else -> error("Unsupported plugin center destination: ${key.routeBase}")
+    }
+}
+
+@Composable
+private fun MissingPluginCenterItem(title: String, message: String, onBack: () -> Unit) {
+    SettingsPageScaffold(
+        title = title,
+        onBack = onBack,
+        backContentDescription = stringResource(R.string.common_back),
+        bottomContentPadding = LocalBottomBarContentPadding.current,
+        scrollHost = SettingsPageScrollHost.External,
+    ) {
+        AppText(message, modifier = Modifier.padding(16.dp), color = AppContentColors.secondaryText())
     }
 }
 
@@ -2172,11 +2094,14 @@ private fun InstalledJsPluginItem(
         }
         PluginCapabilityChips(capabilities = installed.grantedCapabilities)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AppTextButton(
+            SettingsNavigationContainerOrigin(
+                target = BiliPaiNavKey.JsPluginContent(installed.manifest.id),
                 onClick = onOpen,
-                enabled = installed.enabled
-            ) {
-                AppText("打开内容")
+                flatGroup = true,
+            ) { contentModifier, open ->
+                AppTextButton(onClick = open, enabled = installed.enabled, modifier = contentModifier) {
+                    AppText("打开内容")
+                }
             }
             AppTextButton(
                 onClick = onTest,
@@ -2640,13 +2565,19 @@ internal fun JsonPluginItem(
                         AppText("重置统计", style = MaterialTheme.typography.labelMedium)
                     }
 
-                    // 编辑按钮
-                    AppTextButton(
+                    SettingsNavigationContainerOrigin(
+                        target = BiliPaiNavKey.JsonPluginEditor(plugin.id),
                         onClick = onEdit,
-                    ) {
-                        AppIcon(rememberSettingsVector(R.drawable.ph_note_pencil_24, R.drawable.ms_edit_note_24), null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        AppText("编辑", style = MaterialTheme.typography.labelMedium)
+                        flatGroup = true,
+                    ) { contentModifier, open ->
+                        AppTextButton(
+                            onClick = open,
+                            modifier = contentModifier,
+                        ) {
+                            AppIcon(rememberSettingsVector(R.drawable.ph_note_pencil_24, R.drawable.ms_edit_note_24), null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            AppText("编辑", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
 
                     // 删除按钮
@@ -2850,4 +2781,30 @@ private fun TestResultDialog(
  */
 private fun formatDuration(seconds: Int): String {
     return FormatUtils.formatDuration(seconds)
+}
+
+@Composable
+private fun LockedFeatureBadge(text: String) {
+    AppSurface(
+        shape = AppShapes.container(ContainerLevel.Tag),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            AppIcon(
+                imageVector = Icons.Outlined.Lock,
+                contentDescription = null,
+                tint = AppContentColors.secondaryText(),
+                modifier = Modifier.size(12.dp),
+            )
+            AppText(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = AppContentColors.secondaryText(),
+            )
+        }
+    }
 }

@@ -5,6 +5,7 @@ import com.android.purebilibili.core.plugin.BuiltinPluginIds
 
 import com.android.purebilibili.core.ui.AppContentColors
 
+import com.android.purebilibili.feature.video.playback.next.resolveSeasonWatchTarget
 import com.android.purebilibili.feature.video.ui.overlay.NextWatchOverlay
 
 import coil3.request.crossfade
@@ -23,8 +24,6 @@ import androidx.compose.ui.input.key.type
 import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 
-import com.android.purebilibili.feature.video.LocalVideoDetailOpeningSeed
-import androidx.compose.ui.graphics.painter.BitmapPainter
 import com.android.purebilibili.feature.video.danmaku.DanmakuManager
 import com.android.purebilibili.feature.video.danmaku.DanmakuCloudSyncUiState
 import com.android.purebilibili.feature.video.danmaku.rememberDanmakuManager
@@ -188,6 +187,9 @@ import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import coil3.compose.AsyncImage
+import coil3.BitmapImage
+import com.android.purebilibili.feature.video.ui.overlay.InlineStatusBarImage
+import com.android.purebilibili.feature.video.ui.overlay.rememberVideoDetailOpeningCoverImage
 import androidx.compose.ui.layout.ContentScale
 import com.android.purebilibili.feature.video.screen.videoInputDiagnostics
 import com.android.purebilibili.core.ui.LocalVideoDetailNavigationTransitionScope
@@ -271,6 +273,27 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import com.android.purebilibili.core.ui.AppShapes
 import com.android.purebilibili.core.ui.ContainerLevel
+import com.android.purebilibili.feature.video.ui.overlay.LocalPlayerLevelGestureActive
+import com.android.purebilibili.feature.video.ui.overlay.LocalPlayerPageBackdrop
+import top.yukonga.miuix.kmp.blur.Backdrop
+
+@Composable
+private fun VideoPlayerOverlayHost(
+    panelViewport: PlayerPanelViewportState?,
+    levelGestureActive: Boolean,
+    pageBackdrop: Backdrop?,
+    modifier: Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(modifier = modifier) {
+        // 返回预览会重组控件，逐项提供其环境值，避免走多值数组的更新路径。
+        CompositionLocalProvider(LocalPlayerPanelViewport provides panelViewport) {
+            CompositionLocalProvider(LocalPlayerLevelGestureActive provides levelGestureActive) {
+                CompositionLocalProvider(LocalPlayerPageBackdrop provides pageBackdrop, content = content)
+            }
+        }
+    }
+}
 
 @Composable
 private fun BoxScope.VideoSubtitleOverlayHost(
@@ -500,6 +523,7 @@ private fun VideoPlayerSectionContent(
     state: VideoPlayerSectionState,
     actions: VideoPlayerSectionActions,
 ) {
+    val sharedSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
     val playerState = state.playerState
     var playerInViewport by remember { mutableStateOf(false) }
     val playerVisualWorkActive = com.android.purebilibili.core.ui.rememberVisualWorkActive() &&
@@ -797,41 +821,6 @@ private fun VideoPlayerSectionContent(
             initialValue = com.android.purebilibili.core.store.PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC,
             lifecycle = lifecycleOwner.lifecycle
         )
-    val willContinueToNextAfterEnd = remember(uiState, playbackCompletionBehavior) {
-        val success = uiState as? VideoPlaybackUiState.Success
-        if (success == null) {
-            false
-        } else {
-            val pages = success.info.pages
-            val currentIndex = pages.indexOfFirst { it.cid == success.info.cid }
-            val hasNextPage = pages.size > 1 && currentIndex >= 0 && currentIndex < pages.lastIndex
-            val hasUgcSeasonNext = success.info.ugc_season?.let { season ->
-                val episodes = season.sections.flatMap { it.episodes }
-                if (episodes.isEmpty()) {
-                    false
-                } else {
-                    val idx = episodes.indexOfFirst {
-                        it.bvid == success.info.bvid || it.cid == success.info.cid
-                    }
-                    idx >= 0 && idx < episodes.lastIndex
-                }
-            } ?: false
-            val hasPlaylistNext = com.android.purebilibili.feature.video.player.PlaylistManager
-                .isExternalPlaylist.value &&
-                com.android.purebilibili.feature.video.player.PlaylistManager.hasNext()
-            val completionAdvances = playbackCompletionBehavior !=
-                com.android.purebilibili.core.store.PlaybackCompletionBehavior.STOP_AFTER_CURRENT &&
-                playbackCompletionBehavior !=
-                com.android.purebilibili.core.store.PlaybackCompletionBehavior.REPEAT_ONE
-            resolveWillContinuePlaybackAfterCurrentItem(
-                pageCount = pages.size,
-                currentPageIndex = currentIndex,
-                hasUgcSeasonNext = hasUgcSeasonNext,
-                hasPlaylistNext = hasPlaylistNext,
-                completionAdvancesToNext = completionAdvances || hasNextPage || hasUgcSeasonNext,
-            )
-        }
-    }
     val fixedFullscreenAspectRatio = playerInteractionSettings.fixedFullscreenAspectRatio
     val subtitleAutoPreference = playerInteractionSettings.subtitleAutoPreference
 
@@ -1040,7 +1029,8 @@ private fun VideoPlayerSectionContent(
     val latestIsFullscreen by rememberUpdatedState(isFullscreen)
     val latestOnToggleFullscreen by rememberUpdatedState(onToggleFullscreen)
     val latestOnPortraitFullscreen by rememberUpdatedState(onPortraitFullscreen)
-    val latestWillContinueToNextAfterEnd by rememberUpdatedState(willContinueToNextAfterEnd)
+    val latestPlaybackUiState by rememberUpdatedState(uiState)
+    val latestCompletionBehavior by rememberUpdatedState(playbackCompletionBehavior)
     val latestAutoExitFullscreenMode by rememberUpdatedState(autoExitFullscreenMode)
     DisposableEffect(
         playerState.player,
@@ -1048,9 +1038,33 @@ private fun VideoPlayerSectionContent(
         autoExitFullscreenEnabled,
         autoExitFullscreenMode,
         allowPlaybackStateAutoFullscreen,
-        willContinueToNextAfterEnd,
         bvid
     ) {
+        fun willContinueToNextAfterEnd(playbackState: Int): Boolean {
+            // 只在需要决定是否退出全屏时解析下一集，避免详情更新反复排序合集。
+            if (playbackState != Player.STATE_ENDED || !latestIsFullscreen ||
+                latestAutoExitFullscreenMode != com.android.purebilibili.core.store.AutoExitFullscreenMode.ALL_PARTS
+            ) return false
+            val info = (latestPlaybackUiState as? VideoPlaybackUiState.Success)?.info ?: return false
+            val pages = info.pages
+            val currentIndex = pages.indexOfFirst { it.cid == info.cid }
+            val hasNextPage = currentIndex >= 0 && currentIndex < pages.lastIndex
+            val hasUgcSeasonNext = !hasNextPage && resolveSeasonWatchTarget(info) != null
+            val hasPlaylistNext = com.android.purebilibili.feature.video.player.PlaylistManager
+                .isExternalPlaylist.value &&
+                com.android.purebilibili.feature.video.player.PlaylistManager.hasNext()
+            val behavior = latestCompletionBehavior
+            val completionAdvances = behavior !=
+                com.android.purebilibili.core.store.PlaybackCompletionBehavior.STOP_AFTER_CURRENT &&
+                behavior != com.android.purebilibili.core.store.PlaybackCompletionBehavior.REPEAT_ONE
+            return resolveWillContinuePlaybackAfterCurrentItem(
+                pageCount = pages.size,
+                currentPageIndex = currentIndex,
+                hasUgcSeasonNext = hasUgcSeasonNext,
+                hasPlaylistNext = hasPlaylistNext,
+                completionAdvancesToNext = completionAdvances || hasNextPage || hasUgcSeasonNext,
+            )
+        }
         previousPlayWhenReady = playerState.player.playWhenReady
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1063,7 +1077,7 @@ private fun VideoPlayerSectionContent(
                         hasAutoEnteredFullscreen = hasAutoEnteredFullscreen,
                         isFullscreen = latestIsFullscreen,
                         previousPlayWhenReady = previousPlayWhenReady,
-                        willContinueToNextItem = latestWillContinueToNextAfterEnd,
+                        willContinueToNextItem = willContinueToNextAfterEnd(playbackState),
                         autoExitFullscreenMode = latestAutoExitFullscreenMode,
                     )
                 ) {
@@ -1082,16 +1096,17 @@ private fun VideoPlayerSectionContent(
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 val previousValue = previousPlayWhenReady
                 previousPlayWhenReady = playWhenReady
+                val playbackState = playerState.player.playbackState
                 if (shouldToggleAutoFullscreenForPlaybackEvent(
                         autoEnterFullscreenEnabled = autoEnterFullscreenEnabled,
                         autoExitFullscreenEnabled = autoExitFullscreenEnabled,
                         allowPlaybackStateAutoFullscreen = allowPlaybackStateAutoFullscreen,
-                        playbackState = playerState.player.playbackState,
+                        playbackState = playbackState,
                         playWhenReady = playWhenReady,
                         hasAutoEnteredFullscreen = hasAutoEnteredFullscreen,
                         isFullscreen = latestIsFullscreen,
                         previousPlayWhenReady = previousValue,
-                        willContinueToNextItem = latestWillContinueToNextAfterEnd,
+                        willContinueToNextItem = willContinueToNextAfterEnd(playbackState),
                         autoExitFullscreenMode = latestAutoExitFullscreenMode,
                     )
                 ) {
@@ -1110,24 +1125,23 @@ private fun VideoPlayerSectionContent(
     val videoSizeState by playerState.videoSize.collectAsStateWithLifecycle()
     // Keep real first-frame readiness across detail/mini-player handoffs, without telemetry.
     val persistedRenderedFirstFrame by playerState.hasRenderedFirstFrame.collectAsStateWithLifecycle()
-    val currentPlaybackIdentity = remember(bvid, uiState) {
-        val success = uiState as? VideoPlaybackUiState.Success
+    val hasPlayedCurrentMedia by playerState.hasPlayedCurrentMedia.collectAsStateWithLifecycle()
+    val playbackIdentityBvid = (uiState as? VideoPlaybackUiState.Success)?.info?.bvid
+    val playbackIdentityCid = (uiState as? VideoPlaybackUiState.Success)?.info?.cid
+    val currentPlaybackIdentity = remember(bvid, playbackIdentityBvid, playbackIdentityCid) {
         resolvePlayerInteractionIdentity(
             routeBvid = bvid,
-            playbackBvid = success?.info?.bvid,
-            playbackCid = success?.info?.cid
+            playbackBvid = playbackIdentityBvid,
+            playbackCid = playbackIdentityCid
         )
-    }
-    var hasStartedPlayback by remember(currentPlaybackIdentity, playerState.player) {
-        mutableStateOf(false)
-    }
-    LaunchedEffect(observedIsPlaying) {
-        if (observedIsPlaying) hasStartedPlayback = true
     }
 
     // 控制器显示状态
-    var showControls by remember(currentPlaybackIdentity) {
-        mutableStateOf(INITIAL_PLAYER_CONTROLS_VISIBLE)
+    var showControls by remember(currentPlaybackIdentity, playerState.player) {
+        // 竖屏播放器退出后会重新挂载详情控件。暂停续接时首屏直接给出可拖动的真实进度。
+        val reattachingPausedPlayback = uiState is VideoPlaybackUiState.Success &&
+            !isFullscreen && !isPortraitFullscreen && hasPlayedCurrentMedia && !observedPlayWhenReady
+        mutableStateOf(INITIAL_PLAYER_CONTROLS_VISIBLE || reattachingPausedPlayback)
     }
     var hasAutoHiddenControlsForCurrentVideo by remember(currentPlaybackIdentity) {
         mutableStateOf(INITIAL_PLAYER_CHROME_AUTO_HIDE_HANDLED)
@@ -1137,15 +1151,16 @@ private fun VideoPlayerSectionContent(
     var measuredBottomControlsHeightPx by remember(bvid) { mutableIntStateOf(0) }
     var persistentChapterBarHeightPx by remember(bvid) { mutableIntStateOf(0) }
     val ambientPresentation = LocalAmbientPresentation.current
-    val statusBarAmbientFrame = remember(ambientPresentation) {
-        derivedStateOf {
-            val presentation = ambientPresentation ?: return@derivedStateOf null
-            // 播放器尺寸/表面变化会推进 requiredRefresh；重采样到位前隐藏旧帧（回落黑底），
-            // 避免状态栏模糊条在下滑缩小过程中停留在旧几何的采样帧上。
-            presentation.current
-                ?.takeIf { it.refreshGeneration >= presentation.requiredRefresh }
-                ?.raw
+    val statusBarBackdrop = state.statusBarBackdrop
+    if (statusBarBackdrop != null) {
+        val videoBounds = remember(ambientPresentation, measuredPlayerViewportSize) {
+            {
+                if (measuredPlayerViewportSize.value != IntSize.Zero) {
+                    ambientPresentation?.videoBoundsInWindow?.invoke()
+                } else null
+            }
         }
+        SideEffect { statusBarBackdrop.videoBoundsInWindow = videoBounds }
     }
 
     // 🔒 [新增] 屏幕锁定状态（全屏时防误触）
@@ -1188,20 +1203,13 @@ private fun VideoPlayerSectionContent(
         }
     }
 
-    // 「播放页沉浸状态栏」开启时，实时采样播放画面作为状态栏背景模糊源；
-    // 关闭（默认）时背景为纯黑，不采样，零开销。
-    val statusBarHazeEnabled by remember(context) {
-        SettingsManager.getHideVideoPageStatusBar(context)
-    }.collectAsStateWithLifecycle(
-            initialValue = SettingsManager.getHideVideoPageStatusBarSync(context),
-        )
     val shouldCaptureStatusBarAmbientFrame = shouldCaptureInlineStatusBarAmbientFrame(
         contentTopInsetPx = contentTopInset.value,
         isFullscreen = isFullscreen,
         isPortraitFullscreen = isPortraitFullscreen,
         isInPipMode = isInPipMode,
         hostLifecycleStarted = hostLifecycleStarted,
-        statusBarHazeEnabled = statusBarHazeEnabled,
+        statusBarHazeEnabled = statusBarBackdrop?.enabled == true,
     )
 
     var gestureMode by remember { mutableStateOf<VideoGestureMode>(VideoGestureMode.None) }
@@ -3298,13 +3306,15 @@ private fun VideoPlayerSectionContent(
             }
         }
 
+        var handledBackCancelRecovery by remember(bvid, playerState) { mutableIntStateOf(0) }
         LaunchedEffect(
             predictiveBackCancelRecoveryGeneration,
             playerViewRef,
             shouldBindInlinePlayerView,
             isInPipMode
         ) {
-            if (!shouldRecoverInlinePlayerAfterPredictiveBackCancel(
+            if (predictiveBackCancelRecoveryGeneration == handledBackCancelRecovery ||
+                !shouldRecoverInlinePlayerAfterPredictiveBackCancel(
                     recoveryGeneration = predictiveBackCancelRecoveryGeneration,
                     hasPlayerView = playerViewRef != null,
                     shouldBindInlinePlayerView = shouldBindInlinePlayerView,
@@ -3313,6 +3323,7 @@ private fun VideoPlayerSectionContent(
             ) {
                 return@LaunchedEffect
             }
+            handledBackCancelRecovery = predictiveBackCancelRecoveryGeneration
             val player = playerState.player
             playerViewRef?.let { playerView ->
                 videoOutputRouter.rebindDirectSurfaceIfNeeded()
@@ -3623,7 +3634,8 @@ private fun VideoPlayerSectionContent(
             playWhenReady = observedPlayWhenReady,
             currentPositionMs = playerState.player.currentPosition,
             autoPlayEnabled = autoPlayOnOpenEnabled,
-            hasManualStartPlaybackIntent = hasManualStartPlaybackIntent
+            hasManualStartPlaybackIntent = hasManualStartPlaybackIntent,
+            hasPlayedCurrentMedia = hasPlayedCurrentMedia,
         )
         // 只保留当前输出面的真实出画状态；历史播放记录不能证明新视图已经出画。
         var hasCurrentOutputFrame by remember(currentPlaybackIdentity, playerState.player) {
@@ -3705,6 +3717,30 @@ private fun VideoPlayerSectionContent(
         val playerDiagnosticLoggingEnabled by remember(context) {
             SettingsManager.getPlayerDiagnosticLoggingEnabled(context)
         }.collectAsStateWithLifecycle(initialValue = true)
+        val currentVideoInfo = (uiState as? VideoPlaybackUiState.Success)?.info
+        val miniPlayerMotion = com.android.purebilibili.feature.video.ui.overlay.LocalVideoMiniPlayerMotion.current
+        val miniMotionCoordinates = remember { arrayOfNulls<androidx.compose.ui.layout.LayoutCoordinates>(1) }
+        val miniMotionSource = playerViewRef?.takeIf {
+            playerVisualWorkActive && hasCurrentOutputFrame && !requiresHdrSurface &&
+                !shouldUseAnime4kPipeline && !isInPipMode && !isAudioOnly
+        }
+        val miniHandoff = miniPlayerMotion?.handoff?.takeIf { it.ownsSource(playerViewRef) }
+        val handingOffToMiniPlayer = miniHandoff != null && miniHandoff.preview == null
+        val miniPlayerPreviewCoversVideo = miniHandoff?.preview != null
+        DisposableEffect(miniPlayerMotion, miniMotionSource, effectiveFlippedHorizontal, effectiveFlippedVertical) {
+            if (miniMotionSource != null) {
+                miniPlayerMotion?.addSource(miniMotionSource) {
+                    if (scale == 1f && panX == 0f && panY == 0f &&
+                        !effectiveFlippedHorizontal && !effectiveFlippedVertical
+                    ) {
+                        miniMotionCoordinates[0]
+                    } else null
+                }
+            }
+            onDispose {
+                if (miniMotionSource != null) miniPlayerMotion?.removeSource(miniMotionSource)
+            }
+        }
         BindPlayerAmbient(
             player = playerState.player,
             playerView = playerViewRef,
@@ -3720,8 +3756,13 @@ private fun VideoPlayerSectionContent(
             transitioning = forceCoverDuringReturnAnimation || liveBackPreview ||
                 ambientFlipSettling,
             firstFrameReady = isFirstFrameRendered && hasStartedSmoothReveal,
-            statusBar = shouldCaptureStatusBarAmbientFrame,
+            statusBar = statusBarBackdrop != null && shouldCaptureStatusBarAmbientFrame &&
+                playerVisualWorkActive && hasCurrentOutputFrame &&
+                currentVideoInfo != null && currentVideoInfo.bvid == bvid &&
+                currentVideoInfo.cid == statusBarBackdrop.targetCid,
             diagnosticLogging = playerDiagnosticLoggingEnabled,
+            statusBarCollapseProgress = statusBarBackdrop?.collapseProgress,
+            statusBarFrame = statusBarBackdrop?.ambientFrame,
         )
         val useTextureSurface = shouldUsePlayerPageTexture(
             glassSupported = pageGlassSupported,
@@ -3754,7 +3795,7 @@ private fun VideoPlayerSectionContent(
                     // PlayerView leaves this backing opaque over the source-cover underlay.
                     // Shared by glass, MD3 and Miuix; their viewport geometry stays unchanged.
                     .graphicsLayer {
-                        alpha = if (isPlayerSurfaceReady) playerSurfaceAlpha.value else 0f
+                        alpha = if (isPlayerSurfaceReady && sharedSurfaceVisible) playerSurfaceAlpha.value else 0f
                     }
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
@@ -3867,7 +3908,7 @@ private fun VideoPlayerSectionContent(
                                 resizeMode = targetResizeMode,
                                 forceRelayout = false,
                             )
-                            visibility = if (!anime4kFrameVisible && shouldShowInlinePlayerView(
+                            visibility = if (!handingOffToMiniPlayer && !anime4kFrameVisible && shouldShowInlinePlayerView(
                                     isPortraitFullscreen = isPortraitFullscreen,
                                     forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
                                     shouldKeepCoverForManualStart = keepCoverForManualStart
@@ -3880,6 +3921,8 @@ private fun VideoPlayerSectionContent(
                         }
                     },
                     update = { playerView ->
+                        // 只隐藏输出层，保留 Surface 与解码绑定，取消返回时可直接恢复。
+                        playerView.alpha = if (sharedSurfaceVisible) 1f else 0f
                         // 同一 PlayerView 换用新的状态持有者时也必须先订阅再绑定。
                         playerState.attachPlayerListeners()
                         playerViewRef = playerView
@@ -3897,7 +3940,9 @@ private fun VideoPlayerSectionContent(
                             forceRelayout = false,
                         )
                         playerView.keepScreenOn = keepVideoPlaybackAwake
-                        playerView.visibility = if (!anime4kFrameVisible && shouldShowInlinePlayerView(
+                        // Keep the decoder output attached so cancelling the gesture reveals a live frame.
+                        playerView.videoSurfaceView?.alpha = if (miniPlayerPreviewCoversVideo || !sharedSurfaceVisible) 0f else 1f
+                        playerView.visibility = if (!handingOffToMiniPlayer && !anime4kFrameVisible && shouldShowInlinePlayerView(
                                 isPortraitFullscreen = isPortraitFullscreen,
                                 forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
                                 shouldKeepCoverForManualStart = keepCoverForManualStart
@@ -3950,6 +3995,11 @@ private fun VideoPlayerSectionContent(
                         }
                         sizeModifier
                             .onSizeChanged { measuredPlayerViewportSize.value = it }
+                            .then(
+                                if (miniPlayerMotion != null) Modifier.onGloballyPositioned {
+                                    miniMotionCoordinates[0] = it
+                                } else Modifier,
+                            )
                             .graphicsLayer {
                                 scaleX = if (effectiveFlippedHorizontal) -scale else scale
                                 scaleY = if (effectiveFlippedVertical) -scale else scale
@@ -4031,6 +4081,7 @@ private fun VideoPlayerSectionContent(
                             surfaceView.updateFlip(effectiveFlippedHorizontal, effectiveFlippedVertical)
                             surfaceView.updateDisplayScaleMode(viewportAspectRatio.toAnime4KDisplayScaleMode())
                             surfaceView.visibility = View.VISIBLE
+                            surfaceView.alpha = if (sharedSurfaceVisible) 1f else 0f
                         },
                         onRelease = { surfaceView ->
                             surfaceView.onInputSurfaceChanged = {}
@@ -4124,10 +4175,12 @@ private fun VideoPlayerSectionContent(
         }
 
     // 4. 封面图 — prefer stationary list Coil request (same pixels as home card at rest).
-    val detailCoverUrl = (uiState as? VideoPlaybackUiState.Success)?.info?.pic.orEmpty()
+    val detailCoverUrl = (uiState as? VideoPlaybackUiState.Success)
+        ?.info?.takeIf { it.bvid == bvid }?.pic.orEmpty()
     val stationaryListCover = stationaryListCoverUrl.trim()
     val stationaryListKey = stationaryListCoverCacheKey.trim()
-    val useStationaryListCover = stationaryListCover.isNotEmpty() && stationaryListKey.isNotEmpty()
+    val useStationaryListCover = bvid == resolvedSharedElementBvid &&
+        stationaryListCover.isNotEmpty() && stationaryListKey.isNotEmpty()
     val rawCoverUrl = if (useStationaryListCover) {
         stationaryListCover
     } else {
@@ -4143,6 +4196,7 @@ private fun VideoPlayerSectionContent(
     } else {
         FormatUtils.fixImageUrl(rawCoverUrl)
     }
+    val openingCoverPainter = rememberVideoDetailOpeningCoverImage(bvid == resolvedSharedElementBvid)?.painter
 
     // 封面揭开状态机：仅在 forceCover / 手动起播垫底时回退；首帧抖动不得清掉揭开。
     LaunchedEffect(
@@ -4213,7 +4267,7 @@ private fun VideoPlayerSectionContent(
     val isSurfaceRevealSettling = hasStartedSmoothReveal && !hasSurfaceRevealSettled
     // 装载媒体和 videoSize 不能证明当前输出面已经出画。玻璃与原生路径共用首帧揭开
     // 时序：淡入期间保留不透明封面垫底，直到视频层不透明后才移除，避免中途露出黑底。
-    val holdEntryCoverUnderlay = !isPlayerSurfaceReady || shouldHoldEntryCoverUnderlay(
+    val holdEntryCoverUnderlay = !sharedSurfaceVisible || !isPlayerSurfaceReady || shouldHoldEntryCoverUnderlay(
         isFirstFrameRendered = isFirstFrameRendered,
         forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
         shouldKeepCoverForManualStart = keepCoverForManualStart,
@@ -4334,7 +4388,7 @@ private fun VideoPlayerSectionContent(
     val forcedReturnCoverSharedElementSourceRoute = resolveForcedReturnCoverSharedElementSourceRoute(
         sourceRouteForSharedElement
     )
-    val coverLayerZIndex = resolveVideoPlayerCoverLayerZIndex(
+    val coverLayerZIndex = if (!sharedSurfaceVisible) 100f else resolveVideoPlayerCoverLayerZIndex(
         playbackIntent = videoSharedPlaybackIntent,
         forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
         shouldKeepCoverForManualStart = keepCoverForManualStart,
@@ -4433,17 +4487,9 @@ private fun VideoPlayerSectionContent(
             ) {
                 // 封面异步就绪前只读取来源封面区域，不能将整行标题和统计放大进播放器。
                 // 窗口开合仍持有完整截图；此占位始终位于正常封面之下。
-                val openingSeed = LocalVideoDetailOpeningSeed.current
-                val openingSeedIdentity = remember { currentPlaybackIdentity }
-                if (openingSeed != null && currentPlaybackIdentity == openingSeedIdentity) {
+                if (openingCoverPainter != null) {
                     androidx.compose.foundation.Image(
-                        painter = remember(openingSeed) {
-                            BitmapPainter(
-                                openingSeed.bitmap.asImageBitmap(),
-                                srcOffset = IntOffset(openingSeed.coverPixels.left, openingSeed.coverPixels.top),
-                                srcSize = IntSize(openingSeed.coverPixels.width, openingSeed.coverPixels.height),
-                            )
-                        },
+                        painter = openingCoverPainter,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         alignment = Alignment.TopCenter,
@@ -4485,6 +4531,14 @@ private fun VideoPlayerSectionContent(
                             VideoPlayerCoverContentScaleMode.Fit -> ContentScale.Fit
                         },
                         colorFilter = coverRevealColorFilter,
+                        onSuccess = if (statusBarBackdrop != null) {
+                            { success ->
+                                val bitmap = (success.result.image as? BitmapImage)?.bitmap
+                                if (bitmap != null && success.result.request.data == currentCoverUrl) {
+                                    statusBarBackdrop.coverImage.value = InlineStatusBarImage(bitmap.asImageBitmap())
+                                }
+                            }
+                        } else null,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -5280,23 +5334,18 @@ private fun VideoPlayerSectionContent(
         }
 
         val showStartupLoadingIndicator = playerVisualWorkActive && !isInPipMode &&
-            !hasStartedPlayback && !observedIsPlaying &&
+            !hasPlayedCurrentMedia && !observedIsPlaying &&
+            !(playerState.player.isPlaying && isFirstFrameRendered) &&
             !state.forceCoverOnly && !state.liveBackPreview &&
             !suppressTransientOverlaysForTransition && !keepCoverForManualStart &&
             (uiState is VideoPlaybackUiState.Loading ||
                 (isBuffering && playerState.player.playWhenReady))
         if (showStartupLoadingIndicator) {
-            Column(
+            com.android.purebilibili.feature.video.ui.overlay.PlayerLoadingIndicator(
+                label = if (isBuffering) "正在缓冲" else "正在加载",
+                tint = Color.White,
                 modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                com.android.purebilibili.feature.video.ui.overlay.BiliTvAnimatedBufferingIndicator(tint = Color.White)
-                AppText(
-                    text = if (isBuffering) "正在缓冲" else "正在加载",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
+            )
         }
 
         if (uiState is VideoPlaybackUiState.Success && !isInPipMode) {
@@ -5510,9 +5559,7 @@ private fun VideoPlayerSectionContent(
                     currentPageIndex = currentPageIndex,
                     hasExternalPlaylist = hasExternalPlaylist,
                     drawerHazeState = overlayDrawerHazeState,
-                    statusBarAmbientFrame = statusBarAmbientFrame,
                     statusBarBackdropHeight = contentTopInset,
-                    ambientVideoBoundsInWindow = ambientPresentation?.videoBoundsInWindow,
                     landscapeCommentPanelVisible = landscapeCommentPanelVisible,
                     landscapeCommentPanelOnLeft = landscapeCommentPanelOnLeft,
                     landscapeCommentCloseProgressProvider = state.landscapeCommentCloseProgressProvider,
@@ -5719,22 +5766,17 @@ private fun VideoPlayerSectionContent(
                 VideoPlayerOverlay(state = overlayState, actions = overlayActions)
             }
 
-            Box(
+            VideoPlayerOverlayHost(
+                panelViewport = panelViewport.takeIf { panelAvoidanceEnabled },
+                levelGestureActive = shouldShowLevelIndicator,
+                pageBackdrop = pageChromeBackdrop,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
                         alpha = transitionChromeAlphaProvider()
-                    }
-            ) {
-                CompositionLocalProvider(
-                    LocalPlayerPanelViewport provides panelViewport.takeIf { panelAvoidanceEnabled },
-                    com.android.purebilibili.feature.video.ui.overlay.LocalPlayerLevelGestureActive provides shouldShowLevelIndicator,
-                    com.android.purebilibili.feature.video.ui.overlay.LocalPlayerPageBackdrop provides
-                        pageChromeBackdrop,
-                ) {
-                    renderVideoPlayerOverlay()
-                }
-            }
+                    },
+                content = renderVideoPlayerOverlay,
+            )
 
             SponsorSkipButton(
                 segment = sponsorSegment,

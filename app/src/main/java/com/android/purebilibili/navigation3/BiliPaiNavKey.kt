@@ -1,10 +1,10 @@
 package com.android.purebilibili.navigation3
 
+import androidx.navigation3.runtime.NavKey
 import com.android.purebilibili.feature.settings.SettingsRootCategory
 import com.android.purebilibili.data.model.response.FavoriteSearchScope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonClassDiscriminator
-import top.yukonga.miuix.kmp.nav.core.NavKey
 
 @Serializable
 @JsonClassDiscriminator("nav_key_class")
@@ -37,10 +37,6 @@ internal sealed interface BiliPaiNavKey : NavKey {
         val openId: Long = 0L,
     ) : BiliPaiNavKey {
         override val routeBase: String = "search"
-
-        companion object : BiliPaiNavKey {
-            override val routeBase: String = "search"
-        }
     }
 
     @Serializable
@@ -129,6 +125,21 @@ internal sealed interface BiliPaiNavKey : NavKey {
         val importUrl: String? = null
     ) : BiliPaiNavKey {
         override val routeBase: String = "plugins_settings"
+    }
+
+    @Serializable
+    data class BuiltinPluginSettings(val pluginId: String) : BiliPaiNavKey {
+        override val routeBase: String = "builtin_plugin_settings"
+    }
+
+    @Serializable
+    data class JsonPluginEditor(val pluginId: String? = null) : BiliPaiNavKey {
+        override val routeBase: String = "json_plugin_editor"
+    }
+
+    @Serializable
+    data object PluginSkinCatalog : BiliPaiNavKey {
+        override val routeBase: String = "plugin_skin_catalog"
     }
 
     @Serializable
@@ -249,10 +260,6 @@ internal sealed interface BiliPaiNavKey : NavKey {
         val isCoinArchive: Boolean = false,
     ) : BiliPaiNavKey {
         override val routeBase: String = "liked_videos"
-
-        companion object : BiliPaiNavKey {
-            override val routeBase: String = "liked_videos"
-        }
     }
 
     @Serializable
@@ -501,6 +508,8 @@ internal sealed interface BiliPaiNavKey : NavKey {
         /** 每次进入详情时刷新，避免同一视频复用已退出会话的 SaveableState。 */
         val openId: Long = 0L,
         val title: String = "",
+        val linkStartPositionMs: Long? = null,
+        val suppressPortraitAutoEnter: Boolean = false,
     ) : BiliPaiNavKey {
         override val routeBase: String = "video"
     }

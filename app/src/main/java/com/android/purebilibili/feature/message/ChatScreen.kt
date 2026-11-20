@@ -1,6 +1,7 @@
 // 聊天详情页面
 package com.android.purebilibili.feature.message
 
+import com.android.purebilibili.core.ui.transition.NavigationReturnLandingStyle
 import com.android.purebilibili.core.ui.AppContentColors
 import android.os.Build
 
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.EmojiEmotions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -79,6 +81,7 @@ import com.android.purebilibili.core.ui.FeedTitleHierarchy
 import com.android.purebilibili.core.ui.LocalAppThemeConfig
 import com.android.purebilibili.R
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
@@ -177,6 +180,7 @@ fun ChatScreen(
     onBack: () -> Unit,
     onNavigateToVideo: (String) -> Unit,
     onOpenBilibiliLink: (String) -> Unit = {},
+    showCloseButton: Boolean = false,
     viewModel: ChatViewModel = viewModel(factory = ChatViewModel.Factory(talkerId, sessionType))
 ) {
     val accountIdentity by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
@@ -324,7 +328,14 @@ fun ChatScreen(
                 navigationIcon = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         AppIconButton(onClick = onBack) {
-                            AppIcon(rememberAppBackIcon(), contentDescription = "返回")
+                            if (showCloseButton) {
+                                AppIcon(
+                                    Icons.Filled.Close,
+                                    contentDescription = stringResource(R.string.message_close_conversation),
+                                )
+                            } else {
+                                AppIcon(rememberAppBackIcon(), contentDescription = "返回")
+                            }
                         }
                         if (sessionType == 1) {
                             val face = uiState.userInfo?.face?.takeIf { it.isNotBlank() } ?: userFace
@@ -1241,7 +1252,7 @@ private fun MessageLargeVideoCard(
     Column(
         modifier = modifier
             .onPlaced { cardCoordinates.value = it }
-            .videoCardSourceAnchor(preview.bvid, cardShape)
+            .videoCardSourceAnchor(preview.bvid, cardShape, landingStyle = NavigationReturnLandingStyle.VIDEO_CARD)
             .then(nativeSnapshot.modifier)
             .clip(cardShape)
             .messageGlassContainer(

@@ -117,6 +117,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer  //  晃动动画
@@ -194,33 +195,22 @@ import kotlin.math.sign
 import top.yukonga.miuix.kmp.blur.Backdrop as MiuixBackdrop
 import top.yukonga.miuix.kmp.blur.blur as miuixBlur
 import top.yukonga.miuix.kmp.blur.drawBackdrop as miuixDrawBackdrop
-import top.yukonga.miuix.kmp.blur.highlight.BloomStroke
-import top.yukonga.miuix.kmp.blur.highlight.Highlight as MiuixHighlight
-import top.yukonga.miuix.kmp.blur.highlight.LightPosition
-import top.yukonga.miuix.kmp.blur.highlight.LightSource
+import top.yukonga.miuix.kmp.material.EdgeLightSource
+import top.yukonga.miuix.kmp.material.EdgePeak
+import top.yukonga.miuix.kmp.material.EdgeStroke
+import top.yukonga.miuix.kmp.material.drawEdgeStroke
 import top.yukonga.miuix.kmp.blur.layerBackdrop as miuixLayerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop as rememberMiuixLayerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.basic.NavigationBarDefaults as MiuixNavigationBarDefaults
-private val iosIndicatorSpecular: MiuixHighlight = MiuixHighlight(
+private val iosIndicatorSpecular = EdgeStroke(
     width = AppSpacingTokens.Micro / 2,
-    alpha = 1f,
-    style = BloomStroke(
-        color = OpticalContrastPalette.Highlight.copy(alpha = 0.12f),
-        innerBlurRadius = AppSpacingTokens.Micro,
-        primaryLight = LightSource(
-            position = LightPosition(0.5f, -0.3f, -0.05f),
-            color = OpticalContrastPalette.Highlight,
-            intensity = 1f
-        ),
-        secondaryLight = LightSource(
-            position = LightPosition(0.5f, 0.8f, -0.5f),
-            color = OpticalContrastPalette.Highlight,
-            intensity = 0.4f
-        ),
-        dualPeak = true
-    )
+    bevel = AppSpacingTokens.Micro,
+    color = OpticalContrastPalette.Highlight.copy(alpha = 0.12f),
+    primary = EdgeLightSource(0.5f, -0.3f, -0.05f, OpticalContrastPalette.Highlight),
+    secondary = EdgeLightSource(0.5f, 0.8f, -0.5f, OpticalContrastPalette.Highlight, intensity = 0.4f),
+    peak = EdgePeak.Dual,
 )
 
 /**
@@ -1129,18 +1119,17 @@ internal fun Modifier.biliPaiMiuixFloatingDockSurface(
         }
         block
     }
-    val backdropHighlight = remember(
-        baseHighlight, renderGlassEffects, materialSpec.highlightWidthScale, effectiveShellLensIntensity,
+    val drawBackdropRim = remember(
+        baseHighlight, renderGlassEffects, materialSpec.highlightWidthScale, effectiveShellLensIntensity, backdropShape,
     ) {
-        val block: top.yukonga.miuix.kmp.blur.BackdropEffectScope.() -> MiuixHighlight? = {
-            baseHighlight?.value?.copy(
-                alpha = if (renderGlassEffects) {
-                    0.75f * materialSpec.highlightWidthScale *
-                        effectiveShellLensIntensity
-                } else {
-                    0f
-                }
-            )
+        val block: DrawScope.() -> Unit = {
+            if (renderGlassEffects && baseHighlight != null) {
+                drawEdgeStroke(
+                    backdropShape(),
+                    baseHighlight.value,
+                    0.75f * materialSpec.highlightWidthScale * effectiveShellLensIntensity,
+                )
+            }
         }
         block
     }
@@ -1213,7 +1202,7 @@ internal fun Modifier.biliPaiMiuixFloatingDockSurface(
                         backdrop = samplingBackdrop,
                         shape = backdropShape,
                         effects = backdropEffects,
-                        highlight = backdropHighlight,
+                        onDrawFront = drawBackdropRim,
                         layerBlock = backdropLayer,
                         onDrawSurface = backdropSurface
                     )
@@ -2472,7 +2461,6 @@ private fun MaterialBottomBar(
                     itemLabels
                 ),
                 searchEnabled = searchEnabled,
-                isFeedScrollInProgress = isFeedScrollInProgress,
                 collapseRequested = collapseLinkedDock,
                 onSearchClick = onSearchClick,
                 onSearchKeywordSubmit = onSearchKeywordSubmit,
@@ -3683,7 +3671,6 @@ private fun BiliPaiFloatingBottomBar(
             currentLabel = resolveBottomNavItemLabel(currentItem, itemLabels),
             animateNowPlayingPresence = animateNowPlayingPresence,
             searchEnabled = bottomBarSearchEnabled,
-            isFeedScrollInProgress = isFeedScrollInProgress,
             collapseRequested = collapseLinkedDock,
             onSearchClick = onSearchClick,
             onSearchKeywordSubmit = onSearchKeywordSubmit,
@@ -3700,7 +3687,7 @@ private fun BiliPaiFloatingBottomBar(
             hasUiSkinDecoration = uiSkinDecoration != null,
             nowPlayingContent = nowPlayingContent,
             modifier = modifier,
-            navigationContent = {
+            navigationContent = { allocatedWidth ->
                 BiliPaiFloatingBottomBarChrome(
                     currentItem = currentItem,
                     onItemClick = onItemClick,
@@ -3742,7 +3729,7 @@ private fun BiliPaiFloatingBottomBar(
                     pagerTargetPositionProvider = pagerTargetPositionProvider,
                     isPagerNavigatingProvider = isPagerNavigatingProvider,
                     uiSkinDecoration = uiSkinDecoration,
-                    embeddedDock = true,
+                    embeddedDockWidth = allocatedWidth,
                 )
             },
         )
@@ -3797,7 +3784,7 @@ private fun BiliPaiFloatingBottomBarChrome(
     currentItem: BottomNavItem,
     onItemClick: (BottomNavItem) -> Unit,
     modifier: Modifier = Modifier,
-    embeddedDock: Boolean = false,
+    embeddedDockWidth: Dp? = null,
     visibleItems: List<BottomNavItem>,
     itemLabels: Map<String, String> = emptyMap(),
     itemColorIndices: Map<String, Int> = emptyMap(),
@@ -4041,18 +4028,11 @@ private fun BiliPaiFloatingBottomBarChrome(
 
     Box(
         modifier = modifier.fillMaxWidth(),
-        contentAlignment = Alignment.BottomCenter
+        contentAlignment = Alignment.BottomCenter,
     ) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    bottom = if (embeddedDock) 0.dp else AppSpacingTokens.ExtraLarge +
-                        WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding()
-                )
-        ) {
+        val chromeContent: @Composable BoxScope.(Dp) -> Unit = { containerWidth ->
             val searchLayoutState = rememberBiliPaiBottomBarSearchLayoutState(
-                containerWidth = maxWidth,
+                containerWidth = containerWidth,
                 itemCount = totalItems,
                 minEdgePadding = tuning.outerHorizontalPaddingDp.dp,
                 searchEnabled = searchLayoutReserved,
@@ -4060,7 +4040,7 @@ private fun BiliPaiFloatingBottomBarChrome(
                 labelMode = labelMode,
                 searchLayoutMode = bottomBarSearchLayoutMode,
                 hasUiSkinDecoration = uiSkinDecoration != null,
-                fillAllocatedDockWidth = embeddedDock,
+                fillAllocatedDockWidth = embeddedDockWidth != null,
                 nativeMiuixNavigation = useNativeMiuixNavigation,
                 glassMotionEnabled = effectiveGlassEnabled,
             )
@@ -4482,6 +4462,19 @@ private fun BiliPaiFloatingBottomBarChrome(
                 )
             }
         }
+        if (embeddedDockWidth != null) {
+            // 合并底栏已分配导航行宽度；只在独立底栏中通过约束取得窗口宽度。
+            Box(Modifier.fillMaxWidth()) { chromeContent(embeddedDockWidth) }
+        } else {
+            BoxWithConstraints(
+                Modifier.fillMaxWidth().padding(
+                    bottom = AppSpacingTokens.ExtraLarge +
+                        WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding(),
+                ),
+            ) {
+                chromeContent(maxWidth)
+            }
+        }
     }
 }
 
@@ -4793,9 +4786,9 @@ internal fun BoxScope.BiliPaiMiuixBottomBarIndicatorLayer(
                         vertical = swapMotionAxes,
                         // 仅玻璃材质取消缝隙遮罩，原生路径保留共享默认行为。
                         gapOnlyDispersion = !glassEnabled,
-                        highlightProvider = {
-                            if (glassEnabled) pillHighlight?.value?.copy(alpha = effectivePressProgress)
-                            else if (isDragging) pillHighlight?.value?.copy(alpha = opticalProgress) else null
+                        highlightProvider = { pillHighlight?.value },
+                        highlightAlphaProvider = {
+                            if (glassEnabled) effectivePressProgress else if (isDragging) opticalProgress else 0f
                         },
                         idleColor = indicatorIdleSurfaceColor,
                     )

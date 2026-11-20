@@ -54,7 +54,10 @@ import com.android.purebilibili.feature.settings.share.SettingsShareEntryDefinit
 import com.android.purebilibili.feature.settings.share.SettingsShareSection
 import com.android.purebilibili.feature.settings.AppLanguage
 import com.android.purebilibili.feature.settings.AppThemeMode
+import com.android.purebilibili.feature.settings.AppUpdateMirror
+import com.android.purebilibili.feature.settings.AppUpdateMirrorPreference
 import com.android.purebilibili.feature.settings.DarkThemeSchedule
+import com.android.purebilibili.feature.settings.normalizeAppUpdateMirrorPrefix
 import com.android.purebilibili.feature.settings.normalizeDarkThemeSchedule
 import com.android.purebilibili.feature.settings.DarkThemeStyle
 import com.android.purebilibili.feature.settings.Md3ColorSource
@@ -664,6 +667,12 @@ enum class BottomBarLiquidGlassPreset(
     }
 }
 
+enum class CardRemovalDissolveMode {
+    STANDARD,
+    QUICK,
+    OFF,
+}
+
 // 设置流加载前使用相同的轻量视觉默认值，避免首帧短暂启用模糊或卡片展开。
 data class HomeSettings(
     val displayMode: Int = 0,              // 展示模式 (0=网格, 1=故事卡片)
@@ -674,6 +683,7 @@ data class HomeSettings(
     val partitionSideRailOnRight: Boolean = false,
     val hideTopTabs: Boolean = false,
     val homeTopRightAction: HomeTopRightAction = HomeTopRightAction.SETTINGS,
+    val homeAvatarDrawerEnabled: Boolean = false,
     val homeTopLayoutOrder: HomeTopLayoutOrder = HomeTopLayoutOrder.SEARCH_THEN_TABS,
     val isHeaderBlurEnabled: Boolean = false,
     val headerBlurMode: HomeHeaderBlurMode = HomeHeaderBlurMode.ALWAYS_OFF,
@@ -724,6 +734,8 @@ data class HomeSettings(
     val homeRefreshUndoVisible: Boolean = false, // 刷新后的撤销按钮默认隐藏
     val cardAnimationEnabled: Boolean = false,    //  卡片进场动画（默认关闭）
     val cardTransitionEnabled: Boolean = false,   // 卡片展开过渡按需开启
+    val preferSharedElementCardTransition: Boolean = false,
+    val cardRemovalDissolveMode: CardRemovalDissolveMode = CardRemovalDissolveMode.STANDARD,
     val videoSharedTransitionSpeed: VideoSharedTransitionSpeed = VideoSharedTransitionSpeed.STANDARD,
     val videoSharedTransitionCustomDurationMillis: Int =
         VIDEO_SHARED_TRANSITION_CUSTOM_DEFAULT_MILLIS,
@@ -1109,7 +1121,6 @@ data class AppNavigationSettings(
     val miuixTransitionBlurEnabled: Boolean = true,
     val miuixPredictiveBackMaxProgressPercent: Int = 100,
     val settingsContainerMorphEnabled: Boolean = true,
-    val settingsContainerRealtimeBlurEnabled: Boolean = false,
     val liquidIndicatorWobbleEnabled: Boolean = true,
     val liquidIndicatorDynamicLengthEnabled: Boolean = true,
     // 编辑器保留原始配置，不能用运行时过滤后的可见项或生效策略反写用户选择。
@@ -1553,6 +1564,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_PARTITION_SIDE_RAIL_ON_RIGHT = booleanPreferencesKey("partition_side_rail_on_right")
     private val KEY_HIDE_TOP_TABS = booleanPreferencesKey("hide_top_tabs")
     private val KEY_HOME_TOP_RIGHT_ACTION = intPreferencesKey("home_top_right_action")
+    private val KEY_HOME_AVATAR_DRAWER_ENABLED = booleanPreferencesKey("home_avatar_drawer_enabled")
     //  [新增] 顶部标签自定义 - 顺序和可见性
     private val KEY_TOP_TAB_ORDER = stringPreferencesKey("top_tab_order")
     private val KEY_TOP_TAB_VISIBLE_TABS = stringPreferencesKey("top_tab_visible_tabs")
@@ -1582,6 +1594,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_SPLASH_ICON_ANIMATION_ENABLED = booleanPreferencesKey("splash_icon_animation_enabled")
     private val KEY_SPLASH_ALIGNMENT_MOBILE = floatPreferencesKey("splash_alignment_mobile")
     private val KEY_SPLASH_ALIGNMENT_TABLET = floatPreferencesKey("splash_alignment_tablet")
+    private val KEY_SPLASH_SCALE_MOBILE = floatPreferencesKey("splash_scale_mobile")
+    private val KEY_SPLASH_SCALE_TABLET = floatPreferencesKey("splash_scale_tablet")
     private const val SPLASH_PREFS = "splash_prefs"
     private const val SPLASH_PREFS_KEY_WALLPAPER_URI = "wallpaper_uri"
     private const val SPLASH_PREFS_KEY_WALLPAPER_HISTORY = "wallpaper_history"
@@ -1592,6 +1606,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private const val SPLASH_PREFS_KEY_ICON_ANIMATION_ENABLED = "icon_animation_enabled"
     private const val SPLASH_PREFS_KEY_ALIGNMENT_MOBILE = "alignment_mobile"
     private const val SPLASH_PREFS_KEY_ALIGNMENT_TABLET = "alignment_tablet"
+    private const val SPLASH_PREFS_KEY_SCALE_MOBILE = "scale_mobile"
+    private const val SPLASH_PREFS_KEY_SCALE_TABLET = "scale_tablet"
 
     //  [New] 解锁高画质 (Bypass client-side checks) - REVERTED
     // private val KEY_UNLOCK_HIGH_QUALITY = booleanPreferencesKey("unlock_high_quality")
@@ -1688,6 +1704,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         booleanPreferencesKey("maid_lottie_animation_enabled")
     //  [新增] 卡片过渡动画开关
     private val KEY_CARD_TRANSITION_ENABLED = booleanPreferencesKey("card_transition_enabled")
+    private val KEY_PREFER_SHARED_ELEMENT_CARD_TRANSITION =
+        booleanPreferencesKey("prefer_shared_element_card_transition")
+    private val KEY_CARD_REMOVAL_DISSOLVE_ENABLED = booleanPreferencesKey("card_removal_dissolve_enabled")
+    private val KEY_CARD_REMOVAL_DISSOLVE_QUICK = booleanPreferencesKey("card_removal_dissolve_quick")
     // 实时画面转场：SDR 用 TextureView 一镜到底；HDR 仍 SurfaceView（不降画质），morph 走封面
     private val KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED =
         booleanPreferencesKey("live_surface_card_transition_enabled")
@@ -1814,6 +1834,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     /** 偏好的调用方作用域之外落盘专用；进程存续期即作用域生命期。 */
     private val commentPreferenceWriteScope =
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    private val KEY_SUB_REPLY_THREADED_ENABLED = booleanPreferencesKey("sub_reply_threaded_enabled")
     private val KEY_SUB_REPLY_LOADED_COUNT_ENABLED =
         booleanPreferencesKey("sub_reply_loaded_count_enabled")
     private val KEY_IMAGE_PREVIEW_LONG_PRESS_SAVE_ENABLED =
@@ -1903,6 +1924,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             homeTopRightAction = HomeTopRightAction.fromValue(
                 preferences[KEY_HOME_TOP_RIGHT_ACTION] ?: HomeTopRightAction.SETTINGS.value
             ),
+            homeAvatarDrawerEnabled = preferences[KEY_HOME_AVATAR_DRAWER_ENABLED] ?: false,
             homeTopLayoutOrder = HomeTopLayoutOrder.fromValue(
                 preferences[KEY_HOME_TOP_LAYOUT_ORDER] ?: HomeTopLayoutOrder.SEARCH_THEN_TABS.value
             ),
@@ -1972,6 +1994,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             homeRefreshUndoVisible = preferences[KEY_HOME_REFRESH_UNDO_VISIBLE] ?: false,
             cardAnimationEnabled = preferences[KEY_CARD_ANIMATION_ENABLED] ?: false,
             cardTransitionEnabled = preferences[KEY_CARD_TRANSITION_ENABLED] ?: false,
+            preferSharedElementCardTransition = preferences[KEY_PREFER_SHARED_ELEMENT_CARD_TRANSITION] ?: false,
+            cardRemovalDissolveMode = readCardRemovalDissolveMode(preferences),
             videoSharedTransitionSpeed = VideoSharedTransitionSpeed.fromValue(
                 preferences[KEY_VIDEO_SHARED_TRANSITION_SPEED]
                     ?: VideoSharedTransitionSpeed.STANDARD.value
@@ -3599,6 +3623,30 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         context.settingsDataStore.edit { preferences -> preferences[KEY_CARD_TRANSITION_ENABLED] = value }
     }
 
+    fun getPreferSharedElementCardTransition(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data.map { it[KEY_PREFER_SHARED_ELEMENT_CARD_TRANSITION] ?: false }
+
+    suspend fun setPreferSharedElementCardTransition(context: Context, preferSharedElement: Boolean) {
+        context.settingsDataStore.edit { it[KEY_PREFER_SHARED_ELEMENT_CARD_TRANSITION] = preferSharedElement }
+    }
+
+    private fun readCardRemovalDissolveMode(preferences: Preferences): CardRemovalDissolveMode = when {
+        preferences[KEY_CARD_REMOVAL_DISSOLVE_ENABLED] == false -> CardRemovalDissolveMode.OFF
+        preferences[KEY_CARD_REMOVAL_DISSOLVE_QUICK] == true -> CardRemovalDissolveMode.QUICK
+        else -> CardRemovalDissolveMode.STANDARD
+    }
+
+    fun getCardRemovalDissolveMode(context: Context): Flow<CardRemovalDissolveMode> = context.settingsDataStore.data
+        .map(::readCardRemovalDissolveMode)
+        .distinctUntilChanged()
+
+    suspend fun setCardRemovalDissolveMode(context: Context, mode: CardRemovalDissolveMode) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_CARD_REMOVAL_DISSOLVE_ENABLED] = mode != CardRemovalDissolveMode.OFF
+            preferences[KEY_CARD_REMOVAL_DISSOLVE_QUICK] = mode == CardRemovalDissolveMode.QUICK
+        }
+    }
+
     /** 默认关闭：稳妥封面过渡；开启后 SDR 可用实时画面双向 morph，HDR 仍不强制 TextureView。 */
     fun getLiveSurfaceCardTransitionEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
@@ -4259,6 +4307,33 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             .getFloat(prefsKey, 0f)
     }
 
+    fun getSplashScale(context: Context, isTablet: Boolean): Flow<Float> = context.settingsDataStore.data
+        .map { preferences ->
+            val key = if (isTablet) KEY_SPLASH_SCALE_TABLET else KEY_SPLASH_SCALE_MOBILE
+            sanitizeSplashWallpaperScale(preferences[key] ?: 1f)
+        }
+
+    suspend fun setSplashScale(context: Context, isTablet: Boolean, scale: Float) {
+        val coerced = sanitizeSplashWallpaperScale(scale)
+        context.settingsDataStore.edit { preferences ->
+            val key = if (isTablet) KEY_SPLASH_SCALE_TABLET else KEY_SPLASH_SCALE_MOBILE
+            preferences[key] = coerced
+        }
+        val prefsKey = if (isTablet) SPLASH_PREFS_KEY_SCALE_TABLET else SPLASH_PREFS_KEY_SCALE_MOBILE
+        context.getSharedPreferences(SPLASH_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(prefsKey, coerced)
+            .apply()
+    }
+
+    fun getSplashScaleSync(context: Context, isTablet: Boolean): Float {
+        val prefsKey = if (isTablet) SPLASH_PREFS_KEY_SCALE_TABLET else SPLASH_PREFS_KEY_SCALE_MOBILE
+        return sanitizeSplashWallpaperScale(
+            context.getSharedPreferences(SPLASH_PREFS, Context.MODE_PRIVATE)
+                .getFloat(prefsKey, 1f)
+        )
+    }
+
 
     
     //  同步读取当前图标设置（用于 Application 启动时同步）
@@ -4379,6 +4454,16 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setHomeTopRightAction(context: Context, action: HomeTopRightAction) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_HOME_TOP_RIGHT_ACTION] = action.value
+        }
+    }
+
+    fun getHomeAvatarDrawerEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_HOME_AVATAR_DRAWER_ENABLED] ?: false }
+        .distinctUntilChanged()
+
+    suspend fun setHomeAvatarDrawerEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_HOME_AVATAR_DRAWER_ENABLED] = enabled
         }
     }
 
@@ -6294,11 +6379,11 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     /**
      *  推荐流 API 类型
      * - WEB: 平板端/Web API (x/web-interface/wbi/index/top/feed/rcmd)，使用 WBI 签名
-     * - MOBILE: 移动端 API (x/v2/feed/index)，使用 appkey+sign 签名，需要 access_token
+     * - MOBILE: 移动端 API (x/v2/feed/index)，按登录凭证选择签名，也支持匿名请求
      */
     enum class FeedApiType(val value: Int, val label: String, val description: String) {
         WEB(0, "网页端", "使用 B 站网页端的推荐内容"),
-        MOBILE(1, "手机端", "需移动端登录凭证；按授权来源使用手机端或平板兼容推荐，不可用时提示并使用网页端"),
+        MOBILE(1, "手机端", "使用手机端推荐，缺少移动端凭证时请求匿名推荐，不可用时提示并使用网页端"),
         MERGED(2, "合并推荐", "合并网页端与当前登录授权支持的移动端推荐；缺少移动端凭证时仅使用网页端");
         
         companion object {
@@ -6921,6 +7006,16 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    fun getSubReplyThreadedEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_SUB_REPLY_THREADED_ENABLED] ?: false }
+
+    suspend fun setSubReplyThreadedEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_SUB_REPLY_THREADED_ENABLED] = enabled
+        }
+    }
+
     fun getSubReplyLoadedCountEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_SUB_REPLY_LOADED_COUNT_ENABLED] ?: false }
@@ -7039,6 +7134,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     // ==========  应用更新 ==========
     private val KEY_APP_UPDATE_CHANNEL = intPreferencesKey("app_update_channel")
+    private val KEY_APP_UPDATE_MIRROR = stringPreferencesKey("app_update_mirror")
+    private val KEY_APP_UPDATE_CUSTOM_MIRROR = stringPreferencesKey("app_update_custom_mirror")
 
     /**
      *  更新检测渠道
@@ -7069,6 +7166,26 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     suspend fun setAppUpdateChannel(context: Context, channel: AppUpdateChannel) {
         context.settingsDataStore.edit { preferences -> preferences[KEY_APP_UPDATE_CHANNEL] = channel.value }
+    }
+
+    internal fun getAppUpdateMirrorPreference(context: Context): Flow<AppUpdateMirrorPreference> =
+        context.settingsDataStore.data.map { preferences ->
+            AppUpdateMirrorPreference(
+                source = AppUpdateMirror.fromValue(preferences[KEY_APP_UPDATE_MIRROR]),
+                customPrefix = preferences[KEY_APP_UPDATE_CUSTOM_MIRROR].orEmpty(),
+            )
+        }.distinctUntilChanged()
+
+    internal suspend fun setAppUpdateMirror(context: Context, source: AppUpdateMirror) {
+        context.settingsDataStore.edit { preferences -> preferences[KEY_APP_UPDATE_MIRROR] = source.name }
+    }
+
+    internal suspend fun setAppUpdateCustomMirror(context: Context, prefix: String, useAsDefault: Boolean) {
+        val normalizedPrefix = requireNotNull(normalizeAppUpdateMirrorPrefix(prefix))
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_APP_UPDATE_CUSTOM_MIRROR] = normalizedPrefix
+            if (useAsDefault) preferences[KEY_APP_UPDATE_MIRROR] = AppUpdateMirror.CUSTOM.name
+        }
     }
     
     // ==========  隐私无痕模式 ==========
@@ -8527,8 +8644,6 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     .coerceIn(0, 100),
             settingsContainerMorphEnabled =
                 preferences[booleanPreferencesKey("settings_container_morph_enabled")] ?: true,
-            settingsContainerRealtimeBlurEnabled =
-                preferences[booleanPreferencesKey("settings_container_realtime_blur_enabled")] ?: false,
         )
     }
 
@@ -8584,13 +8699,6 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     suspend fun setMiuixPredictiveBackMaxProgressPercent(context: Context, percent: Int) {
         NavigationSettingsStore.setMiuixPredictiveBackMaxProgressPercent(context, percent)
-    }
-
-    fun getSettingsContainerRealtimeBlurEnabled(context: Context): Flow<Boolean> =
-        NavigationSettingsStore.getSettingsContainerRealtimeBlurEnabled(context)
-
-    suspend fun setSettingsContainerRealtimeBlurEnabled(context: Context, enabled: Boolean) {
-        NavigationSettingsStore.setSettingsContainerRealtimeBlurEnabled(context, enabled)
     }
 
     fun getSettingsContainerMorphEnabled(context: Context): Flow<Boolean> =
@@ -8855,6 +8963,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             BooleanShareablePreferenceDefinition(KEY_PARTITION_SIDE_RAIL_ON_RIGHT, SettingsShareSection.APPEARANCE),
             BooleanShareablePreferenceDefinition(KEY_HIDE_TOP_TABS, SettingsShareSection.APPEARANCE),
             IntShareablePreferenceDefinition(KEY_HOME_TOP_RIGHT_ACTION, SettingsShareSection.APPEARANCE),
+            BooleanShareablePreferenceDefinition(KEY_HOME_AVATAR_DRAWER_ENABLED, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_TOP_TAB_ORDER, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_TOP_TAB_VISIBLE_TABS, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_DYNAMIC_TAB_VISIBLE_TABS, SettingsShareSection.APPEARANCE),
@@ -8952,12 +9061,13 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 SettingsShareSection.APPEARANCE,
             ),
             BooleanShareablePreferenceDefinition(KEY_CARD_TRANSITION_ENABLED, SettingsShareSection.APPEARANCE),
-            BooleanShareablePreferenceDefinition(KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED, SettingsShareSection.APPEARANCE),
-
             BooleanShareablePreferenceDefinition(
-                booleanPreferencesKey("settings_container_realtime_blur_enabled"),
+                KEY_PREFER_SHARED_ELEMENT_CARD_TRANSITION,
                 SettingsShareSection.APPEARANCE,
             ),
+            BooleanShareablePreferenceDefinition(KEY_CARD_REMOVAL_DISSOLVE_ENABLED, SettingsShareSection.APPEARANCE),
+            BooleanShareablePreferenceDefinition(KEY_CARD_REMOVAL_DISSOLVE_QUICK, SettingsShareSection.APPEARANCE),
+            BooleanShareablePreferenceDefinition(KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED, SettingsShareSection.APPEARANCE),
 
             BooleanShareablePreferenceDefinition(
                 KEY_VIDEO_TRANSITION_REALTIME_BLUR_ENABLED,

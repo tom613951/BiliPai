@@ -9,6 +9,22 @@ import kotlin.test.assertTrue
 
 class BiliPaiNavKeyMappingPolicyTest {
     @Test
+    fun pluginCenterSubpagesRestoreTheirOwnDestinationAndContainerSource() {
+        val owner = BiliPaiNavKey.PluginsSettings()
+        val targets = listOf(
+            BiliPaiNavKey.BuiltinPluginSettings("过滤 + 内容"),
+            BiliPaiNavKey.JsonPluginEditor(),
+            BiliPaiNavKey.JsonPluginEditor("规则/a"),
+            BiliPaiNavKey.PluginSkinCatalog,
+        )
+        for (target in targets) {
+            assertEquals(target, legacyRouteToBiliPaiNavKey(target.toLegacyRoute()))
+            assertEquals(BiliPaiNavEntryContentRole.PLUGIN_CENTER_DETAIL, resolveBiliPaiNavEntryContentRole(target))
+            assertTrue(isSettingsContainerBoundary(true, listOf(owner, target), target, owner))
+        }
+    }
+
+    @Test
     fun webUploadsRestoreOwnerAndCurrentCollectionWithoutBecomingAWebPage() {
         listOf(
             BiliPaiNavKey.SpaceWebVideos(42L, "UP + 空间 & 100%"),
@@ -161,8 +177,8 @@ class BiliPaiNavKeyMappingPolicyTest {
     fun `navigation state eviction keeps a key retained elsewhere in replacement stack`() {
         val duplicateSearchStack = listOf(
             BiliPaiNavKey.MainHost,
-            BiliPaiNavKey.Search,
-            BiliPaiNavKey.Search,
+            BiliPaiNavKey.Search(),
+            BiliPaiNavKey.Search(),
         )
 
         assertEquals(
@@ -179,7 +195,7 @@ class BiliPaiNavKeyMappingPolicyTest {
         assertEquals(BiliPaiNavKey.MainHost, legacyRouteToBiliPaiNavKey("main_host"))
         assertEquals(BiliPaiNavKey.Home, legacyRouteToBiliPaiNavKey(ScreenRoutes.Home.route))
         assertEquals(BiliPaiNavKey.Dynamic, legacyRouteToBiliPaiNavKey(ScreenRoutes.Dynamic.route))
-        assertEquals(BiliPaiNavKey.Search, legacyRouteToBiliPaiNavKey(ScreenRoutes.Search.route))
+        assertEquals(BiliPaiNavKey.Search(), legacyRouteToBiliPaiNavKey(ScreenRoutes.Search.route))
         assertEquals(BiliPaiNavKey.Profile, legacyRouteToBiliPaiNavKey(ScreenRoutes.Profile.route))
     }
 
@@ -388,9 +404,9 @@ class BiliPaiNavKeyMappingPolicyTest {
     fun cardReturnTargets_matchExistingSharedElementDestinations() {
         assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.MainHost))
         assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.Home))
-        assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.Search))
+        assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.Search()))
         assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.Space(42L)))
-        assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.LikedVideos))
+        assertEquals(true, isCardReturnTargetNavKey(BiliPaiNavKey.LikedVideos()))
         assertEquals(
             true,
             isCardReturnTargetNavKey(

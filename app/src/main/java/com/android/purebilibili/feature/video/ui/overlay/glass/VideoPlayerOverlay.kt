@@ -78,6 +78,7 @@ import com.android.purebilibili.feature.video.ui.components.glass.AspectRatioMen
 import com.android.purebilibili.feature.video.ui.components.glass.VideoSettingsPanel
 import com.android.purebilibili.feature.video.ui.components.PlayerEpisodeMenu
 import com.android.purebilibili.feature.video.ui.components.PlayerEpisodeSourceMenu
+import com.android.purebilibili.feature.video.playback.next.episodesInPublishOrder
 import com.android.purebilibili.feature.video.ui.components.resolveCurrentUgcEpisodeLazyListIndex
 import com.android.purebilibili.feature.video.ui.components.LandscapeSidePanel
 import com.android.purebilibili.feature.video.ui.components.landscapeControlCenterGroup
@@ -708,9 +709,6 @@ private fun VideoPlayerOverlayContent(
     val hasExternalPlaylist = state.hasExternalPlaylist
     val onExternalPlaylistClick = actions.onExternalPlaylistClick
     val drawerHazeState = state.drawerHazeState
-    val statusBarAmbientFrame = state.statusBarAmbientFrame
-    val statusBarBackdropHeight = state.statusBarBackdropHeight
-    val ambientVideoBoundsInWindow = state.ambientVideoBoundsInWindow
     val onShowDanmakuPool = actions.onShowDanmakuPool
 
     var playerBoundsInWindow by remember(bvid, cid) { mutableStateOf<androidx.compose.ui.unit.IntRect?>(null) }
@@ -1126,8 +1124,8 @@ private fun VideoPlayerOverlayContent(
         if (hasExternalPlaylist) navigationPlaylist.map { PiliEpisodeNavigationEntry(it.bvid, it.cid) } else null
     }
     val navigationOuter = remember(ugcSeason, hasExternalPlaylist) {
-        if (hasExternalPlaylist) emptyList() else ugcSeason?.sections?.flatMap { section ->
-            section.episodes.map { PiliEpisodeNavigationEntry(it.bvid, it.cid) }
+        if (hasExternalPlaylist) emptyList() else ugcSeason?.episodesInPublishOrder()?.map {
+            PiliEpisodeNavigationEntry(it.bvid, it.cid)
         }.orEmpty()
     }
     val navigationRelated = remember(relatedVideos, hasExternalPlaylist) {
@@ -1447,16 +1445,6 @@ private fun VideoPlayerOverlayContent(
             .onVisibilityChanged(minFractionVisible = 0f) { progressInViewport = it }
             .playerActionBounds { playerBoundsInWindow = it },
     ) {
-        if (!isFullscreen) {
-            ImmersiveStatusBarBackdrop(
-                ambientFrame = statusBarAmbientFrame,
-                height = statusBarBackdropHeight,
-                useAmbientHaze = immersiveVideoPageStatusBar,
-                videoBoundsInWindow = ambientVideoBoundsInWindow,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
-        }
-
         // --- 1. 顶部渐变遮罩 ---
         AnimatedVisibility(
             visible = isVisible,
@@ -1788,6 +1776,19 @@ private fun VideoPlayerOverlayContent(
             configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) &&
             com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
         val hideCenterPlayback = if (centerPlaybackSupported) rememberHideCenterPlayback() else true
+        val loadingIndicatorsActive = visualWorkActive && progressInViewport
+        val showRebufferingIndicator = loadingIndicatorsActive && shouldShowBufferingIndicator(
+            isBuffering = isBuffering,
+            isQualitySwitching = isQualitySwitching,
+            playWhenReady = player.playWhenReady,
+            hasRenderedFirstFrame = hasRenderedFirstFrame,
+            suppressTransientOverlays = suppressTransientOverlaysForTransition,
+        ) && centerLoadingUiState == null && !state.startupLoadingActive && !player.isPlaying
+        val showCenterLoadingBadge = loadingIndicatorsActive && !pluginPlaybackStatus.first &&
+            !suppressTransientOverlaysForTransition &&
+            !state.startupLoadingActive && !player.isPlaying && hasRenderedFirstFrame &&
+            (showRebufferingIndicator || centerLoadingUiState != null)
+
         val showCenterPlaybackControl = centerPlaybackSupported && !hideCenterPlayback && showPlayerChrome &&
             (pluginPlaybackStatus.first || player.playbackState == Player.STATE_READY ||
                 player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_ENDED) &&
@@ -1795,12 +1796,11 @@ private fun VideoPlayerOverlayContent(
         if (centerPlaybackSupported) {
             com.android.purebilibili.feature.video.ui.overlay.CenterPlaybackControl(
                 visible = showCenterPlaybackControl,
+                loading = showCenterLoadingBadge,
                 isPlaying = effectiveIsPlaying,
                 onPlayPause = { togglePlayPause() },
                 diameter = if (isFullscreen) 72.dp else 56.dp,
                 modifier = Modifier.align(Alignment.Center),
-                isBuffering = !pluginPlaybackStatus.first && player.playWhenReady &&
-                    (player.playbackState == Player.STATE_BUFFERING || centerLoadingUiState != null),
             )
         }
 
@@ -2033,24 +2033,19 @@ private fun VideoPlayerOverlayContent(
 
         // --- 5.4  缓冲加载指示器 ---
         AnimatedVisibility(
-            visible = shouldShowBufferingIndicator(
-                isBuffering = isBuffering,
-                isQualitySwitching = isQualitySwitching,
-                playWhenReady = player.playWhenReady,
-                hasRenderedFirstFrame = hasRenderedFirstFrame,
-                suppressTransientOverlays = suppressTransientOverlaysForTransition,
-            ) && centerLoadingUiState == null && !showCenterPlaybackControl &&
-                !state.startupLoadingActive,
+            visible = showRebufferingIndicator && !showCenterPlaybackControl,
             modifier = Modifier.align(Alignment.Center),
             // 首帧前整段不参与合成，出现时也硬切：淡入会让「已有画面后的再缓冲」
             // 看起来像又一次进场闪烁。
             enter = EnterTransition.None,
             exit = fadeOut(OverlayControlFadeSpec)
         ) {
-            BiliTvBufferingIndicator(
-                tint = centerLoadingVisualState.indicatorColor,
-                bufferedProvider = { progressProvider().buffered },
-            )
+            if (loadingIndicatorsActive && !showCenterPlaybackControl) {
+                BiliTvBufferingIndicator(
+                    tint = centerLoadingVisualState.indicatorColor,
+                    bufferedProvider = { progressProvider().buffered },
+                )
+            }
         }
 
         AnimatedVisibility(
@@ -2059,6 +2054,7 @@ private fun VideoPlayerOverlayContent(
             enter = fadeIn(OverlayControlFadeSpec),
             exit = fadeOut(OverlayControlFadeSpec)
         ) {
+            if (!loadingIndicatorsActive || showCenterPlaybackControl) return@AnimatedVisibility
             val loadingState = centerLoadingUiState ?: return@AnimatedVisibility
             Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
                 Column(
@@ -3010,51 +3006,50 @@ fun LandscapeEndDrawer(
     modifier: Modifier = Modifier,
     closeProgress: androidx.compose.runtime.MutableFloatState = remember { mutableFloatStateOf(1f) },
 ) {
-    val context = LocalContext.current
-    val configuration = LocalConfiguration.current
-    val widthSizeClass = remember(configuration.screenWidthDp) {
-        com.android.purebilibili.core.util.resolveWindowWidthSizeClass(
-            configuration.screenWidthDp.dp
-        )
-    }
-    val foldPosture = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current.posture
-    val deviceUiProfile = remember(widthSizeClass, foldPosture) {
-        resolveDeviceUiProfile(
-            widthSizeClass = widthSizeClass,
-            foldPosture = foldPosture,
-        )
-    }
-    val cardAnimationEnabled by SettingsManager
-        .getCardAnimationEnabled(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val overlayMotionTier = resolveEffectiveMotionTier(
-        baseTier = deviceUiProfile.motionTier,
-        animationEnabled = cardAnimationEnabled
-    )
-    val layoutPolicy = remember(configuration.screenWidthDp) {
-        resolveLandscapeEndDrawerLayoutPolicy(
-            widthDp = configuration.screenWidthDp
-        )
-    }
-    val useDarkDrawerOverlay = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val drawerOverlayColor = if (useDarkDrawerOverlay) {
-        Color(0xCC11141A)
-    } else {
-        Color(0xBFF6F8FC)
-    }
-    val dividerColor = if (useDarkDrawerOverlay) {
-        Color.White.copy(alpha = 0.12f)
-    } else {
-        Color.Black.copy(alpha = 0.10f)
-    }
-    var requestDrawerDismiss by remember { mutableStateOf<(() -> Unit)?>(null) }
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(OverlayControlFadeSpec),
         exit = fadeOut(OverlayControlFadeSpec),
         modifier = modifier
     ) {
+        val context = LocalContext.current
+        val configuration = LocalConfiguration.current
+        val widthSizeClass = remember(configuration.screenWidthDp) {
+            com.android.purebilibili.core.util.resolveWindowWidthSizeClass(
+                configuration.screenWidthDp.dp
+            )
+        }
+        val foldPosture = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current.posture
+        val deviceUiProfile = remember(widthSizeClass, foldPosture) {
+            resolveDeviceUiProfile(
+                widthSizeClass = widthSizeClass,
+                foldPosture = foldPosture,
+            )
+        }
+        val cardAnimationEnabled by remember(context) {
+            SettingsManager.getCardAnimationEnabled(context)
+        }.collectAsStateWithLifecycle(initialValue = true)
+        val overlayMotionTier = resolveEffectiveMotionTier(
+            baseTier = deviceUiProfile.motionTier,
+            animationEnabled = cardAnimationEnabled
+        )
+        val layoutPolicy = remember(configuration.screenWidthDp) {
+            resolveLandscapeEndDrawerLayoutPolicy(
+                widthDp = configuration.screenWidthDp
+            )
+        }
+        val useDarkDrawerOverlay = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+        val drawerOverlayColor = if (useDarkDrawerOverlay) {
+            Color(0xCC11141A)
+        } else {
+            Color(0xBFF6F8FC)
+        }
+        val dividerColor = if (useDarkDrawerOverlay) {
+            Color.White.copy(alpha = 0.12f)
+        } else {
+            Color.Black.copy(alpha = 0.10f)
+        }
+        var requestDrawerDismiss by remember { mutableStateOf<(() -> Unit)?>(null) }
         Row(modifier = Modifier.fillMaxSize()) {
             // 点击空白处关闭
             Box(

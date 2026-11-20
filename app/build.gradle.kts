@@ -164,7 +164,7 @@ android {
     }
     compileSdk {
         version = release(37) {
-            minorApiLevel = 0
+            minorApiLevel = 2
         }
     }
 
@@ -174,8 +174,8 @@ android {
         targetSdk = 37
         // 版本名按发行计划确定；versionCode 每次发布单调 +1
         // 规范：docs/wiki/VERSIONING.md · 更新日志：CHANGELOG.md
-        versionCode = 591
-        versionName = "0.9.0"
+        versionCode = 595
+        versionName = "0.9.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -492,10 +492,12 @@ dependencies {
     implementation("androidx.compose.material3:material3:$material3Version")
     implementation("androidx.compose.material3.adaptive:adaptive:$material3AdaptiveVersion")
     implementation("androidx.compose.material3.adaptive:adaptive-layout:$material3AdaptiveVersion")
+    implementation("androidx.compose.material3.adaptive:adaptive-navigation3:$material3AdaptiveVersion")
+    implementation("androidx.navigation3:navigation3-ui:1.2.1")
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.blur)
-    implementation(libs.miuix.shader)
+    implementation(libs.miuix.material)
     implementation(libs.miuix.squircle)
     implementation(libs.miuix.icons)
     implementation(project(":miuix-navigation"))
@@ -598,6 +600,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-navigation3:$lifecycleVersion")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
     implementation("androidx.lifecycle:lifecycle-process:$lifecycleVersion")  // 🔋 ProcessLifecycleOwner 后台检测
     implementation("androidx.metrics:metrics-performance:1.0.0")

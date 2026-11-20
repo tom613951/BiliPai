@@ -53,7 +53,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.android.purebilibili.core.store.HomeDurationStyle
-import com.android.purebilibili.core.store.HomeFeedCardStyle
 import com.android.purebilibili.core.store.HomeWallpaperEffectMode
 import com.android.purebilibili.core.ui.animation.DissolveAnimationPreset
 import com.android.purebilibili.core.ui.animation.MaybeDissolvableVideoCard
@@ -197,6 +196,8 @@ internal fun HomeCategoryPageContent(
     visibleDuringNavigation: Boolean = false,
     gridState: HomeFeedGridState,
     gridColumns: Int,
+    cardLayout: HomeFeedCardLayout,
+    cardWidthDp: Float,
     contentPadding: PaddingValues,
     dissolvingVideos: ImmutableSet<String>,
     followingMids: ImmutableSet<Long>,
@@ -215,6 +216,7 @@ internal fun HomeCategoryPageContent(
     onDismissVideo: (VideoItem) -> Unit,
     onWatchLater: (String, Long) -> Unit,
     onDissolveComplete: (String) -> Unit,
+    dissolvePreset: DissolveAnimationPreset,
     onDissolveReflowStarted: (String) -> Unit = {},
     dissolveReflowEnabled: Boolean = true,
     longPressCallback: ((VideoItem) -> Unit)? = null,
@@ -242,7 +244,6 @@ internal fun HomeCategoryPageContent(
     showUpAvatars: Boolean = true,
     showPublishTime: Boolean = true,
     homeDurationStyle: HomeDurationStyle = HomeDurationStyle.OUTSIDE_COVER,
-    homeFeedCardStyle: HomeFeedCardStyle = HomeFeedCardStyle.CURRENT,
     showFullVideoCardContent: Boolean = false,
     homeHeroCarouselEnabled: Boolean = true,
     homeHeroCarouselAutoplayEnabled: Boolean = false,
@@ -309,27 +310,11 @@ internal fun HomeCategoryPageContent(
                 ?: com.android.purebilibili.core.util.CardPositionManager.lastClickedVideoSourceKey
         }
     }
-    val widthSizeClass = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current
-        .windowSizeClass.widthSizeClass
-    val cardLayout = remember(homeFeedCardStyle, gridColumns, widthSizeClass) {
-        resolveHomeFeedCardLayout(
-            style = homeFeedCardStyle,
-            gridColumns = gridColumns,
-            widthSizeClass = widthSizeClass,
-        )
-    }
     val horizontalArrangement = Arrangement.spacedBy(cardLayout.itemSpacingDp.dp)
     TrackScrollJank(
         scrollableState = gridState,
         stateName = "home:feed:${category.name.lowercase()}"
     )
-    val configuration = LocalConfiguration.current
-    val estimatedCardWidthDp = remember(gridColumns, cardLayout.itemSpacingDp, configuration.screenWidthDp) {
-        val totalSpacing = cardLayout.itemSpacingDp * (gridColumns - 1)
-        val contentPaddingTotal = 16f
-        ((configuration.screenWidthDp - contentPaddingTotal - totalSpacing) / gridColumns).coerceAtLeast(100f)
-    }
-
     // Check for load more
     val latestCategoryState by rememberUpdatedState(categoryState)
     val latestIsActive by rememberUpdatedState(isActive)
@@ -518,7 +503,7 @@ internal fun HomeCategoryPageContent(
             isDissolving = isDissolving,
             onDissolveComplete = { onDissolveComplete(video.bvid) },
             cardId = video.bvid,
-            preset = DissolveAnimationPreset.TELEGRAM_FAST,
+            preset = dissolvePreset,
             publishGlobalDissolveState = false,
             reflowDuringFinalTail = dissolveReflowEnabled,
             onReflowStarted = {
@@ -600,6 +585,7 @@ internal fun HomeCategoryPageContent(
                         else -> ElegantVideoCard(
                             video = video,
                             regularGridMetadata = gridState.regularLayout,
+                            compactCornerFooter = true,
                             modifier = Modifier,
                             index = index,
                             isFollowing = video.owner.mid in followingMids && category != HomeCategory.FOLLOW,
@@ -609,7 +595,7 @@ internal fun HomeCategoryPageContent(
                             isReturningFromVideoDetail = returnFlags.returning,
                             isQuickReturningFromVideoDetail = returnFlags.quickReturn,
                             scrollLiteModeEnabled = false,
-                            cardWidthDp = estimatedCardWidthDp,
+                            cardWidthDp = cardWidthDp,
                             showPublishTime = showPublishTime,
                             isDataSaverActive = isDataSaverActive,
                             preferLowQualityCover = preferLowQualityCover,
@@ -816,6 +802,7 @@ internal fun HomeCategoryPageContent(
                                     onGestureActiveChange = onHeroCarouselGestureActiveChange,
                                     dissolvingVideos = dissolvingVideos,
                                     onDissolveComplete = onDissolveComplete,
+                                    dissolvePreset = dissolvePreset,
                                     onLongPress = longPressCallback.takeUnless { downloadSelection?.active == true },
                                     onVideoClick = { video ->
                                         if (downloadSelection?.active == true) downloadSelection.toggle(video)

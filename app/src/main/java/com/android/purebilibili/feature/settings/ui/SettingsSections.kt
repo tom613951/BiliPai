@@ -130,7 +130,6 @@ internal data class SettingsDetailEntry(
 internal data class SettingsRootCategoryActions(
     val onAppearanceClick: () -> Unit,
     val onHomeClick: () -> Unit,
-    val onAnimationClick: () -> Unit,
     val onPlaybackClick: () -> Unit,
     val onBottomBarClick: () -> Unit,
     val onPermissionClick: () -> Unit,
@@ -241,7 +240,7 @@ internal fun SettingsRootCategoryListSection(
                 category = category,
                 first = index == 0,
                 onClick = { onCategoryClick(category) },
-            ) { open ->
+            ) { contentModifier, open ->
                 SettingsRootCategoryRow(
                     title = stringResource(category.titleResource()),
                     subtitle = stringResource(category.subtitleResource()),
@@ -251,6 +250,7 @@ internal fun SettingsRootCategoryListSection(
                     iconTint = siblingTints[index],
                     iconSizeDp = visual.iconSizeDp,
                     onClick = open,
+                    contentModifier = contentModifier,
                 )
             }
             SettingsAdaptiveDivider()
@@ -269,15 +269,14 @@ internal fun SettingsRootCategoryListSection(
     }
 }
 
-/** 捕获单行自己的绘制；材质、字体和按压反馈仍由原设置行负责。 */
+/** 登记条目到详情页的共享边界。 */
 @Composable
 private fun SettingsCategoryContainerOrigin(
     category: SettingsRootCategory,
     first: Boolean,
     onClick: () -> Unit,
-    content: @Composable (() -> Unit) -> Unit,
+    content: @Composable (Modifier, () -> Unit) -> Unit,
 ) {
-    // 首页与子入口共用图层和底色同步，深浅色切换后不能重放旧主题底板。
     SettingsNavigationContainerOrigin(
         target = resolveSettingsCategoryNavKey(category),
         onClick = onClick,
@@ -299,6 +298,7 @@ private fun SettingsRootCategoryRow(
     iconSizeDp: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    contentModifier: Modifier = Modifier,
 ) {
     val visualSpec = resolveSettingsVisualSpec()
     val effectiveIconTint = rememberAdaptivePreferenceIconContainerColor(iconTint)
@@ -307,6 +307,8 @@ private fun SettingsRootCategoryRow(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            // 按压反馈留在原列表，只有行内容进入共享叠层。
+            .then(contentModifier)
             .padding(
                 horizontal = 16.dp,
                 vertical = visualSpec.categoryRowVerticalPadding,
@@ -414,6 +416,7 @@ internal fun SettingsRootCategoryContent(
     actions: SettingsRootCategoryActions,
     state: SettingsRootCategoryState,
     onAboutHeaderAppearanceClick: () -> Unit = {},
+    onAboutHeroHeightChanged: (Int) -> Unit = {},
 ) {
     val nearbyHandoff = com.android.purebilibili.feature.nearby.LocalNearbyHandoff.current
     val resolvedCategory = canonicalSettingsRootCategory(category)
@@ -423,7 +426,8 @@ internal fun SettingsRootCategoryContent(
             SettingsRootCategory.COMMENTS_CONTENT,
             SettingsRootCategory.MESSAGE_NOTIFICATION,
             SettingsRootCategory.VIDEO_DECODER,
-            SettingsRootCategory.GLASS_ADVANCED -> Unit
+            SettingsRootCategory.GLASS_ADVANCED,
+            SettingsRootCategory.ANIMATION_HAPTICS -> Unit
             SettingsRootCategory.PLAYER_DIAGNOSTICS -> {
                 SettingsDetailGroup(title = "应用日志") {
                     DiagnosticsSection(
@@ -440,7 +444,7 @@ internal fun SettingsRootCategoryContent(
             }
             SettingsRootCategory.APPEARANCE_THEME -> {
                 SettingsRootCategoryEntranceSection {
-                    SettingsDetailGroup(title = "外观与主题") {
+                    SettingsDetailGroup(title = "显示样式") {
                         SettingsDetailEntrySection(
                             entries = listOf(
                                 SettingsDetailEntry(
@@ -516,24 +520,6 @@ internal fun SettingsRootCategoryContent(
                         )
                     }
                 }
-                SettingsRootCategoryEntranceSection {
-                    SettingsDetailGroup(title = "交互与动效") {
-                        SettingsDetailEntrySection(
-                            entries = listOf(
-                                SettingsDetailEntry(
-                                    target = SettingsSearchTarget.ANIMATION,
-                                    title = settingsDestinationCopy(SettingsSearchTarget.ANIMATION).title,
-                                    value = settingsDestinationCopy(SettingsSearchTarget.ANIMATION).summary,
-                                    openFocus = SettingsSceneDetailFocus(
-                                        SettingsSearchTarget.ANIMATION,
-                                        SettingsSearchFocusIds.ANIMATION_START,
-                                    ),
-                                    onClick = actions.onAnimationClick,
-                                ),
-                            ),
-                        )
-                    }
-                }
             }
             SettingsRootCategory.PRIVACY_PERMISSION -> {
                 SettingsRootCategoryEntranceSection {
@@ -600,24 +586,6 @@ internal fun SettingsRootCategoryContent(
                                         SettingsSearchFocusIds.APPEARANCE_THEME,
                                     ),
                                     onClick = actions.onAppearanceClick
-                                )
-                            )
-                        )
-                    }
-                }
-                SettingsRootCategoryEntranceSection {
-                    SettingsDetailGroup(title = "动效") {
-                        SettingsDetailEntrySection(
-                            entries = listOf(
-                                SettingsDetailEntry(
-                                    target = SettingsSearchTarget.ANIMATION,
-                                    title = settingsDestinationCopy(SettingsSearchTarget.ANIMATION).title,
-                                    value = settingsDestinationCopy(SettingsSearchTarget.ANIMATION).summary,
-                                    openFocus = SettingsSceneDetailFocus(
-                                        SettingsSearchTarget.ANIMATION,
-                                        SettingsSearchFocusIds.ANIMATION_START,
-                                    ),
-                                    onClick = actions.onAnimationClick
                                 )
                             )
                         )
@@ -784,6 +752,7 @@ internal fun SettingsRootCategoryContent(
                     actions = actions,
                     state = state,
                     onHeaderAppearanceClick = onAboutHeaderAppearanceClick,
+                    onHeroHeightChanged = onAboutHeroHeightChanged,
                 )
             }
         }
@@ -795,6 +764,7 @@ private fun SettingsAboutCategoryContent(
     actions: SettingsRootCategoryActions,
     state: SettingsRootCategoryState,
     onHeaderAppearanceClick: () -> Unit,
+    onHeroHeightChanged: (Int) -> Unit,
 ) {
     val performance: @Composable () -> Unit = {
         SettingsRootCategoryEntranceSection {
@@ -874,6 +844,7 @@ private fun SettingsAboutCategoryContent(
             buildFingerprintSubtitle = state.buildFingerprintSubtitle,
             versionClickCount = state.versionClickCount,
             versionClickThreshold = state.versionClickThreshold,
+            onMiuixHeroHeightChanged = onHeroHeightChanged,
             afterOverview = {
                 AboutCommunitySection(
                     onTelegramClick = actions.onTelegramClick,
@@ -1966,6 +1937,7 @@ fun AboutSection(
     buildFingerprintSubtitle: String = "尚未读取安装包 SHA-256",
     versionClickCount: Int = 0,
     versionClickThreshold: Int = EasterEggs.VERSION_EASTER_EGG_THRESHOLD,
+    onMiuixHeroHeightChanged: (Int) -> Unit = {},
     afterOverview: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -1985,7 +1957,7 @@ fun AboutSection(
     }
     var detailDialogContent by remember { mutableStateOf<AppBuildInfoDialogContent?>(null) }
     val easterEggTint = rememberSettingsEntryTint(AppSemanticAccentRole.TERTIARY, AppContentColors.warning())
-    val updateSiblingTints = rememberSettingsSiblingIconTints(5, paletteOffset = 3)
+    val updateSiblingTints = rememberSettingsSiblingIconTints(6, paletteOffset = 3)
     val licensesVisual = rememberSettingsEntryVisual(SettingsSearchTarget.OPEN_SOURCE_LICENSES)
     val openSourceHomeVisual = rememberSettingsEntryVisual(SettingsSearchTarget.OPEN_SOURCE_HOME)
     val checkUpdateVisual = rememberSettingsEntryVisual(SettingsSearchTarget.CHECK_UPDATE)
@@ -2059,6 +2031,7 @@ fun AboutSection(
             versionHint = versionHint,
             onVersionClick = onVersionClick,
             modifier = Modifier.fillMaxWidth(),
+            onHeroHeightChanged = onMiuixHeroHeightChanged,
         )
     } else {
         MaterialAboutOverview(
@@ -2196,10 +2169,12 @@ fun AboutSection(
                 )
             },
             selectedValue = appUpdateChannel,
-            icon = checkUpdateVisual.icon,
+            icon = rememberSettingsSemanticIcon(SettingsIconRole.UPDATE_CHANNEL),
             iconTint = updateSiblingTints[4],
             onSelectionChange = onAppUpdateChannelChange
         )
+        SettingsAdaptiveDivider()
+        AppUpdateMirrorPreferences(iconTint = updateSiblingTints[5])
     }
     Spacer(modifier = Modifier.height(12.dp))
 
@@ -2224,6 +2199,49 @@ fun AboutSection(
                 iconTint = easterEggTint
             )
         }
+    }
+}
+
+@Composable
+private fun AppUpdateMirrorPreferences(iconTint: Color) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val preference = rememberAppUpdateMirrorPreference()
+    var editCustomMirror by rememberSaveable { mutableStateOf(false) }
+    SettingsSingleChoicePreference(
+        title = "下载镜像源",
+        options = AppUpdateMirror.entries.map { mirror ->
+            com.android.purebilibili.core.ui.components.AppSegmentOption(value = mirror, label = mirror.label)
+        },
+        selectedValue = preference.source,
+        icon = rememberSettingsSemanticIcon(SettingsIconRole.UPDATE_MIRROR),
+        iconTint = iconTint,
+        onSelectionChange = { mirror ->
+            if (mirror == AppUpdateMirror.CUSTOM && preference.customPrefix.isEmpty()) {
+                editCustomMirror = true
+            } else {
+                scope.launch { SettingsManager.setAppUpdateMirror(context, mirror) }
+            }
+        },
+    )
+    if (preference.source == AppUpdateMirror.CUSTOM) {
+        SettingsAdaptiveDivider()
+        SettingClickableItem(
+            icon = rememberSettingsSemanticIcon(SettingsIconRole.UPDATE_MIRROR_ADDRESS),
+            title = "自定义源地址",
+            subtitle = preference.customPrefix.takeIf(String::isNotEmpty),
+            onClick = { editCustomMirror = true },
+        )
+    }
+    if (editCustomMirror) {
+        AppUpdateCustomMirrorDialog(
+            initialPrefix = preference.customPrefix,
+            onConfirm = { prefix ->
+                editCustomMirror = false
+                scope.launch { SettingsManager.setAppUpdateCustomMirror(context, prefix, useAsDefault = true) }
+            },
+            onDismiss = { editCustomMirror = false },
+        )
     }
 }
 

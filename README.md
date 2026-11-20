@@ -7,7 +7,7 @@
 基于 [jay3-yy/BiliPai](https://github.com/jay3-yy/BiliPai) 同步的第三方 Bilibili Android 客户端
 
 <a href="https://github.com/jay3-yy/BiliPai"><img src="https://img.shields.io/badge/upstream-jay3--yy%2FBiliPai-FF9500?style=flat-square" alt="Upstream" /></a>
-<img src="https://img.shields.io/badge/source-v0.9.0%20(591)-007AFF?style=flat-square" alt="Source v0.9.0 (591)" />
+<img src="https://img.shields.io/badge/source-v0.9.1%20(595)-007AFF?style=flat-square" alt="Source v0.9.1 (595)" />
 <img src="https://img.shields.io/badge/license-GPLv3-FF3B30?style=flat-square" alt="GPLv3" />
 
 </div>
@@ -16,7 +16,7 @@
 
 跟随上游同步源码，叠加少量个人补丁。**只同步代码，不提供预编译 APK。**
 
-当前基线：上游 **v0.9.0**（`f48bb5b91`，versionCode 591）。
+当前基线：上游 **v0.9.1**（`796a876ee`，versionCode 595）。
 
 ## 个人改动
 
@@ -29,7 +29,7 @@
 
 ## 自行构建
 
-前置：JDK 21、Android SDK 37。
+前置：JDK 21、Android SDK Platform 37.0 和 37.2。
 
 Miuix 依赖在 GitHub Packages，公开包也需鉴权。写入 `~/.gradle/gradle.properties`：
 
