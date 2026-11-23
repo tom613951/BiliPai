@@ -129,6 +129,7 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         ) return false
         releasePageImageReferences()
         imageMemoryBudget?.background()
+        com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.trimMemory(clear = false)
         return true
     }
 
@@ -239,7 +240,7 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         // calling LazyGridSpanLayoutProvider.getLineConfiguration with an invalid cache line.
         // Regular grids need their own fallback: the staggered-grid flag above does not apply.
         // Retain normal line prefetching while bypassing the default cache-window keepAround path.
-        ComposeFoundationFlags.isPreferDefaultCacheWindowOverPrefetchStrategy = false
+        ComposeFoundationFlags.isPreferDefaultCacheWindowOverPrefetchStrategyLazyGrid = false
 
         // Install the local crash path before theme, StrictMode, or any other startup work. This
         // ensures even an early initialization exception has a private snapshot for feedback.
@@ -572,12 +573,14 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
     }
 
     private fun requestDex2OatProfileInstallNow() {
-        runCatching {
-            ProfileInstaller.writeProfile(this)
-        }.onSuccess {
-            Logger.d(PureApplicationRuntimeConfig.TAG, "📦 Requested ART profile installation for dex2oat")
-        }.onFailure { throwable ->
-            Logger.w(PureApplicationRuntimeConfig.TAG, "⚠️ ART profile installation request failed", throwable)
+        AppScope.ioScope.launch {
+            runCatching {
+                ProfileInstaller.writeProfile(this@PureApplication)
+            }.onSuccess {
+                Logger.d(PureApplicationRuntimeConfig.TAG, "📦 Requested ART profile installation for dex2oat")
+            }.onFailure { throwable ->
+                Logger.w(PureApplicationRuntimeConfig.TAG, "⚠️ ART profile installation request failed", throwable)
+            }
         }
     }
 
@@ -658,6 +661,9 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
             _imageLoader?.memoryCache?.apply {
                 if (plan.clearImageMemoryCache) clear() else trimToSize(size / 2)
             }
+            com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.trimMemory(
+                clear = plan.clearImageMemoryCache,
+            )
             if (plan.clearImageMemoryCache) {
                 Logger.d(PureApplicationRuntimeConfig.TAG, "🚨 trim(level=$level), released image memory cache")
             } else {
@@ -715,6 +721,7 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         )
         releaseBackgroundPageImages()
         _imageLoader?.memoryCache?.clear()
+        com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.clearMemoryCache()
         com.android.purebilibili.data.repository.DanmakuContentRepository.clearCache()
         if (plan.notifyPlayerHeavyOptimization) {
             com.android.purebilibili.feature.video.player.MiniPlayerManager

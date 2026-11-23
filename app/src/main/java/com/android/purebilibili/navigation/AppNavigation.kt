@@ -693,6 +693,7 @@ fun AppNavigation(
 
     // 直播、番剧等非视频独立窗口按显式入口处理，不恢复内存终止快照。
     val windowInitialKey = initialVideoRoute?.let(::legacyRouteToBiliPaiNavKey)
+    val isChildWindow = initialVideoRoute != null
     val systemWindowEntry = windowInitialKey?.takeIf {
         (hostActivity as? com.android.purebilibili.feature.video.VideoActivity)?.hasOfficialCardSession == true
     }
@@ -963,8 +964,11 @@ fun AppNavigation(
         val mainBottomPagerState = key(memoryRecovery.snapshot?.savedAtMs) {
             rememberMainBottomPagerState(
                 pageCount = visibleBottomBarItems.size,
-                initialPage = visibleBottomBarItems.indexOfFirst { it.route == recoveredNavigation?.bottomRoute }
-                    .coerceAtLeast(0),
+                initialPage = resolveBottomBarInitialPage(
+                    recoveredBottomRoute = recoveredNavigation?.bottomRoute,
+                    windowInitialRoute = windowInitialKey?.toLegacyRoute(),
+                    visibleItems = visibleBottomBarItems,
+                ),
                 reduceMotion = systemReduceMotion,
             )
         }
@@ -1583,6 +1587,14 @@ fun AppNavigation(
             if (resolvedPrivacyAuthenticationEnabled != false &&
                 isPrivacyProtectedNavigationTarget(resolvedKey.toPrivacyNavigationTarget())
             ) return commitInApp()
+            // 导航卡片窗口（设置、个人主页等非播放窗口）不再嵌套打开同类窗口：每层窗口
+            // 复用同一套首页入口，放行会让头像等入口层层堆叠新窗口并逐级退出。播放窗口
+            // 的承接不受影响，来源窗口继续走原有准入校验。
+            if (hostActivity is com.android.purebilibili.navigation.NavigationCardActivity &&
+                !resolvedKey.isPlaybackWindowKey()
+            ) {
+                return commitInApp()
+            }
             val identity = com.android.purebilibili.navigation3.resolveSystemWindowCardIdentity(resolvedKey)
                 ?: return commitInApp()
             val session = captureVideoCardNavigationSession(
@@ -1665,6 +1677,7 @@ fun AppNavigation(
             ))
         }
         fun requestBottomPagerPageForRoute(route: String, beforeNavigation: (() -> Unit)? = null): Boolean {
+            if (isChildWindow) return false
             val page = resolveBottomPagerPageForRoute(
                 route = route,
                 visibleItems = visibleBottomBarItems
@@ -1711,12 +1724,24 @@ fun AppNavigation(
         fun pushNavigation3TargetImpl(key: BiliPaiNavKey, beforeNavigation: (() -> Unit)?) {
             val legacyRoute = key.toLegacyRoute()
             if (!canNavigate(shouldBypassNavigationDebounceForRoute(legacyRoute))) return
+            if (isChildWindow && key == BiliPaiNavKey.Home && onVideoActivityHome != null) {
+                beforeNavigation?.invoke()
+                onVideoActivityHome()
+                return
+            }
             val openInApp: () -> Unit = {
                 if (!requestBottomPagerPageForRoute(legacyRoute, beforeNavigation)) {
                     latestPushNavigation3Key.value(key, beforeNavigation)
                 }
             }
-            if (beforeNavigation != null || !latestNavigateWithRecordedCardSource.value(key, openInApp)) openInApp()
+            val preferBottomPager = shouldPreferInAppBottomPagerOverSystemCardWindow(
+                targetRoute = legacyRoute,
+                visibleBottomBarItems = visibleBottomBarItems,
+                isChildWindow = isChildWindow,
+                bottomBarAlwaysHidden = bottomBarVisibilityMode == SettingsManager.BottomBarVisibilityMode.ALWAYS_HIDDEN,
+                useSideNavigation = useSideNavigation,
+            )
+            if (beforeNavigation != null || preferBottomPager || !latestNavigateWithRecordedCardSource.value(key, openInApp)) openInApp()
         }
         val latestPushNavigation3Target = rememberUpdatedState(::pushNavigation3TargetImpl)
         fun pushNavigation3Target(key: BiliPaiNavKey, beforeNavigation: (() -> Unit)? = null) {
@@ -1737,6 +1762,20 @@ fun AppNavigation(
                 if (!requestBottomPagerPageForRoute(route, prepareNavigation)) {
                     latestPushNavigation3Key.value(key, prepareNavigation)
                 }
+            }
+            // 首页顶部头像优先保留系统一镜到底卡片转场；其余顶栏入口若目标已在底栏承载则切应用内 Pager。
+            if (
+                control != HomeHeaderControl.AVATAR &&
+                shouldPreferInAppBottomPagerOverSystemCardWindow(
+                    targetRoute = route,
+                    visibleBottomBarItems = visibleBottomBarItems,
+                    isChildWindow = isChildWindow,
+                    bottomBarAlwaysHidden = bottomBarVisibilityMode == SettingsManager.BottomBarVisibilityMode.ALWAYS_HIDDEN,
+                    useSideNavigation = useSideNavigation,
+                )
+            ) {
+                openInApp()
+                return
             }
             // 隐私入口的认证及解锁状态属于当前导航宿主。
             val protected = isPrivacyProtectedNavigationTarget(key.toPrivacyNavigationTarget())
@@ -2330,7 +2369,8 @@ fun AppNavigation(
             visibleBottomBarRoutes = visibleBottomBarRoutes,
             useSideNavigation = false,
             shouldHideBottomBarOnTablet = false,
-            shouldDeferReveal = false
+            shouldDeferReveal = false,
+            isChildWindow = isChildWindow,
         )
         val shouldDeferBottomBarReveal = shouldDeferBottomBarRevealOnVideoReturn(
             isReturningFromDetail = navigation3ReturnSession.isReturningFromDetail,
@@ -2342,14 +2382,16 @@ fun AppNavigation(
             visibleBottomBarRoutes = visibleBottomBarRoutes,
             useSideNavigation = useSideNavigation,
             shouldHideBottomBarOnTablet = shouldHideBottomBarOnTablet,
-            shouldDeferReveal = false
+            shouldDeferReveal = false,
+            isChildWindow = isChildWindow,
         )
         val sideBarRouteGate = shouldShowBottomBarForNavigation(
             activeRoute = bottomBarMountRoute,
             visibleBottomBarRoutes = visibleBottomBarRoutes,
             useSideNavigation = false,
             shouldHideBottomBarOnTablet = shouldHideBottomBarOnTablet,
-            shouldDeferReveal = false
+            shouldDeferReveal = false,
+            isChildWindow = isChildWindow,
         )
         // Every video detail needs the full content width, including non-fullscreen playback.
         // A transparent sidebar still reserves space in the Row.
@@ -2362,7 +2404,8 @@ fun AppNavigation(
             visibleBottomBarRoutes = visibleBottomBarRoutes,
             useSideNavigation = useSideNavigation,
             shouldHideBottomBarOnTablet = shouldHideBottomBarOnTablet,
-            shouldDeferReveal = shouldDeferBottomBarReveal
+            shouldDeferReveal = shouldDeferBottomBarReveal,
+            isChildWindow = isChildWindow,
         )
         
         // 核心可见性逻辑：
@@ -3412,7 +3455,8 @@ fun AppNavigation(
                         useSideNavigation = useSideNavigation,
                         shouldHideBottomBarOnTablet = isTabletLayout && route == ScreenRoutes.Settings.route,
                         // 返回时延后露出的是根层导航栏，来源页自身的可见性和布局保持不变。
-                        shouldDeferReveal = false
+                        shouldDeferReveal = false,
+                        isChildWindow = isChildWindow,
                     )
                 }
 
@@ -4244,7 +4288,7 @@ fun AppNavigation(
 
                 @Composable
                 fun RenderSearchEntryContent(key: BiliPaiNavKey) {
-                    val homeState by homeViewModel.uiState.collectAsStateWithLifecycle(
+                    val homeUser by homeViewModel.user.collectAsStateWithLifecycle(
                         context = kotlin.coroutines.EmptyCoroutineContext
                     )
                     val searchKey = key as? BiliPaiNavKey.Search
@@ -4253,7 +4297,7 @@ fun AppNavigation(
                     com.android.purebilibili.feature.search.SearchResultContainerHost(
                         content = { openUpResult, openBangumiResult, _, sourceVisible ->
                             SearchScreen(
-                                userFace = homeState.user.face,
+                                userFace = homeUser.face,
                                 initialKeyword = initialSearchKeyword,
                                 onInitialKeywordConsumed = consumeInitialSearchKeyword,
                                 entryMotionSource = searchEntryMotionSource,
@@ -4317,7 +4361,7 @@ fun AppNavigation(
                                     openArticleInNavigation3(articleId, title)
                                 },
                                 onAvatarClick = {
-                                    if (homeState.user.isLogin) {
+                                    if (homeUser.isLogin) {
                                         pushNavigation3Target(BiliPaiNavKey.Profile)
                                     } else {
                                         pushNavigation3Key(BiliPaiNavKey.Login)
@@ -5398,9 +5442,11 @@ fun AppNavigation(
                         isCurrentPage = isBottomPagerPageActive,
                         user = liveHeaderUser,
                         onAvatarClick = {
-                            pushNavigation3Key(
-                                if (liveHeaderUser.isLogin) BiliPaiNavKey.Profile else BiliPaiNavKey.Login
-                            )
+                            if (liveHeaderUser.isLogin) {
+                                pushNavigation3Target(BiliPaiNavKey.Profile)
+                            } else {
+                                pushNavigation3Key(BiliPaiNavKey.Login)
+                            }
                         },
                         onBack = { performSystemBackAction() },
                         // 底栏/顶栏进入的主直播首页：无返回箭头，与 BiliPai 主 tab 一致。

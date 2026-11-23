@@ -430,9 +430,11 @@ fun DynamicSidebar(
                         hasScrolled = hasScrolled,
                         initialEntranceActive = initialEntranceActive
                     )
+                    // 挂 animateItem：Live 折叠展开/收起时头像淡入淡出，其余条目随位移过渡。
                     CascadeSidebarItem(
                         index = index,
                         enabled = shouldAnimate,
+                        itemModifier = Modifier.animateItem(),
                         content = {
                             val isShortcut = isDynamicUpPanelShortcut(user.uid, selfUid)
                             SidebarUserItem(
@@ -523,10 +525,13 @@ fun DynamicSidebar(
 private fun CascadeSidebarItem(
     index: Int,
     enabled: Boolean = true,
+    itemModifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
     if (!enabled) {
-        content()
+        Box(modifier = itemModifier) {
+            content()
+        }
         return
     }
 
@@ -538,23 +543,23 @@ private fun CascadeSidebarItem(
         visible = true
     }
 
-    val offsetY by animateFloatAsState(
+    val offsetYState = animateFloatAsState(
         targetValue = if (visible) 0f else 20f,
         animationSpec = AppMotionTokens.emphasizedSpec(),
         label = "cascadeOffsetY"
     )
 
-    val alpha by animateFloatAsState(
+    val alphaState = animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = AppMotionTokens.standardSpec(),
         label = "cascadeAlpha"
     )
 
     Box(
-        modifier = Modifier
+        modifier = itemModifier
             .graphicsLayer {
-                translationY = offsetY
-                this.alpha = alpha
+                translationY = offsetYState.value
+                this.alpha = alphaState.value
             }
     ) {
         content()

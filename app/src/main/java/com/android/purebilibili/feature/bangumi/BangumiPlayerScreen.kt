@@ -239,10 +239,11 @@ fun BangumiPlayerScreen(
         hideStatusBars = isFullscreen,
         immersiveStatusBarBackdropEnabled = true,
     ).dp
-    val immersiveStatusBarBackdropEnabled by com.android.purebilibili.core.store.SettingsManager
-        .getHideVideoPageStatusBar(context).collectAsStateWithLifecycle(
-            initialValue = com.android.purebilibili.core.store.SettingsManager.getHideVideoPageStatusBarSync(context)
-        )
+    val immersiveStatusBarBackdropEnabled by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getHideVideoPageStatusBar(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember(context) { com.android.purebilibili.core.store.SettingsManager.getHideVideoPageStatusBarSync(context) }
+    )
     val ambientPresentation = remember(seasonId) { AmbientPresentation() }
     val ambientController = remember(ambientPresentation) { AmbientFrameController(ambientPresentation) }
     val statusBarAmbientFrame = remember(ambientPresentation) {
@@ -433,9 +434,10 @@ fun BangumiPlayerScreen(
             cid = currentCidForDebug
         )
     }
-    //  空降助手：定期检查播放位置
-    LaunchedEffect(sponsorBlockEnabled, uiState) {
-        if (sponsorBlockEnabled && uiState is BangumiPlayerState.Success) {
+    //  空降助手：定期检查播放位置（仅在前台活跃时轮询）
+    val bangumiSkipVisualWorkActive = com.android.purebilibili.core.ui.rememberVisualWorkActive()
+    LaunchedEffect(sponsorBlockEnabled, uiState is BangumiPlayerState.Success, bangumiSkipVisualWorkActive) {
+        if (sponsorBlockEnabled && uiState is BangumiPlayerState.Success && bangumiSkipVisualWorkActive) {
             while (true) {
                 kotlinx.coroutines.delay(500)
                 viewModel.checkAndSkipSponsor(context)
@@ -445,9 +447,10 @@ fun BangumiPlayerScreen(
     LaunchedEffect(
         autoSkipOpEd,
         successState?.currentEpisode?.id,
-        successState?.currentEpisode?.skip
+        successState?.currentEpisode?.skip,
+        bangumiSkipVisualWorkActive,
     ) {
-        if (autoSkipOpEd && successState?.currentEpisode?.skip != null) {
+        if (autoSkipOpEd && successState?.currentEpisode?.skip != null && bangumiSkipVisualWorkActive) {
             while (true) {
                 kotlinx.coroutines.delay(250)
                 viewModel.checkAndSkipEpisodeOpEd()
@@ -588,11 +591,12 @@ fun BangumiPlayerScreen(
     // 获取当前剧集 cid
     val currentCid = (uiState as? BangumiPlayerState.Success)?.currentEpisode?.cid ?: 0L
     val currentAid = (uiState as? BangumiPlayerState.Success)?.currentEpisode?.aid ?: 0L
-    val defaultCommentSortMode by com.android.purebilibili.core.store.SettingsManager
-        .getCommentDefaultSortMode(context)
-        .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortModeSync(context),
-            context = kotlin.coroutines.EmptyCoroutineContext
-        )
+    val defaultCommentSortMode by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortMode(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember(context) { com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortModeSync(context) },
+        context = kotlin.coroutines.EmptyCoroutineContext
+    )
     val preferredCommentSortMode = remember(defaultCommentSortMode) {
         CommentSortMode.fromApiMode(defaultCommentSortMode)
     }

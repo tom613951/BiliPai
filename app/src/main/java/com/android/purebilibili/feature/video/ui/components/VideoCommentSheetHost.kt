@@ -379,11 +379,12 @@ fun VideoCommentSheetHost(
     val uriHandler = LocalUriHandler.current
     val commentState by commentViewModel.commentState.collectAsStateWithLifecycle()
     val subReplyState by commentViewModel.subReplyState.collectAsStateWithLifecycle()
-    val defaultSortMode by com.android.purebilibili.core.store.SettingsManager
-        .getCommentDefaultSortMode(context)
-        .collectAsStateWithLifecycle(initialValue = com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortModeSync(context),
-            context = kotlin.coroutines.EmptyCoroutineContext
-        )
+    val defaultSortMode by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortMode(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember(context) { com.android.purebilibili.core.store.SettingsManager.getCommentDefaultSortModeSync(context) },
+        context = kotlin.coroutines.EmptyCoroutineContext
+    )
     val commentMemberDecorationsEnabled by com.android.purebilibili.core.store.SettingsManager
         .getCommentMemberDecorationsEnabled(context)
         .collectAsStateWithLifecycle(initialValue = false
@@ -1034,7 +1035,8 @@ internal fun VideoCommentMainList(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val appearance = rememberVideoCommentAppearance()
-    val commentChromeBackdrop = rememberLayerBackdrop()
+    val commentGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
+    val commentChromeBackdrop = if (commentGlassEnabled) rememberLayerBackdrop() else null
     // 首屏骨架按视口高度铺够槽位：少铺会让列表在数据到达时被撑长、整体跳一下。
     val commentSkeletonSlotCount = resolveVideoCommentSkeletonSlotCount(
         LocalConfiguration.current.screenHeightDp
@@ -1093,7 +1095,10 @@ internal fun VideoCommentMainList(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .layerBackdrop(commentChromeBackdrop),
+                            .then(
+                                if (commentChromeBackdrop != null) Modifier.layerBackdrop(commentChromeBackdrop)
+                                else Modifier
+                            ),
                         contentPadding = WindowInsets.navigationBars.asPaddingValues()
                     ) {
                     commentSectionNotice(state.pageControl)

@@ -64,7 +64,6 @@ import com.android.purebilibili.core.ui.blur.unifiedBlur
 import com.android.purebilibili.core.ui.blur.BlurSurfaceType
 import com.android.purebilibili.core.ui.blur.shouldAllowRuntimeShaderBackedHazeEffect
 import com.android.purebilibili.core.util.FormatUtils
-import com.android.purebilibili.feature.video.danmaku.DanmakuCloudSyncUiState
 // Import reusable components from standalone files
 import com.android.purebilibili.feature.video.ui.components.glass.QualitySelectionMenu
 import com.android.purebilibili.feature.video.ui.components.glass.AudioQualitySelectionMenuDialog
@@ -577,9 +576,6 @@ private fun VideoPlayerOverlayContent(
     val danmakuFullscreenPanelWidthMode = state.danmakuFullscreenPanelWidthMode
     val portraitDanmakuDisplayAreaMode = state.portraitDanmakuDisplayAreaMode
     val danmakuSettingsScope = state.danmakuSettingsScope
-    val showDanmakuSyncSection = state.showDanmakuSyncSection
-    val danmakuCloudSyncEnabled = state.danmakuCloudSyncEnabled
-    val danmakuSyncUiState = state.danmakuSyncUiState
     val onDanmakuOpacityChange = actions.onDanmakuOpacityChange
     val onDanmakuFontScaleChange = actions.onDanmakuFontScaleChange
     val onDanmakuFontWeightChange = actions.onDanmakuFontWeightChange
@@ -606,8 +602,6 @@ private fun VideoPlayerOverlayContent(
     val onDanmakuSmartOcclusionChange = actions.onDanmakuSmartOcclusionChange
     val onDanmakuFullscreenPanelWidthModeChange = actions.onDanmakuFullscreenPanelWidthModeChange
     val onPortraitDanmakuDisplayAreaModeChange = actions.onPortraitDanmakuDisplayAreaModeChange
-    val onDanmakuCloudSyncEnabledChange = actions.onDanmakuCloudSyncEnabledChange
-    val onDanmakuSyncNowClick = actions.onDanmakuSyncNowClick
     val subtitleControlState = state.subtitleControlState
     val subtitleControlCallbacks = actions.subtitleControlCallbacks
     val doubleTapLikeEnabled = state.doubleTapLikeEnabled
@@ -1040,32 +1034,22 @@ private fun VideoPlayerOverlayContent(
             delay(1000)
         }
     }
-    val showFullscreenLockButton by SettingsManager
-        .getShowFullscreenLockButton(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val showFullscreenScreenshotButton by SettingsManager
-        .getShowFullscreenScreenshotButton(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val showFullscreenBatteryLevel by SettingsManager
-        .getShowFullscreenBatteryLevel(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val showFullscreenTime by SettingsManager
-        .getShowFullscreenTime(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val showFullscreenActionItems by SettingsManager
-        .getShowFullscreenActionItems(context)
-        .collectAsStateWithLifecycle(initialValue = true
-        )
-    val showOnlineCount by SettingsManager
-        .getShowOnlineCount(context)
-        .collectAsStateWithLifecycle(initialValue = false
-        )
-    val chapterDisplayMode by remember(context) { SettingsManager.getChapterDisplayMode(context) }
-        .collectAsStateWithLifecycle(initialValue = ChapterDisplayMode.WITH_CONTROLS)
+    val overlaySettings by remember(context) {
+        SettingsManager.getPlayerOverlaySettings(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember(context) {
+            SettingsManager.PlayerOverlaySettings(
+                immersiveVideoPageStatusBar = SettingsManager.getHideVideoPageStatusBarSync(context),
+            )
+        },
+    )
+    val showFullscreenLockButton = overlaySettings.showFullscreenLockButton
+    val showFullscreenScreenshotButton = overlaySettings.showFullscreenScreenshotButton
+    val showFullscreenBatteryLevel = overlaySettings.showFullscreenBatteryLevel
+    val showFullscreenTime = overlaySettings.showFullscreenTime
+    val showFullscreenActionItems = overlaySettings.showFullscreenActionItems
+    val showOnlineCount = overlaySettings.showOnlineCount
+    val chapterDisplayMode = overlaySettings.chapterDisplayMode
     val showViewPointMarkers = chapterDisplayMode != ChapterDisplayMode.HIDDEN
     val onChapterVisibilityChange: (Boolean) -> Unit = { visible ->
         scope.launch {
@@ -1077,20 +1061,9 @@ private fun VideoPlayerOverlayContent(
             )
         }
     }
-    val bottomProgressBehavior by SettingsManager
-        .getBottomProgressBehavior(context)
-        .collectAsStateWithLifecycle(initialValue = BottomProgressBehavior.ALWAYS_HIDE
-        )
-    val playerControlVisibility by SettingsManager
-        .getPlayerControlVisibilitySettings(context)
-        .collectAsStateWithLifecycle(
-            initialValue = com.android.purebilibili.core.store.PlayerControlVisibilitySettings()
-        )
-    val progressPlacement by SettingsManager
-        .getPlayerProgressPlacement(context)
-        .collectAsStateWithLifecycle(
-            initialValue = com.android.purebilibili.core.store.PlayerProgressPlacement.ABOVE_CONTROLS
-        )
+    val bottomProgressBehavior = overlaySettings.bottomProgressBehavior
+    val playerControlVisibility = overlaySettings.playerControlVisibility
+    val progressPlacement = overlaySettings.progressPlacement
     val displayedOnlineCount = remember(onlineCount, showOnlineCount) {
         resolveDisplayedOnlineCount(
             onlineCount = onlineCount,
@@ -1141,10 +1114,7 @@ private fun VideoPlayerOverlayContent(
         )
         sort == com.android.purebilibili.feature.video.ui.components.CollectionSortMode.DESCENDING
     } else collectionSession.isReversed
-    val playbackCompletionBehavior by SettingsManager
-        .getPlaybackCompletionBehavior(context)
-        .collectAsStateWithLifecycle(initialValue = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC
-        )
+    val playbackCompletionBehavior = overlaySettings.playbackCompletionBehavior
     val nextEpisodeTarget = resolvePiliEpisodeNavigation(
         pages = navigationPages,
         outer = navigationOuter,
@@ -1159,11 +1129,7 @@ private fun VideoPlayerOverlayContent(
         autoContinue = playbackCompletionBehavior == PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC,
     )
     // The legacy preference key now enables the inline-player Haze status-bar backdrop.
-    val immersiveVideoPageStatusBar by SettingsManager
-        .getHideVideoPageStatusBar(context)
-        .collectAsStateWithLifecycle(
-            initialValue = SettingsManager.getHideVideoPageStatusBarSync(context),
-        )
+    val immersiveVideoPageStatusBar = overlaySettings.immersiveVideoPageStatusBar
     val playerChromeStatusBarVisible = !resolveVideoDetailSystemBarsVisibilityPolicy(
         isFullscreenMode = isFullscreen,
         hideVideoPageStatusBar = immersiveVideoPageStatusBar,
@@ -2248,9 +2214,6 @@ private fun VideoPlayerOverlayContent(
                 smartOcclusion = danmakuSmartOcclusion,
                 fullscreenWidthMode = danmakuFullscreenPanelWidthMode,
                 portraitDisplayAreaMode = portraitDanmakuDisplayAreaMode,
-                showSyncSection = showDanmakuSyncSection,
-                cloudSyncEnabled = danmakuCloudSyncEnabled,
-                syncUiState = danmakuSyncUiState,
                 onSliderPreview = actions.onDanmakuSliderPreview,
                 onOpacityChange = onDanmakuOpacityChange,
                 onFontScaleChange = onDanmakuFontScaleChange,
@@ -2278,8 +2241,6 @@ private fun VideoPlayerOverlayContent(
                 onSmartOcclusionChange = onDanmakuSmartOcclusionChange,
                 onFullscreenWidthModeChange = onDanmakuFullscreenPanelWidthModeChange,
                 onPortraitDisplayAreaModeChange = onPortraitDanmakuDisplayAreaModeChange,
-                onCloudSyncEnabledChange = onDanmakuCloudSyncEnabledChange,
-                onSyncNowClick = onDanmakuSyncNowClick,
                 onShowDanmakuPool = onShowDanmakuPool?.let { action ->
                     {
                         showDanmakuSettings = false
@@ -3353,10 +3314,9 @@ private fun TripleLikeInteractionButton(
     val likeFilledIcon = rememberAppLikeFilledIcon()
 
     var isLongPressing by remember { mutableStateOf(false) }
-    var longPressProgress by remember { mutableFloatStateOf(0f) }
     val progressDuration = 1500
 
-    val animatedProgress by animateFloatAsState(
+    val animatedProgressState = animateFloatAsState(
         targetValue = if (isLongPressing) 1f else 0f,
         animationSpec = if (isLongPressing) {
             androidx.compose.animation.core.tween(durationMillis = progressDuration, easing = LinearEasing)
@@ -3372,10 +3332,7 @@ private fun TripleLikeInteractionButton(
             }
         }
     )
-
-    LaunchedEffect(animatedProgress) {
-        longPressProgress = animatedProgress
-    }
+    val longPressProgress = animatedProgressState.value
 
     LaunchedEffect(isLongPressing) {
         if (isLongPressing) {

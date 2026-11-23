@@ -1524,7 +1524,8 @@ object SettingsManager {
     private val KEY_SLIDE_VOLUME_BRIGHTNESS_ENABLED = booleanPreferencesKey("slide_volume_brightness_enabled")
     private val KEY_SET_SYSTEM_BRIGHTNESS = booleanPreferencesKey("set_system_brightness")
     private val KEY_PIP_NO_DANMAKU = booleanPreferencesKey("pip_no_danmaku")
-    private val KEY_DANMAKU_CLOUD_SYNC_ENABLED = booleanPreferencesKey("danmaku_cloud_sync_enabled")
+    // 已下线的「同步弹幕设置到账号」历史键，仅用于启动时清理旧持久化数据
+    private val KEY_LEGACY_DANMAKU_CLOUD_SYNC_ENABLED = booleanPreferencesKey("danmaku_cloud_sync_enabled")
     private val KEY_SHOW_PLAYER_CAST_BUTTON = booleanPreferencesKey("show_player_cast_button")
     private val KEY_SHOW_VIDEO_FOLLOW_BUTTON = booleanPreferencesKey("show_video_follow_button")
     private val KEY_PLAYER_PROGRESS_PLACEMENT = intPreferencesKey("player_progress_placement")
@@ -3046,11 +3047,12 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     //  [新增] --- 触感反馈 ---
     fun getHapticFeedbackEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_HAPTIC_FEEDBACK_ENABLED] ?: true } // 默认开启
+        .distinctUntilChanged()
 
     fun getHapticSettings(context: Context): Flow<com.android.purebilibili.core.ui.AppHapticSettings> =
         context.settingsDataStore.data.map {
             com.android.purebilibili.core.ui.AppHapticSettings(it[KEY_HAPTIC_SCENES_DISABLED] ?: 0)
-        }
+        }.distinctUntilChanged()
 
     suspend fun setHapticSceneEnabled(context: Context, scene: com.android.purebilibili.core.ui.AppHapticScene, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -3074,6 +3076,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     fun getGlobalTextTapCopyEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_GLOBAL_TEXT_TAP_COPY_ENABLED] ?: false }
+        .distinctUntilChanged()
 
     suspend fun setGlobalTextTapCopyEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -3131,15 +3134,6 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setPipNoDanmakuEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_PIP_NO_DANMAKU] = value
-        }
-    }
-
-    fun getDanmakuCloudSyncEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
-        .map { preferences -> preferences[KEY_DANMAKU_CLOUD_SYNC_ENABLED] ?: true }
-
-    suspend fun setDanmakuCloudSyncEnabled(context: Context, value: Boolean) {
-        context.settingsDataStore.edit { preferences ->
-            preferences[KEY_DANMAKU_CLOUD_SYNC_ENABLED] = value
         }
     }
 
@@ -3844,6 +3838,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     //  [新增] --- 界面入场动画 master 开关(全 App 统一入场动效) ---
     fun getGlobalDragFeedbackEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_GLOBAL_DRAG_FEEDBACK_ENABLED] ?: true }
+        .distinctUntilChanged()
 
     suspend fun setGlobalDragFeedbackEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences -> preferences[KEY_GLOBAL_DRAG_FEEDBACK_ENABLED] = value }
@@ -3851,6 +3846,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     fun getUiEntranceAnimationEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_UI_ENTRANCE_ANIMATION_ENABLED] ?: true }  // 默认开启
+        .distinctUntilChanged()
 
     suspend fun setUiEntranceAnimationEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences -> preferences[KEY_UI_ENTRANCE_ANIMATION_ENABLED] = value }
@@ -3858,6 +3854,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     fun getSmartVisualGuardEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { false }
+        .distinctUntilChanged()
 
     suspend fun setSmartVisualGuardEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -3869,6 +3866,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     fun getRuntimeVisualGuardEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_RUNTIME_VISUAL_GUARD_ENABLED] ?: true }
+            .distinctUntilChanged()
 
     suspend fun setRuntimeVisualGuardEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -4737,6 +4735,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             )
             mode != HomeHeaderBlurMode.ALWAYS_OFF
         }
+        .distinctUntilChanged()
 
     suspend fun setHeaderBlurEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -4756,6 +4755,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         .map { preferences ->
             preferences[KEY_PROGRESSIVE_TOP_BLUR_ENABLED] ?: false
         }
+        .distinctUntilChanged()
 
     suspend fun setProgressiveTopBlurEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -4771,6 +4771,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         .map { preferences ->
             preferences[KEY_PROGRESSIVE_TOP_FADE_ENABLED] ?: true
         }
+        .distinctUntilChanged()
 
     suspend fun setProgressiveTopFadeEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -4868,6 +4869,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     //  [新增] --- 底栏模糊效果 ---
     fun getBottomBarBlurEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_BOTTOM_BAR_BLUR_ENABLED] ?: false }
+        .distinctUntilChanged()
 
     suspend fun setBottomBarBlurEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences -> preferences[KEY_BOTTOM_BAR_BLUR_ENABLED] = value }
@@ -5019,7 +5021,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     fun getLiquidGlassScenes(context: Context): Flow<com.android.purebilibili.core.ui.AppLiquidGlassSettings> =
         context.settingsDataStore.data.map {
             com.android.purebilibili.core.ui.AppLiquidGlassSettings(it[KEY_LIQUID_GLASS_SCENES_DISABLED] ?: 0)
-        }
+        }.distinctUntilChanged()
 
     suspend fun setLiquidGlassSceneEnabled(context: Context, scene: com.android.purebilibili.core.ui.AppLiquidGlassScene, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -5034,16 +5036,19 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 preferences[KEY_ANDROID_NATIVE_LIQUID_GLASS_ENABLED]
                     ?: true
             }
+            .distinctUntilChanged()
 
     fun getLiquidControlsUseThemeColor(context: Context): Flow<Boolean> =
-        context.settingsDataStore.data.map { it[KEY_LIQUID_CONTROLS_USE_THEME_COLOR] ?: false }
+        context.settingsDataStore.data
+            .map { it[KEY_LIQUID_CONTROLS_USE_THEME_COLOR] ?: false }
+            .distinctUntilChanged()
 
     fun getLiquidSwitchThumbMode(context: Context): Flow<com.android.purebilibili.core.ui.LiquidSwitchThumbMode> =
         context.settingsDataStore.data.map { preferences ->
             com.android.purebilibili.core.ui.LiquidSwitchThumbMode.entries.firstOrNull {
                 it.name == preferences[KEY_LIQUID_SWITCH_THUMB_MODE]
             } ?: com.android.purebilibili.core.ui.LiquidSwitchThumbMode.THEME
-        }
+        }.distinctUntilChanged()
 
     suspend fun setLiquidSwitchThumbMode(context: Context, value: com.android.purebilibili.core.ui.LiquidSwitchThumbMode) {
         context.settingsDataStore.edit { it[KEY_LIQUID_SWITCH_THUMB_MODE] = value.name }
@@ -5226,6 +5231,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 else -> BlurIntensity.THIN  // 默认标准
             }
         }
+        .distinctUntilChanged()
 
     //  [新增] 获取底栏可见项目
     fun getVisibleBottomBarItems(context: Context): Flow<Set<String>> = context.settingsDataStore.data
@@ -6356,9 +6362,23 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
     
-    // 强制更新弹幕默认值（覆盖已有设置，版本升级时触发一次）
+    internal fun removeLegacyDanmakuCloudSyncPreference(
+        preferences: MutablePreferences
+    ): Boolean {
+        if (!preferences.contains(KEY_LEGACY_DANMAKU_CLOUD_SYNC_ENABLED)) return false
+        preferences.remove(KEY_LEGACY_DANMAKU_CLOUD_SYNC_ENABLED)
+        return true
+    }
+
+    // 强制更新弹幕默认值（覆盖已有设置，版本升级时触发一次），并清理已下线的历史弹幕云同步键
     suspend fun forceDanmakuDefaults(context: Context) {
+        val snapshot = context.settingsDataStore.data.first()
+        val needsDefaultsMigration =
+            (snapshot[KEY_DANMAKU_DEFAULTS_VERSION] ?: 0) < DANMAKU_DEFAULTS_VERSION
+        val hasLegacyCloudSyncKey = snapshot.contains(KEY_LEGACY_DANMAKU_CLOUD_SYNC_ENABLED)
+        if (!needsDefaultsMigration && !hasLegacyCloudSyncKey) return
         context.settingsDataStore.edit { preferences ->
+            removeLegacyDanmakuCloudSyncPreference(preferences)
             val currentVersion = preferences[KEY_DANMAKU_DEFAULTS_VERSION] ?: 0
             if (currentVersion < DANMAKU_DEFAULTS_VERSION) {
                 preferences[KEY_DANMAKU_OPACITY] = DEFAULT_DANMAKU_OPACITY
@@ -6999,9 +7019,204 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    data class CommentDisplaySettings(
+        val subReplyPreviewLikesEnabled: Boolean = true,
+        val commentIpLocationEnabled: Boolean = true,
+        val detailedCommentTimeEnabled: Boolean = false,
+        val commentReplyPreviewVisible: Boolean = true,
+    )
+
+    val DEFAULT_INITIAL_APP_THEME_CONFIG = com.android.purebilibili.core.ui.AppThemeConfig(
+        blurIntensity = BlurIntensity.THIN,
+        headerBlurEnabled = true,
+        bottomBarBlurEnabled = false,
+        progressiveTopBlurEnabled = true,
+        progressiveTopFadeEnabled = true,
+        hapticFeedbackEnabled = true,
+        hapticSettings = com.android.purebilibili.core.ui.AppHapticSettings(),
+        globalTextTapCopyEnabled = false,
+        uiEntranceAnimationEnabled = true,
+        globalDragFeedbackEnabled = true,
+        runtimeVisualGuardEnabled = true,
+        nativeMiuixPopupsEnabled = true,
+        liquidGlassEnabled = true,
+        playerGlassEnabled = true,
+        popupGlassEnabled = true,
+        nowPlayingGlassEnabled = true,
+        liquidControlsUseThemeColor = false,
+        liquidSwitchThumbMode = com.android.purebilibili.core.ui.LiquidSwitchThumbMode.THEME,
+    )
+
+    /** 单次映射主宿主全部视觉/交互运行时配置，避免 Activity 根部挂载十余个独立 DataStore 订阅。 */
+    fun getAppThemeConfig(context: Context): Flow<com.android.purebilibili.core.ui.AppThemeConfig> =
+        context.settingsDataStore.data
+            .map { preferences ->
+                val liquidGlassMasterEnabled = preferences[KEY_ANDROID_NATIVE_LIQUID_GLASS_ENABLED] ?: true
+                val liquidGlassScenes = com.android.purebilibili.core.ui.AppLiquidGlassSettings(
+                    preferences[KEY_LIQUID_GLASS_SCENES_DISABLED] ?: 0
+                )
+                val headerBlurMode = resolveHomeHeaderBlurModePreference(
+                    rawMode = preferences[KEY_HOME_HEADER_BLUR_MODE],
+                    legacyEnabled = preferences[KEY_HEADER_BLUR_ENABLED],
+                )
+                val blurIntensity = when (preferences[KEY_BLUR_INTENSITY]) {
+                    "THICK" -> BlurIntensity.THICK
+                    "APPLE_DOCK" -> BlurIntensity.APPLE_DOCK
+                    else -> BlurIntensity.THIN
+                }
+                val thumbMode = com.android.purebilibili.core.ui.LiquidSwitchThumbMode.entries.firstOrNull {
+                    it.name == preferences[KEY_LIQUID_SWITCH_THUMB_MODE]
+                } ?: com.android.purebilibili.core.ui.LiquidSwitchThumbMode.THEME
+                com.android.purebilibili.core.ui.AppThemeConfig(
+                    blurIntensity = blurIntensity,
+                    headerBlurEnabled = headerBlurMode != HomeHeaderBlurMode.ALWAYS_OFF,
+                    bottomBarBlurEnabled = preferences[KEY_BOTTOM_BAR_BLUR_ENABLED] ?: false,
+                    progressiveTopBlurEnabled = preferences[KEY_PROGRESSIVE_TOP_BLUR_ENABLED] ?: false,
+                    progressiveTopFadeEnabled = preferences[KEY_PROGRESSIVE_TOP_FADE_ENABLED] ?: true,
+                    hapticFeedbackEnabled = preferences[KEY_HAPTIC_FEEDBACK_ENABLED] ?: true,
+                    hapticSettings = com.android.purebilibili.core.ui.AppHapticSettings(
+                        preferences[KEY_HAPTIC_SCENES_DISABLED] ?: 0
+                    ),
+                    globalTextTapCopyEnabled = preferences[KEY_GLOBAL_TEXT_TAP_COPY_ENABLED] ?: false,
+                    uiEntranceAnimationEnabled = preferences[KEY_UI_ENTRANCE_ANIMATION_ENABLED] ?: true,
+                    globalDragFeedbackEnabled = preferences[KEY_GLOBAL_DRAG_FEEDBACK_ENABLED] ?: true,
+                    runtimeVisualGuardEnabled = preferences[KEY_RUNTIME_VISUAL_GUARD_ENABLED] ?: true,
+                    nativeMiuixPopupsEnabled = preferences[
+                        com.android.purebilibili.core.store.player.PlayerSettingsStore.keyNativeMiuixPlayerPopups
+                    ] ?: true,
+                    liquidGlassEnabled = liquidGlassMasterEnabled && liquidGlassScenes.isEnabled(
+                        com.android.purebilibili.core.ui.AppLiquidGlassScene.OTHER_COMPONENTS
+                    ),
+                    playerGlassEnabled = liquidGlassMasterEnabled && liquidGlassScenes.isEnabled(
+                        com.android.purebilibili.core.ui.AppLiquidGlassScene.PLAYER_CONTROLS
+                    ),
+                    popupGlassEnabled = liquidGlassMasterEnabled && liquidGlassScenes.isEnabled(
+                        com.android.purebilibili.core.ui.AppLiquidGlassScene.MENUS_DIALOGS
+                    ),
+                    nowPlayingGlassEnabled = liquidGlassMasterEnabled && liquidGlassScenes.isEnabled(
+                        com.android.purebilibili.core.ui.AppLiquidGlassScene.NOW_PLAYING
+                    ),
+                    liquidControlsUseThemeColor = preferences[KEY_LIQUID_CONTROLS_USE_THEME_COLOR] ?: false,
+                    liquidSwitchThumbMode = thumbMode,
+                )
+            }
+            .distinctUntilChanged()
+
+    data class PlayerOverlaySettings(
+        val showFullscreenLockButton: Boolean = true,
+        val showFullscreenScreenshotButton: Boolean = true,
+        val showFullscreenBatteryLevel: Boolean = true,
+        val showFullscreenTime: Boolean = true,
+        val showFullscreenActionItems: Boolean = true,
+        val showOnlineCount: Boolean = false,
+        val chapterDisplayMode: ChapterDisplayMode = ChapterDisplayMode.WITH_CONTROLS,
+        val bottomProgressBehavior: BottomProgressBehavior = BottomProgressBehavior.ALWAYS_HIDE,
+        val playerControlVisibility: PlayerControlVisibilitySettings = PlayerControlVisibilitySettings(),
+        val progressPlacement: PlayerProgressPlacement = PlayerProgressPlacement.ABOVE_CONTROLS,
+        val playbackCompletionBehavior: PlaybackCompletionBehavior = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC,
+        val immersiveVideoPageStatusBar: Boolean = false,
+    )
+
+    /** 单次映射横屏/全屏播放控制层全部 UI 开关，避免 VideoPlayerOverlay 挂载十余个独立 DataStore 订阅。 */
+    fun getPlayerOverlaySettings(context: Context): Flow<PlayerOverlaySettings> =
+        context.settingsDataStore.data
+            .map { preferences ->
+                PlayerOverlaySettings(
+                    showFullscreenLockButton = preferences[KEY_SHOW_FULLSCREEN_LOCK_BUTTON] ?: true,
+                    showFullscreenScreenshotButton = preferences[KEY_SHOW_FULLSCREEN_SCREENSHOT_BUTTON] ?: true,
+                    showFullscreenBatteryLevel = preferences[KEY_SHOW_FULLSCREEN_BATTERY_LEVEL] ?: true,
+                    showFullscreenTime = preferences[KEY_SHOW_FULLSCREEN_TIME] ?: true,
+                    showFullscreenActionItems = preferences[KEY_SHOW_FULLSCREEN_ACTION_ITEMS] ?: true,
+                    showOnlineCount = preferences[KEY_SHOW_ONLINE_COUNT] ?: false,
+                    chapterDisplayMode = ChapterDisplayMode.fromValue(
+                        preferences[KEY_CHAPTER_DISPLAY_MODE] ?: ChapterDisplayMode.WITH_CONTROLS.value
+                    ),
+                    bottomProgressBehavior = BottomProgressBehavior.fromValue(
+                        preferences[KEY_BOTTOM_PROGRESS_BEHAVIOR] ?: BottomProgressBehavior.ALWAYS_HIDE.value
+                    ),
+                    playerControlVisibility = PlayerControlVisibilitySettings(
+                        showCastButton = preferences[KEY_SHOW_PLAYER_CAST_BUTTON] ?: true,
+                        showFollowButton = preferences[KEY_SHOW_VIDEO_FOLLOW_BUTTON] ?: true,
+                        compactPlayerChrome = preferences[KEY_COMPACT_PLAYER_CHROME] ?: false,
+                    ),
+                    progressPlacement = PlayerProgressPlacement.fromValue(
+                        preferences[KEY_PLAYER_PROGRESS_PLACEMENT] ?: PlayerProgressPlacement.ABOVE_CONTROLS.value
+                    ),
+                    playbackCompletionBehavior = PlaybackCompletionBehavior.fromValue(
+                        preferences[KEY_PLAYBACK_COMPLETION_BEHAVIOR]
+                            ?: PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC.value
+                    ),
+                    immersiveVideoPageStatusBar = preferences[KEY_HIDE_VIDEO_PAGE_STATUS_BAR] ?: false,
+                )
+            }
+            .distinctUntilChanged()
+
+    data class PortraitPlayerSettings(
+        val longPressSpeed: Float = DEFAULT_LONG_PRESS_SPEED,
+        val longPressSpeedHintCloseEnabled: Boolean = false,
+        val longPressSpeedHintHidden: Boolean = false,
+        val longPressSpeedHintScale: Float = LONG_PRESS_SPEED_HINT_DEFAULT_SCALE,
+        val longPressSpeedHintAlpha: Float = LONG_PRESS_SPEED_HINT_DEFAULT_ALPHA,
+        val doubleTapSeekEnabled: Boolean = false,
+        val seekForwardSeconds: Int = 10,
+        val seekBackwardSeconds: Int = 10,
+        val pipNoDanmakuEnabled: Boolean = false,
+        val subtitleAutoPreference: SubtitleAutoPreference = SubtitleAutoPreference.OFF,
+        val letterboxAmbientHazeEnabled: Boolean = true,
+        val portraitHeatmapEnabled: Boolean = false,
+        val diagnosticLoggingEnabled: Boolean = DEFAULT_PLAYER_DIAGNOSTIC_LOGGING_ENABLED,
+    )
+
+    /** 单次映射竖屏播放流共享设置，由 PortraitVideoPager 顶层订阅一次后下发各页。 */
+    fun getPortraitPlayerSettings(context: Context): Flow<PortraitPlayerSettings> =
+        context.settingsDataStore.data
+            .map { preferences ->
+                val rawSubtitle = preferences[KEY_SUBTITLE_AUTO_PREFERENCE] ?: SubtitleAutoPreference.OFF.ordinal
+                PortraitPlayerSettings(
+                    longPressSpeed = normalizeLongPressSpeed(
+                        preferences[com.android.purebilibili.core.store.player.longPressSpeedPreferenceKey]
+                            ?: DEFAULT_LONG_PRESS_SPEED
+                    ),
+                    longPressSpeedHintCloseEnabled = preferences[KEY_LONG_PRESS_SPEED_HINT_CLOSE_ENABLED] ?: false,
+                    longPressSpeedHintHidden = preferences[KEY_LONG_PRESS_SPEED_HINT_HIDDEN] ?: false,
+                    longPressSpeedHintScale = normalizeLongPressSpeedHintScale(
+                        preferences[KEY_LONG_PRESS_SPEED_HINT_SCALE] ?: LONG_PRESS_SPEED_HINT_DEFAULT_SCALE
+                    ),
+                    longPressSpeedHintAlpha = normalizeLongPressSpeedHintAlpha(
+                        preferences[KEY_LONG_PRESS_SPEED_HINT_ALPHA] ?: LONG_PRESS_SPEED_HINT_DEFAULT_ALPHA
+                    ),
+                    doubleTapSeekEnabled = preferences[KEY_DOUBLE_TAP_SEEK_ENABLED] ?: false,
+                    seekForwardSeconds = preferences[KEY_SEEK_FORWARD_SECONDS] ?: 10,
+                    seekBackwardSeconds = preferences[KEY_SEEK_BACKWARD_SECONDS] ?: 10,
+                    pipNoDanmakuEnabled = preferences[KEY_PIP_NO_DANMAKU] ?: false,
+                    subtitleAutoPreference = SubtitleAutoPreference.entries.getOrElse(rawSubtitle) {
+                        SubtitleAutoPreference.OFF
+                    },
+                    letterboxAmbientHazeEnabled = preferences[KEY_PORTRAIT_LETTERBOX_AMBIENT_HAZE] ?: true,
+                    portraitHeatmapEnabled = preferences[KEY_PROGRESS_PEAK_DANMAKU_ENABLED] ?: false,
+                    diagnosticLoggingEnabled = preferences[KEY_PLAYER_DIAGNOSTIC_LOGGING_ENABLED]
+                        ?: DEFAULT_PLAYER_DIAGNOSTIC_LOGGING_ENABLED,
+                )
+            }
+            .distinctUntilChanged()
+
+    /** 单次映射全局评论显示偏好，供 Activity 根组合消费。 */
+    fun getCommentDisplaySettings(context: Context): Flow<CommentDisplaySettings> =
+        context.settingsDataStore.data
+            .map { preferences ->
+                CommentDisplaySettings(
+                    subReplyPreviewLikesEnabled = preferences[KEY_SUB_REPLY_PREVIEW_LIKES_ENABLED] ?: true,
+                    commentIpLocationEnabled = preferences[KEY_COMMENT_IP_LOCATION_ENABLED] ?: true,
+                    detailedCommentTimeEnabled = preferences[KEY_DETAILED_COMMENT_TIME_ENABLED] ?: false,
+                    commentReplyPreviewVisible = preferences[KEY_COMMENT_REPLY_PREVIEW_VISIBLE] ?: true,
+                )
+            }
+            .distinctUntilChanged()
+
     fun getSubReplyPreviewLikesEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_SUB_REPLY_PREVIEW_LIKES_ENABLED] ?: true }
+            .distinctUntilChanged()
 
     suspend fun setSubReplyPreviewLikesEnabled(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -7012,6 +7227,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     fun getCommentIpLocationEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_COMMENT_IP_LOCATION_ENABLED] ?: true }
+            .distinctUntilChanged()
 
     suspend fun setCommentIpLocationEnabled(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -7022,11 +7238,13 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     fun getDetailedCommentTimeEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_DETAILED_COMMENT_TIME_ENABLED] ?: false }
+            .distinctUntilChanged()
 
     /** 评论楼中楼预览是否显示；入口在评论右上角菜单，默认显示。 */
     fun getCommentReplyPreviewVisible(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
             .map { preferences -> preferences[KEY_COMMENT_REPLY_PREVIEW_VISIBLE] ?: true }
+            .distinctUntilChanged()
 
     suspend fun setCommentReplyPreviewVisible(context: Context, visible: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -8184,11 +8402,14 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     fun getHideVideoPageStatusBar(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_HIDE_VIDEO_PAGE_STATUS_BAR] ?: false }
+        .distinctUntilChanged()
         .onEach { enabledFromDataStore ->
-            context.getSharedPreferences(VIDEO_PAGE_STATUS_BAR_CACHE_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean(CACHE_KEY_HIDE_VIDEO_PAGE_STATUS_BAR, enabledFromDataStore)
-                .apply()
+            val prefs = context.getSharedPreferences(VIDEO_PAGE_STATUS_BAR_CACHE_PREFS, Context.MODE_PRIVATE)
+            if (prefs.getBoolean(CACHE_KEY_HIDE_VIDEO_PAGE_STATUS_BAR, !enabledFromDataStore) != enabledFromDataStore) {
+                prefs.edit()
+                    .putBoolean(CACHE_KEY_HIDE_VIDEO_PAGE_STATUS_BAR, enabledFromDataStore)
+                    .apply()
+            }
         }
 
     suspend fun setHideVideoPageStatusBar(context: Context, enabled: Boolean) {
@@ -8433,6 +8654,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     ?: DEFAULT_COMMENT_COLLAPSED_REPLY_PREVIEW_LIMIT
             )
         }
+        .distinctUntilChanged()
 
     suspend fun setCommentCollapsedReplyPreviewLimit(context: Context, value: Int) {
         val normalized = normalizeCommentCollapsedReplyPreviewLimit(value)

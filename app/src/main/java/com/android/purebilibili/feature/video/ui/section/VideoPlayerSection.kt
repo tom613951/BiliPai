@@ -25,12 +25,7 @@ import com.android.purebilibili.core.ui.components.AppIcon
 import com.android.purebilibili.core.ui.components.AppText
 
 import com.android.purebilibili.feature.video.danmaku.DanmakuManager
-import com.android.purebilibili.feature.video.danmaku.DanmakuCloudSyncUiState
 import com.android.purebilibili.feature.video.danmaku.rememberDanmakuManager
-import com.android.purebilibili.feature.video.danmaku.resolveDanmakuCloudSyncStateAfterQueued
-import com.android.purebilibili.feature.video.danmaku.resolveDanmakuCloudSyncStateAfterResult
-import com.android.purebilibili.feature.video.danmaku.resolveDanmakuCloudSyncStateAfterStarted
-import com.android.purebilibili.feature.video.danmaku.shouldRunDanmakuManualCloudSync
 import com.android.purebilibili.feature.video.danmaku.filterVisibleCommandDanmakuItems
 import com.android.purebilibili.feature.video.player.MiniPlayerManager
 import com.android.purebilibili.feature.video.state.VideoPlayerState
@@ -758,7 +753,7 @@ private fun VideoPlayerSectionContent(
     val playerInsightMode by remember(context) {
         com.android.purebilibili.core.store.SettingsManager.getPlayerInsightMode(context)
     }.collectAsStateWithLifecycle(
-            initialValue = com.android.purebilibili.core.store.SettingsManager.getPlayerInsightModeSync(context),
+            initialValue = remember(context) { com.android.purebilibili.core.store.SettingsManager.getPlayerInsightModeSync(context) },
             lifecycle = lifecycleOwner.lifecycle
         )
 
@@ -2320,9 +2315,9 @@ private fun VideoPlayerSectionContent(
                                 isFullscreen = isFullscreen,
                                 controlsVisible = showControls,
                                 requestedBottomControlsExclusionPx = requestedBottomGestureExclusionPx,
-                                inlineTopExclusionPx = with(localDensity) { 24.dp.toPx() },
-                                inlineBottomExclusionPx = with(localDensity) { 48.dp.toPx() },
-                                fullscreenEdgeExclusionPx = with(localDensity) { 48.dp.toPx() }
+                                inlineTopExclusionPx = with(localDensity) { INLINE_PLAYER_TOP_GESTURE_EXCLUSION_DP.dp.toPx() },
+                                inlineBottomExclusionPx = with(localDensity) { INLINE_PLAYER_BOTTOM_GESTURE_EXCLUSION_DP.dp.toPx() },
+                                fullscreenEdgeExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_EDGE_GESTURE_EXCLUSION_DP.dp.toPx() }
                             )
                             val shouldIgnoreDragStart = shouldIgnoreVideoPlayerDragStart(
                                 offsetY = offset.y,
@@ -2333,7 +2328,7 @@ private fun VideoPlayerSectionContent(
                                 offsetX = offset.x,
                                 containerWidthPx = size.width.toFloat(),
                                 isFullscreen = isFullscreen,
-                                edgeGestureExclusionPx = with(localDensity) { 48.dp.toPx() },
+                                edgeGestureExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_EDGE_GESTURE_EXCLUSION_DP.dp.toPx() },
                             )
 
                             if (shouldIgnoreDragStart) {
@@ -3006,68 +3001,6 @@ private fun VideoPlayerSectionContent(
             )
         val danmakuBlockRulesRaw = danmakuSettings.blockRulesRaw
         val danmakuBlockRules = danmakuSettings.blockRules
-        val isLoggedIn = (uiState as? VideoPlaybackUiState.Success)?.isLoggedIn == true
-        val danmakuCloudSyncEnabled by remember(context) {
-            com.android.purebilibili.core.store.SettingsManager.getDanmakuCloudSyncEnabled(context)
-        }.collectAsStateWithLifecycle(initialValue = true)
-        val canSyncDanmakuCloud = com.android.purebilibili.feature.video.danmaku
-            .shouldSyncDanmakuSettingsToCloud(
-                isLoggedIn = isLoggedIn,
-                cloudSyncEnabled = danmakuCloudSyncEnabled
-            )
-        var pendingDanmakuCloudSync by remember {
-            mutableStateOf<com.android.purebilibili.data.repository.DanmakuCloudSyncSettings?>(null)
-        }
-        var danmakuCloudSyncUiState by remember {
-            mutableStateOf(DanmakuCloudSyncUiState())
-        }
-        var danmakuManualSyncRequestVersion by remember {
-            mutableStateOf<Long?>(null)
-        }
-        var lastHandledDanmakuManualSyncRequestVersion by remember {
-            mutableStateOf<Long?>(null)
-        }
-
-        fun buildDanmakuCloudSyncSettings(
-            enabled: Boolean = danmakuEnabled,
-            allowScroll: Boolean = danmakuAllowScroll,
-            allowTop: Boolean = danmakuAllowTop,
-            allowBottom: Boolean = danmakuAllowBottom,
-            allowColorful: Boolean = danmakuAllowColorful,
-            allowSpecial: Boolean = danmakuAllowSpecial,
-            opacity: Float = danmakuOpacity,
-            displayAreaRatio: Float = danmakuDisplayArea,
-            speed: Float = danmakuSpeed,
-            fontScale: Float = danmakuFontScale
-        ): com.android.purebilibili.data.repository.DanmakuCloudSyncSettings {
-            return com.android.purebilibili.data.repository.DanmakuCloudSyncSettings(
-                enabled = enabled,
-                allowScroll = allowScroll,
-                allowTop = allowTop,
-                allowBottom = allowBottom,
-                allowColorful = allowColorful,
-                allowSpecial = allowSpecial,
-                opacity = opacity,
-                displayAreaRatio = displayAreaRatio,
-                speed = speed,
-                fontScale = fontScale
-            )
-        }
-
-        fun queueDanmakuCloudSync(
-            settings: com.android.purebilibili.data.repository.DanmakuCloudSyncSettings,
-        ) {
-            if (!canSyncDanmakuCloud) return
-            pendingDanmakuCloudSync = settings
-            danmakuCloudSyncUiState = resolveDanmakuCloudSyncStateAfterQueued(danmakuCloudSyncUiState)
-        }
-
-        fun requestDanmakuCloudSyncNow() {
-            if (!canSyncDanmakuCloud) return
-            pendingDanmakuCloudSync = buildDanmakuCloudSyncSettings()
-            danmakuManualSyncRequestVersion = android.os.SystemClock.elapsedRealtime()
-            danmakuCloudSyncUiState = resolveDanmakuCloudSyncStateAfterQueued(danmakuCloudSyncUiState)
-        }
 
         //  当视频/开关状态变化时更新弹幕加载策略
         val cid = (uiState as? VideoPlaybackUiState.Success)?.info?.cid ?: 0L
@@ -3447,47 +3380,6 @@ private fun VideoPlayerSectionContent(
             danmakuManager.updateSettings(settings = danmakuSettings)
         }
 
-        LaunchedEffect(canSyncDanmakuCloud, danmakuCloudSyncEnabled) {
-            if (canSyncDanmakuCloud) return@LaunchedEffect
-            pendingDanmakuCloudSync = null
-            danmakuCloudSyncUiState = DanmakuCloudSyncUiState()
-        }
-
-        // 账号云同步：用户修改弹幕设置后防抖上云，避免滑杆拖动时高频请求
-        LaunchedEffect(pendingDanmakuCloudSync, canSyncDanmakuCloud, danmakuManualSyncRequestVersion) {
-            val settings = pendingDanmakuCloudSync ?: return@LaunchedEffect
-            if (!canSyncDanmakuCloud) return@LaunchedEffect
-
-            val manualSyncRequested = shouldRunDanmakuManualCloudSync(
-                manualRequestVersion = danmakuManualSyncRequestVersion,
-                lastHandledManualRequestVersion = lastHandledDanmakuManualSyncRequestVersion
-            )
-            if (!manualSyncRequested) {
-                kotlinx.coroutines.delay(700)
-            }
-            danmakuCloudSyncUiState = resolveDanmakuCloudSyncStateAfterStarted(danmakuCloudSyncUiState)
-            val result = com.android.purebilibili.data.repository.DanmakuRepository
-                .syncDanmakuCloudConfig(settings)
-            val completedAtMillis = System.currentTimeMillis()
-            danmakuCloudSyncUiState = resolveDanmakuCloudSyncStateAfterResult(
-                previous = danmakuCloudSyncUiState,
-                result = result,
-                completedAtMillis = completedAtMillis
-            )
-            if (manualSyncRequested) {
-                lastHandledDanmakuManualSyncRequestVersion = danmakuManualSyncRequestVersion
-            }
-            if (pendingDanmakuCloudSync == settings) {
-                pendingDanmakuCloudSync = null
-            }
-            if (result.isFailure) {
-                android.util.Log.w(
-                    "VideoPlayerSection",
-                    "Danmaku cloud sync failed: ${result.exceptionOrNull()?.message}"
-                )
-            }
-        }
-
         // 每个 Compose owner 严格成对绑定/解绑；SessionFactory 负责跨渲染目标复用。
         val keepDanmakuHost = shouldKeepVideoPlayerDanmakuHost(
             danmakuHostActive = danmakuHostActive,
@@ -3610,7 +3502,9 @@ private fun VideoPlayerSectionContent(
         // 使用 isFirstFrameRendered + smooth reveal 确保只有在首帧稳定后才揭开封面，避免黑屏和硬切。
         val autoPlayOnOpenEnabled by remember(context) {
             SettingsManager.getClickToPlay(context)
-        }.collectAsStateWithLifecycle(initialValue = SettingsManager.getClickToPlaySync(context))
+        }.collectAsStateWithLifecycle(
+            initialValue = remember(context) { SettingsManager.getClickToPlaySync(context) }
+        )
         val currentMediaPrepared = playbackIdentityBvid == bvid &&
             (state.requestCid <= 0L || playbackIdentityCid == state.requestCid)
         var hasManualStartPlaybackIntent by remember(currentPlaybackIdentity, playerState.player) {
@@ -5320,7 +5214,17 @@ private fun VideoPlayerSectionContent(
             val renderVideoPlayerOverlay: @Composable () -> Unit = {
                 // Read diagnostics in this restart scope so updates do not invalidate the
                 // surface, cover, subtitles, and gesture setup in the parent player.
-                val debugInfo by playerState.debugInfo.collectAsStateWithLifecycle()
+                // 仅在开启播放洞察模式时订阅高频 debugInfo，避免带宽估算/丢帧回调导致整个播放浮层持续重组。
+                val debugInfoFlow = remember(playerState, playerInsightMode) {
+                    if (playerInsightMode != com.android.purebilibili.core.store.player.PlayerSettingsStore.PlayerInsightMode.OFF) {
+                        playerState.debugInfo
+                    } else {
+                        kotlinx.coroutines.flow.emptyFlow()
+                    }
+                }
+                val debugInfo by debugInfoFlow.collectAsStateWithLifecycle(
+                    initialValue = com.android.purebilibili.feature.video.ui.overlay.PlaybackDebugInfo(),
+                )
                 val diagnosticEvents by playerState.diagnosticEvents.collectAsStateWithLifecycle()
                 val pendingUserAction by playerState.pendingUserAction.collectAsStateWithLifecycle()
                 val playerDiagnosticLoggingEnabled by remember(context) {
@@ -5412,9 +5316,6 @@ private fun VideoPlayerSectionContent(
                     danmakuFullscreenPanelWidthMode = danmakuFullscreenPanelWidthMode,
                     portraitDanmakuDisplayAreaMode = portraitDanmakuDisplayAreaMode,
                     danmakuSettingsScope = activeDanmakuScope,
-                    showDanmakuSyncSection = isLoggedIn,
-                    danmakuCloudSyncEnabled = danmakuCloudSyncEnabled,
-                    danmakuSyncUiState = danmakuCloudSyncUiState,
                     //  视频比例调节
 
                     currentAspectRatio = currentAspectRatio,
@@ -5709,17 +5610,10 @@ private fun VideoPlayerSectionContent(
                     danmakuManager = danmakuManager,
                     danmakuEnabled = danmakuEnabled,
                     activeDanmakuScope = activeDanmakuScope,
-                    cloudSyncSettings = buildDanmakuCloudSyncSettings(),
                     launchSettingsWrite = { write ->
                         scope.launch { write() }
                         Unit
                     },
-                    onQueueCloudSync = { queueDanmakuCloudSync(it) },
-                    onCloudSyncDisabled = {
-                        pendingDanmakuCloudSync = null
-                        danmakuCloudSyncUiState = DanmakuCloudSyncUiState()
-                    },
-                    onSyncNow = { requestDanmakuCloudSyncNow() },
                 )
                 VideoPlayerOverlay(state = overlayState, actions = overlayActions)
             }

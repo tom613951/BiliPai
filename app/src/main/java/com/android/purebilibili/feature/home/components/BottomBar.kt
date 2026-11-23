@@ -617,7 +617,7 @@ internal fun resolveBiliPaiBottomBarDockHeight(
 ): Dp {
     // 联动宿主与内层原生导航共用此行高，避免父级仍按旧胶囊高度约束图文。
     return if (nativeMiuixNavigation && !hasUiSkinDecoration) {
-        MiuixNavigationBarDefaults.ItemHeight
+        52.dp
     } else if (hasUiSkinDecoration) {
         // Search width changes must not compress the skin's icon/label stack.
         resolveBottomBarSkinDockHeight()
@@ -2838,16 +2838,19 @@ private fun OfficialMd3FloatingToolbarContent(
                     // 官方 M3 点按动画：指示底色在选中槽位原地 40%→100% 生长（fastSpatial 弹簧），
                     // 透明度与内容色交叉淡化（defaultEffects），不做跨槽位滑动。
                     showIcon -> {
-                        val indicatorProgress by animateFloatAsState(
+                        val indicatorProgressState = animateFloatAsState(
                             targetValue = if (selected) 1f else 0f,
                             animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
                             label = "md3FloatingSelectionIndicatorProgress",
                         )
-                        val indicatorAlpha by animateFloatAsState(
+                        val indicatorAlphaState = animateFloatAsState(
                             targetValue = if (selected) 1f else 0f,
                             animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
                             label = "md3FloatingSelectionIndicatorAlpha",
                         )
+                        val showIndicator by remember(indicatorProgressState) {
+                            derivedStateOf { indicatorProgressState.value > 0f }
+                        }
                         val selectionContentColor by animateColorAsState(
                             targetValue = if (selected) {
                                 selectionColors.contentColor
@@ -2863,15 +2866,15 @@ private fun OfficialMd3FloatingToolbarContent(
                                 colors = IconButtonDefaults.iconButtonColors(contentColor = selectionContentColor),
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    if (indicatorProgress > 0f) {
+                                    if (showIndicator) {
                                         Box(
                                             modifier = Modifier
                                                 .size(40.dp)
                                                 .graphicsLayer {
-                                                    val scale = 0.4f + 0.6f * indicatorProgress
+                                                    val scale = 0.4f + 0.6f * indicatorProgressState.value
                                                     scaleX = scale
                                                     scaleY = scale
-                                                    alpha = indicatorAlpha
+                                                    alpha = indicatorAlphaState.value
                                                 }
                                                 .clip(CircleShape)
                                                 .background(selectionColors.backgroundColor),
@@ -3080,12 +3083,8 @@ private fun MiuixBottomBar(
     val normalizedLabelMode = normalizeBottomBarLabelMode(labelMode)
     val showIcon = shouldShowBottomBarIcon(normalizedLabelMode)
     val showText = shouldShowBottomBarText(normalizedLabelMode)
-    val resolvedIconStyle = rememberResolvedAppIconStyle()
-    val sharedBarIconStyle = if (resolvedIconStyle == AppIconStyle.MD3_STANDARD) {
-        SharedFloatingBottomBarIconStyle.MATERIAL
-    } else {
-        SharedFloatingBottomBarIconStyle.MIUIX
-    }
+    // Miuix 主题底栏固定跟随 Miuix 官方图标，不因全局单色线性（MD3）图标选项回退到 Material 字形。
+    val sharedBarIconStyle = SharedFloatingBottomBarIconStyle.MIUIX
     val bottomBarVisibleItems = remember(
         visibleItems,
         homeSettings.isBottomBarSearchEnabled,
@@ -3861,7 +3860,7 @@ private fun BiliPaiFloatingBottomBarChrome(
         themedMd3Selection -> nativeSelectionColors.contentColor
         else -> AppContentColors.selectionAccent(effectiveGlassEnabled)
     }
-    val baseUnselectedColor = if (!effectiveGlassEnabled && (themedMiuixSelection || iconStyle == SharedFloatingBottomBarIconStyle.MATERIAL)) {
+    val baseUnselectedColor = if (!effectiveGlassEnabled && !themedMiuixSelection && iconStyle == SharedFloatingBottomBarIconStyle.MATERIAL) {
         AppContentColors.secondaryText()
     } else {
         AppContentColors.primaryText()
@@ -4206,71 +4205,7 @@ private fun BiliPaiFloatingBottomBarChrome(
                                 }
                             }
                         }
-                        if (useNativeMiuixNavigation) {
-                            val indicatorColor = AppInteractionColors.miuixNavigationBarIndicatorColor()
-                            val indicator = if (isValidSelection) {
-                                rememberMiuixBottomBarSelection(
-                                    selectedIndex = selectedIndex,
-                                    itemCount = visibleItems.size,
-                                    onSelected = { index -> handleBottomBarItemClick(index, visibleItems[index]) },
-                                )
-                            } else null
-                            val nativeShape = resolveSharedBottomBarCapsuleShape()
-                            val nativeSurfaceColor = top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme.surfaceContainer
-                            val useNativeBlur = blurEnabled && (miuixBackdrop != null || hazeState != null)
-                            AppPlatformNavigationBar(
-                                modifier = dockModifier
-                                    .clip(nativeShape)
-                                    .then(
-                                        if (useNativeBlur) {
-                                            // 原生悬浮导航保留自身布局，磨砂由壳层绘制；内部底色必须透明。
-                                            // 此分支仅用于关闭液态玻璃后的 Miuix，不改变 MD3 或玻璃材质。
-                                            Modifier.biliPaiMiuixFloatingDockSurface(
-                                                shape = nativeShape,
-                                                backdrop = miuixBackdrop,
-                                                containerColor = nativeSurfaceColor,
-                                                blurEnabled = true,
-                                                glassEnabled = false,
-                                                blurRadius = tuning.shellBlurRadiusDp.dp,
-                                                hazeState = hazeState,
-                                                motionTier = motionTier,
-                                                isTransitionRunning = isTransitionRunning,
-                                                forceLowBlurBudget = forceLowBlurBudget,
-                                            )
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
-                                color = if (useNativeBlur) Color.Transparent else nativeSurfaceColor,
-                                showDivider = false,
-                                defaultWindowInsetsPadding = false,
-                                mode = resolveMd3BottomBarDisplayMode(labelMode).toAppPlatformNavigationDisplayMode(),
-                            ) {
-                                visibleItems.forEachIndexed { index, item ->
-                                    val badgeText = formatBottomBarDynamicReminderBadge(
-                                        if (shouldShowBottomBarDynamicReminderBadge(item, dynamicUnreadCount)) dynamicUnreadCount else 0,
-                                    )
-                                    AppPlatformNavigationBarItem(
-                                        selected = currentItem == item,
-                                        onClick = { handleBottomBarItemClick(index, item) },
-                                        icon = resolveSharedBottomBarIcon(item, currentItem == item, iconStyle),
-                                        label = resolveBottomNavItemLabel(item, itemLabels),
-                                        modifier = indicator?.itemModifier(index, indicatorColor) ?: Modifier,
-                                        badge = badgeText?.let { text ->
-                                            { BottomBarReminderBadge(badgeText = text) }
-                                        },
-                                    )
-                                }
-                                if (isTablet && onToggleSidebar != null) {
-                                    AppPlatformNavigationBarItem(
-                                        selected = false,
-                                        onClick = ::handleBottomBarSidebarClick,
-                                        icon = resolveSharedBottomBarSidebarIcon(iconStyle),
-                                        label = stringResource(R.string.sidebar_toggle),
-                                    )
-                                }
-                            }
-                        } else if (usePlainMiuixFloatingBar) {
+                        if (usePlainMiuixFloatingBar) {
                             PlainMiuixFloatingBottomBar(
                                 selectedIndex = selectedIndexForBar,
                                 onSelected = floatingOnSelected,
@@ -5391,7 +5326,7 @@ internal fun resolveMaterialBottomBarIcon(
     BottomNavItem.LISTEN_VIDEO -> if (selected) Icons.Filled.LibraryMusic else Icons.Outlined.LibraryMusic
     BottomNavItem.PROFILE -> if (selected) Icons.Filled.Person else Icons.Outlined.Person
     BottomNavItem.FAVORITE -> if (selected) Icons.Filled.CollectionsBookmark else Icons.Outlined.CollectionsBookmark
-    BottomNavItem.LIVE -> if (selected) Icons.Filled.LiveTv else Icons.Outlined.LiveTv
+    BottomNavItem.LIVE -> if (selected) BottomBarLiveIconFilled else BottomBarLiveIconOutlined
     BottomNavItem.WATCHLATER -> if (selected) Icons.Filled.WatchLater else Icons.Outlined.WatchLater
     BottomNavItem.SETTINGS -> if (selected) Icons.Filled.Settings else Icons.Outlined.Settings
     BottomNavItem.PLUGINS -> if (selected) Icons.Filled.Extension else Icons.Outlined.Extension

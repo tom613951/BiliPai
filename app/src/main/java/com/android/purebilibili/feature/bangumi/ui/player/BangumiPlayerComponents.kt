@@ -316,8 +316,11 @@ fun BangumiPlayerView(
     val anime4kFrameVisible = anime4kSurfaceReady && anime4kDisplayedFirstFrame
     val videoOutputRouter = remember(exoPlayer) { VideoOutputRouter(exoPlayer) }
 
-    val immersiveStatusBarBackdropEnabled by SettingsManager.getHideVideoPageStatusBar(context)
-        .collectAsStateWithLifecycle(initialValue = SettingsManager.getHideVideoPageStatusBarSync(context))
+    val immersiveStatusBarBackdropEnabled by remember(context) {
+        SettingsManager.getHideVideoPageStatusBar(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember(context) { SettingsManager.getHideVideoPageStatusBarSync(context) }
+    )
     var firstFrameReady by remember(exoPlayer, cid) { mutableStateOf(false) }
     com.android.purebilibili.feature.video.ambient.BindPlayerAmbient(
         player = exoPlayer,
@@ -422,8 +425,10 @@ fun BangumiPlayerView(
     var isPlaying by remember { mutableStateOf(exoPlayer.isPlaying) }
     var duration by remember { mutableLongStateOf(1L) }
 
-    // 监听播放器状态
-    LaunchedEffect(exoPlayer) {
+    // 监听播放器状态（仅在页面活跃且前台有焦点时轮询）
+    val bangumiVisualWorkActive = com.android.purebilibili.core.ui.rememberVisualWorkActive()
+    LaunchedEffect(exoPlayer, bangumiVisualWorkActive) {
+        if (!bangumiVisualWorkActive) return@LaunchedEffect
         while (true) {
             isPlaying = exoPlayer.isPlaying
             duration = exoPlayer.duration.coerceAtLeast(1L)
