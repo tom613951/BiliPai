@@ -23,6 +23,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import com.android.purebilibili.core.theme.AppUiStyle
 import com.android.purebilibili.core.theme.LocalAppUiStyle
@@ -71,25 +72,48 @@ fun AppLazyColumn(
     horizontalAlignment: Alignment.Horizontal = Alignment.Start,
     flingBehavior: FlingBehavior = ScrollableDefaults.flingBehavior(),
     userScrollEnabled: Boolean = true,
+    showScrollBar: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
     content: LazyListScope.() -> Unit,
 ) {
+    // 交互式玻璃面板由内容自己持有滚动状态，提示必须跟随同一状态。
+    val showGlassScrollHint = LocalAppGlassMenuScrollableContent.current &&
+        LocalAppUiStyle.current != AppUiStyle.MIUIX &&
+        userScrollEnabled && showScrollBar && LocalScrollBarAllowed.current
+    val glassHintState = if (showGlassScrollHint) {
+        rememberMenuScrollHintState(
+            state = state,
+            maxOverscrollPx = { state.layoutInfo.viewportSize.height * 0.35f },
+        )
+    } else null
     Box(modifier, propagateMinConstraints = true) {
         CompositionLocalProvider(
             LocalListAuxiliaryWorkAllowed provides
                 (LocalListAuxiliaryWorkAllowed.current && !state.isScrollInProgress),
         ) {
             LazyColumn(
-                modifier = if (userScrollEnabled) {
+                modifier = (if (userScrollEnabled) {
                     Modifier.appScrollBoundaryHaptics(state, reverseLayout)
-                } else Modifier,
+                } else Modifier).then(
+                    if (glassHintState != null) {
+                        Modifier.nestedScroll(glassHintState.nestedScrollConnection)
+                    } else Modifier,
+                ),
                 state = state, contentPadding = contentPadding, reverseLayout = reverseLayout,
                 verticalArrangement = verticalArrangement, horizontalAlignment = horizontalAlignment,
                 flingBehavior = flingBehavior, userScrollEnabled = userScrollEnabled,
                 overscrollEffect = overscrollEffect, content = content,
             )
         }
-        if (LocalAppUiStyle.current == AppUiStyle.MIUIX && userScrollEnabled) {
+        if (glassHintState != null) {
+            AppMenuScrollHint(
+                metrics = { resolveMenuScrollMetrics(state) },
+                overscrollPx = glassHintState.overscrollPx,
+                maxOverscrollPx = { state.layoutInfo.viewportSize.height * 0.35f },
+                modifier = Modifier.matchParentSize(),
+            )
+        }
+        if (LocalAppUiStyle.current == AppUiStyle.MIUIX && userScrollEnabled && showScrollBar && LocalScrollBarAllowed.current) {
             Box(Modifier.matchParentSize()) {
                 VerticalScrollBar(
                     adapter = rememberScrollBarAdapter(state),
@@ -113,6 +137,7 @@ fun AppLazyVerticalGrid(
     horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
     flingBehavior: FlingBehavior = ScrollableDefaults.flingBehavior(),
     userScrollEnabled: Boolean = true,
+    showScrollBar: Boolean = true,
     overscrollEffect: OverscrollEffect? = rememberOverscrollEffect(),
     content: LazyGridScope.() -> Unit,
 ) {
@@ -131,7 +156,7 @@ fun AppLazyVerticalGrid(
                 userScrollEnabled = userScrollEnabled, overscrollEffect = overscrollEffect, content = content,
             )
         }
-        if (LocalAppUiStyle.current == AppUiStyle.MIUIX && userScrollEnabled) {
+        if (LocalAppUiStyle.current == AppUiStyle.MIUIX && userScrollEnabled && showScrollBar && LocalScrollBarAllowed.current) {
             Box(Modifier.matchParentSize()) {
                 VerticalScrollBar(
                     adapter = rememberScrollBarAdapter(state),

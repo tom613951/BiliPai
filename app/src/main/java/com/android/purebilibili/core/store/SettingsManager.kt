@@ -1122,6 +1122,7 @@ data class DanmakuSettings(
     val mergeDuplicates: Boolean = true,
     val duplicateMergeWindowMs: Int = 15_000,
     val duplicateMergeCountThreshold: Int = 2,
+    val duplicateSuppressThreshold: Int = 0,
     val allowScroll: Boolean = true,
     val allowTop: Boolean = true,
     val allowBottom: Boolean = true,
@@ -1859,6 +1860,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_SUB_REPLY_PREVIEW_LIKES_ENABLED =
         booleanPreferencesKey("sub_reply_preview_likes_enabled")
     private val KEY_COMMENT_IP_LOCATION_ENABLED = booleanPreferencesKey("comment_ip_location_enabled")
+    private val KEY_COMMENT_SEX_ENABLED = booleanPreferencesKey("comment_sex_enabled")
     private val KEY_DETAILED_COMMENT_TIME_ENABLED =
         booleanPreferencesKey("detailed_comment_time_enabled")
     private val KEY_COMMENT_REPLY_PREVIEW_VISIBLE =
@@ -5624,6 +5626,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     defaultValue = DEFAULT_DANMAKU_DUPLICATE_MERGE_COUNT_THRESHOLD
                 )
             ),
+            duplicateSuppressThreshold = (preferences[KEY_DANMAKU_DUPLICATE_SUPPRESS_THRESHOLD] ?: 0).coerceIn(0, 20),
             allowScroll = readScopedDanmakuPreference(
                 preferences = preferences,
                 scopeKey = keyDanmakuAllowScroll(scope),
@@ -7022,6 +7025,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     data class CommentDisplaySettings(
         val subReplyPreviewLikesEnabled: Boolean = true,
         val commentIpLocationEnabled: Boolean = true,
+        val commentSexEnabled: Boolean = false,
         val detailedCommentTimeEnabled: Boolean = false,
         val commentReplyPreviewVisible: Boolean = true,
     )
@@ -7207,6 +7211,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 CommentDisplaySettings(
                     subReplyPreviewLikesEnabled = preferences[KEY_SUB_REPLY_PREVIEW_LIKES_ENABLED] ?: true,
                     commentIpLocationEnabled = preferences[KEY_COMMENT_IP_LOCATION_ENABLED] ?: true,
+                    commentSexEnabled = preferences[KEY_COMMENT_SEX_ENABLED] ?: false,
                     detailedCommentTimeEnabled = preferences[KEY_DETAILED_COMMENT_TIME_ENABLED] ?: false,
                     commentReplyPreviewVisible = preferences[KEY_COMMENT_REPLY_PREVIEW_VISIBLE] ?: true,
                 )
@@ -7232,6 +7237,17 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setCommentIpLocationEnabled(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_COMMENT_IP_LOCATION_ENABLED] = enabled
+        }
+    }
+
+    fun getCommentSexEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_COMMENT_SEX_ENABLED] ?: false }
+            .distinctUntilChanged()
+
+    suspend fun setCommentSexEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_COMMENT_SEX_ENABLED] = enabled
         }
     }
 
@@ -7428,10 +7444,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         context.settingsDataStore.edit { preferences -> preferences[KEY_AUTO_CHECK_APP_UPDATE] = value }
     }
 
-    // --- 更新检测渠道（默认测试版，保留用户已保存的选择）---
+    // --- 更新检测渠道（默认正式版，保留用户已保存的选择）---
     fun getAppUpdateChannel(context: Context): Flow<AppUpdateChannel> = context.settingsDataStore.data
         .map { preferences ->
-            AppUpdateChannel.fromValue(preferences[KEY_APP_UPDATE_CHANNEL] ?: AppUpdateChannel.BETA.value)
+            AppUpdateChannel.fromValue(preferences[KEY_APP_UPDATE_CHANNEL] ?: AppUpdateChannel.STABLE.value)
         }
 
     suspend fun setAppUpdateChannel(context: Context, channel: AppUpdateChannel) {
@@ -7576,7 +7592,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             audioNowPlayingBarEnabled = preferences[KEY_AUDIO_NOW_PLAYING_BAR_ENABLED] ?: true,
             audioNowPlayingBarImmersiveEnabled = preferences[KEY_AUDIO_NOW_PLAYING_BAR_IMMERSIVE_ENABLED] ?: true,
             audioNowPlayingBarOpensAudioMode = preferences[KEY_AUDIO_NOW_PLAYING_BAR_OPENS_AUDIO_MODE] ?: false,
-            musicLyricsUiStyle = MusicLyricsUiStyle.fromValue(preferences[KEY_MUSIC_LYRICS_UI_STYLE] ?: MusicLyricsUiStyle.CLASSIC.value),
+            musicLyricsUiStyle = MusicLyricsUiStyle.fromValue(preferences[KEY_MUSIC_LYRICS_UI_STYLE] ?: MusicLyricsUiStyle.ARC.value),
             loudnessNormalizationEnabled = preferences[KEY_LOUDNESS_NORMALIZATION_ENABLED] ?: false,
             audioSpectrumEnabled = preferences[KEY_AUDIO_SPECTRUM_ENABLED] ?: false,
             startupAutoPlayEnabled = preferences[KEY_STARTUP_AUTO_PLAY_ENABLED] ?: false,
@@ -7814,20 +7830,24 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     /**
      * 听视频歌词界面风格。
      * - CLASSIC: 现有全屏歌词列
-     * - IMMERSIVE: 沉浸式大字歌词（Halcyon 风格）
+     * - IMMERSIVE: 沉浸式大字歌词
+     * - ARC: 3D 弧面旋转歌词
      */
     enum class MusicLyricsUiStyle(val value: Int, val label: String) {
         CLASSIC(0, "经典"),
-        IMMERSIVE(1, "沉浸");
+        IMMERSIVE(1, "沉浸"),
+        ARC(2, "弧面");
 
         fun next(): MusicLyricsUiStyle = when (this) {
             CLASSIC -> IMMERSIVE
-            IMMERSIVE -> CLASSIC
+            IMMERSIVE -> ARC
+            ARC -> CLASSIC
         }
 
         companion object {
             fun fromValue(value: Int): MusicLyricsUiStyle = when (value) {
                 1 -> IMMERSIVE
+                2 -> ARC
                 else -> CLASSIC
             }
         }
@@ -7836,7 +7856,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     fun getMusicLyricsUiStyle(context: Context): Flow<MusicLyricsUiStyle> =
         context.settingsDataStore.data.map { preferences ->
             MusicLyricsUiStyle.fromValue(
-                preferences[KEY_MUSIC_LYRICS_UI_STYLE] ?: MusicLyricsUiStyle.CLASSIC.value
+                preferences[KEY_MUSIC_LYRICS_UI_STYLE] ?: MusicLyricsUiStyle.ARC.value
             )
         }
 
@@ -8457,6 +8477,47 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     ) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_TABLET_COMMENT_PANEL_WIDTH_PRESET] = preset.value
+        }
+    }
+
+    private val KEY_DANMAKU_DUPLICATE_SUPPRESS_THRESHOLD = intPreferencesKey("danmaku_duplicate_suppress_threshold")
+
+    fun getDanmakuDuplicateSuppressThreshold(context: Context): Flow<Int> =
+        context.settingsDataStore.data
+            .map { preferences -> (preferences[KEY_DANMAKU_DUPLICATE_SUPPRESS_THRESHOLD] ?: 0).coerceIn(0, 20) }
+
+    suspend fun setDanmakuDuplicateSuppressThreshold(context: Context, threshold: Int) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_DANMAKU_DUPLICATE_SUPPRESS_THRESHOLD] = threshold.coerceIn(0, 20)
+        }
+    }
+
+    private val KEY_TABLET_THEATER_MODE_ENABLED = booleanPreferencesKey("tablet_theater_mode_enabled")
+    private val KEY_PHONE_THEATER_MODE_ENABLED = booleanPreferencesKey("phone_theater_mode_enabled")
+
+    fun getTabletTheaterModeEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_TABLET_THEATER_MODE_ENABLED] ?: false }
+
+    suspend fun setTabletTheaterModeEnabled(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_TABLET_THEATER_MODE_ENABLED] = enabled
+        }
+    }
+
+    fun getPhoneTheaterModeEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_PHONE_THEATER_MODE_ENABLED] ?: false }
+
+    suspend fun setPhoneTheaterModeEnabled(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_PHONE_THEATER_MODE_ENABLED] = enabled
         }
     }
 
@@ -9434,6 +9495,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             BooleanShareablePreferenceDefinition(KEY_COMMENT_AVATAR_PUSH_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_COMMENT_MEMBER_DECORATIONS_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_COMMENT_IP_LOCATION_ENABLED, SettingsShareSection.PLAYBACK),
+            BooleanShareablePreferenceDefinition(KEY_COMMENT_SEX_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_DETAILED_COMMENT_TIME_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_IMAGE_PREVIEW_LONG_PRESS_SAVE_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_IMAGE_PREVIEW_3D_PAGE_ENABLED, SettingsShareSection.PLAYBACK),

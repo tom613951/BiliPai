@@ -10,6 +10,8 @@ import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -148,7 +150,12 @@ class DanmakuManager private constructor(
     private var pendingTimelineResync: Boolean = false
     private var isSeekScrubbing = false
     private var player: ExoPlayer? = null
-    private val playbackPositionProvider = java.util.function.LongSupplier { player?.currentPosition ?: 0L }
+    /** 弹幕时间轴偏移（毫秒，正值延后显示，负值提前显示）。 */
+    var timeOffsetMs: Long by mutableLongStateOf(0L)
+        private set
+    private val playbackPositionProvider = java.util.function.LongSupplier {
+        applyDanmakuTimeOffsetMs(player?.currentPosition ?: 0L, timeOffsetMs)
+    }
     private var playerListener: Player.Listener? = null
     private var playerAttachmentCount: Int = 0
     private var loadJob: Job? = null
@@ -228,6 +235,7 @@ class DanmakuManager private constructor(
     val config = DanmakuConfig()
     private var blockedRuleMatchers: List<DanmakuBlockRuleMatcher> = emptyList()
     @Volatile private var sharedKeywords: List<String> = emptyList()
+    @Volatile private var sharedKeywordMatcher = com.android.purebilibili.core.store.ContentKeywordMatcher.EMPTY
 
     init {
         startDanmakuPluginObserver()
@@ -270,10 +278,15 @@ class DanmakuManager private constructor(
     internal fun getHotDanmakuIndex(expectedCid: Long): HotDanmakuIndex? =
         hotDanmakuIndex.takeIf { cachedCid == expectedCid }
 
+    /** Compose-observable live opacity; slider previews and persisted settings share it. */
+    private var liveOpacityState by mutableFloatStateOf(config.opacity)
+    val liveOpacity: Float get() = liveOpacityState
+
     var opacity: Float
         get() = config.opacity
         set(value) {
             config.opacity = value
+            liveOpacityState = value
             applyConfigToController("opacity")
         }
     
@@ -416,6 +429,7 @@ class DanmakuManager private constructor(
                 if (token == lastDanmakuPluginUpdateToken && keywords == sharedKeywords) return@collectLatest
                 lastDanmakuPluginUpdateToken = token
                 sharedKeywords = keywords
+                sharedKeywordMatcher = com.android.purebilibili.core.store.ContentKeywordMatcher.compile(keywords)
 
                 if (isLoading || sourceDanmakuList == null) return@collectLatest
 
@@ -487,11 +501,13 @@ class DanmakuManager private constructor(
         val projectedStandardList = projectStandardDanmakuForRender(filteredStandardList)
 
         var retainedMergedAdvanced = emptyList<AdvancedDanmakuData>()
-        val (rebuiltStandard, rebuiltAdvanced) = if (config.mergeDuplicates) {
+        val (rebuiltStandard, rebuiltAdvanced) = if (config.mergeDuplicates || config.duplicateSuppressThreshold > 0) {
             val (mergedStandard, mergedAdvanced) = DanmakuMerger.merge(
                 list = projectedStandardList,
                 intervalMs = config.duplicateMergeWindowMs.toLong(),
-                countThreshold = config.duplicateMergeCountThreshold
+                countThreshold = config.duplicateMergeCountThreshold,
+                suppressThreshold = config.duplicateSuppressThreshold,
+                mergeIntoSingle = config.mergeDuplicates,
             )
             val settings = currentTypeFilterSettings()
             val visibleMergedAdvanced = mergedAdvanced.filter { merged ->
@@ -637,6 +653,7 @@ class DanmakuManager private constructor(
             Log.w(TAG, " Resync skipped ($reason): controller=null, pending=$pendingTimelineResync")
             return
         }
+        val effectivePositionMs = applyDanmakuTimeOffsetMs(positionMs, timeOffsetMs)
         applyPlaybackSpeedToController(ctrl)
         executeExplicitDanmakuResync(
             pause = { ctrl.pause() },
@@ -644,14 +661,14 @@ class DanmakuManager private constructor(
             setData = {
                 ctrl.replaceWindow(
                     window = DanmakuWindow(
-                        anchorSegment = segmentIndexForPosition(positionMs),
+                        anchorSegment = segmentIndexForPosition(effectivePositionMs),
                         segmentIndices = activeSegmentIndices,
                         items = list
                     ),
                     currentPositionMs = 0L
                 )
             },
-            start = { if (isRenderingEnabled) ctrl.start(positionMs) }
+            start = { if (isRenderingEnabled) ctrl.start(effectivePositionMs) }
         )
         if (invalidateView) {
             ctrl.invalidate()
@@ -694,7 +711,7 @@ class DanmakuManager private constructor(
             }
             return
         }
-        val safePositionMs = positionMs.coerceAtLeast(0L)
+        val safePositionMs = applyDanmakuTimeOffsetMs(positionMs, timeOffsetMs)
         applyPlaybackSpeedToController(ctrl)
         ctrl.synchronizeTo(safePositionMs)
         if (shouldPlay && isRenderingEnabled) {
@@ -994,7 +1011,7 @@ class DanmakuManager private constructor(
         nativePlugins: List<DanmakuPluginApi>,
         useJsonRules: Boolean
     ): PluginDanmakuItem? {
-        if (sharedKeywords.any { item.content.contains(it, ignoreCase = true) }) return null
+        if (sharedKeywordMatcher.matches(item.content)) return null
         var current = item
         nativePlugins.forEach { plugin ->
             val filtered = try {
@@ -1107,6 +1124,7 @@ class DanmakuManager private constructor(
             mergeDuplicates = settings.mergeDuplicates,
             duplicateMergeWindowMs = settings.duplicateMergeWindowMs,
             duplicateMergeCountThreshold = settings.duplicateMergeCountThreshold,
+            duplicateSuppressThreshold = settings.duplicateSuppressThreshold,
             allowScroll = settings.allowScroll,
             allowTop = settings.allowTop,
             allowBottom = settings.allowBottom,
@@ -1134,6 +1152,7 @@ class DanmakuManager private constructor(
         mergeDuplicates: Boolean = config.mergeDuplicates,
         duplicateMergeWindowMs: Int = config.duplicateMergeWindowMs,
         duplicateMergeCountThreshold: Int = config.duplicateMergeCountThreshold,
+        duplicateSuppressThreshold: Int = config.duplicateSuppressThreshold,
         allowScroll: Boolean = config.allowScroll,
         allowTop: Boolean = config.allowTop,
         allowBottom: Boolean = config.allowBottom,
@@ -1145,7 +1164,8 @@ class DanmakuManager private constructor(
     ) {
         val mergeChanged = config.mergeDuplicates != mergeDuplicates ||
             config.duplicateMergeWindowMs != duplicateMergeWindowMs ||
-            config.duplicateMergeCountThreshold != duplicateMergeCountThreshold
+            config.duplicateMergeCountThreshold != duplicateMergeCountThreshold ||
+            config.duplicateSuppressThreshold != duplicateSuppressThreshold
         val blockedRulesChanged = config.blockedRules != blockedRules
         val filterChanged =
             config.allowScroll != allowScroll ||
@@ -1159,6 +1179,7 @@ class DanmakuManager private constructor(
         val staticToScrollChanged = config.staticDanmakuToScroll != staticDanmakuToScroll
         
         config.opacity = opacity
+        liveOpacityState = opacity
         config.fontScale = fontScale
         config.fontWeight = fontWeight
         config.speedFactor = speed
@@ -1173,6 +1194,7 @@ class DanmakuManager private constructor(
         config.mergeDuplicates = mergeDuplicates
         config.duplicateMergeWindowMs = duplicateMergeWindowMs
         config.duplicateMergeCountThreshold = duplicateMergeCountThreshold
+        config.duplicateSuppressThreshold = duplicateSuppressThreshold.coerceIn(0, 20)
         config.allowScroll = allowScroll
         config.allowTop = allowTop
         config.allowBottom = allowBottom
@@ -1226,8 +1248,26 @@ class DanmakuManager private constructor(
     }
 
     private var viewport: DanmakuViewport? = null
+    private var requestedHotDanmakuSlotHeightPx = 0f
 
-    fun updateHotDanmakuPresentation(items: List<DanmakuItem>, heightPx: Int) {
+    /**
+     * Reserves a stable top band for the counted-danmaku bar. The bar's current
+     * content must not change this height; callers only update it when the
+     * feature, viewport, or text metrics change.
+     */
+    fun updateHotDanmakuSlotHeight(heightPx: Float) {
+        requestedHotDanmakuSlotHeightPx = heightPx.coerceAtLeast(0f)
+        val resolved = resolveDanmakuHotBarReservedHeightPx(
+            requestedHeightPx = requestedHotDanmakuSlotHeightPx,
+            viewportHeightPx = viewport?.heightPx ?: 0,
+        )
+        if (config.hotBarReservedHeightPx == resolved) return
+        config.hotBarReservedHeightPx = resolved
+        applyConfigToController("hot_bar_slot")
+    }
+
+    /** Hides only the rendered copies that the counted bar already shows; layout is untouched. */
+    fun updateHotDanmakuPresentation(items: List<DanmakuItem>) {
         val idsChanged = items.size != hotDanmakuIds.size || items.any { it.danmakuId !in hotDanmakuIds }
         val textsChanged = items.size != hotDanmakuTexts.size || items.any { it.text.orEmpty() !in hotDanmakuTexts }
         if (idsChanged) hotDanmakuIds = items.mapTo(HashSet(items.size)) { it.danmakuId }
@@ -1235,10 +1275,6 @@ class DanmakuManager private constructor(
         if (idsChanged || textsChanged) {
             controller?.setHiddenDanmaku(hotDanmakuIds, hotDanmakuTexts)
         }
-        val height = if (items.isEmpty()) 0f else heightPx.coerceAtLeast(0).toFloat()
-        if (config.hotBarReservedHeightPx == height) return
-        config.hotBarReservedHeightPx = height
-        applyConfigToController("hot_bar_space")
     }
 
     /**
@@ -1258,9 +1294,15 @@ class DanmakuManager private constructor(
         if (viewport == value) return
         clearTapSelection()
         viewport = value
+        val slotHeight = resolveDanmakuHotBarReservedHeightPx(
+            requestedHeightPx = requestedHotDanmakuSlotHeightPx,
+            viewportHeightPx = value.heightPx,
+        )
+        val slotChanged = config.hotBarReservedHeightPx != slotHeight
+        config.hotBarReservedHeightPx = slotHeight
         val view = danmakuView ?: return
         // A pending layout will apply this configuration in attachView's resize path.
-        if (view.width == value.widthPx && view.height == value.heightPx) {
+        if (slotChanged || (view.width == value.widthPx && view.height == value.heightPx)) {
             applyConfigToController("resize")
         }
     }
@@ -1545,7 +1587,8 @@ class DanmakuManager private constructor(
                 player?.let { p ->
                     if (p.isPlaying && isRenderingEnabled) {
                         val playerPos = p.currentPosition
-                        requestSpecialDanmakuWindow(playerPos, "playback_progress")
+                        val danmakuPos = applyDanmakuTimeOffsetMs(playerPos, timeOffsetMs)
+                        requestSpecialDanmakuWindow(danmakuPos, "playback_progress")
                         if (!isPlaying) return@let
                         val now = SystemClock.elapsedRealtime()
                         if (now - lastOrdinarySyncMs < ordinaryInterval) return@let
@@ -1580,7 +1623,7 @@ class DanmakuManager private constructor(
                             DanmakuSyncAction.None,
                             DanmakuSyncAction.PauseOnly -> Unit
                         }
-                        requestSegmentWindow(playerPos, "playback_progress")
+                        requestSegmentWindow(danmakuPos, "playback_progress")
                         requestWebMaskWindow(playerPos)
                         Log.d(
                             TAG,
@@ -1808,7 +1851,7 @@ class DanmakuManager private constructor(
                     controller?.let { ctrl ->
                         applyPlaybackSpeedToController(ctrl)
                         if (!isSeekScrubbing) {
-                            ctrl.synchronizeTo(exoPlayer.currentPosition.coerceAtLeast(0L))
+                            ctrl.synchronizeTo(applyDanmakuTimeOffsetMs(exoPlayer.currentPosition, timeOffsetMs))
                         }
                         val applied = resolvePlaybackAdjustedRenderConfig()
                         Log.w(
@@ -1880,6 +1923,9 @@ class DanmakuManager private constructor(
         Log.w(TAG, " loadDanmaku: cid=$cid, cached=$cachedCid, isLoading=$isLoading, controller=${controller != null}")
         
         // 如果正在加载，优先处理新 cid
+        if (cid != cachedCid) {
+            timeOffsetMs = 0L
+        }
         if (isLoading) {
             if (cid != cachedCid) {
                 Log.w(TAG, " Loading in progress for cid=$cachedCid, canceling to load cid=$cid")
@@ -1918,7 +1964,7 @@ class DanmakuManager private constructor(
         val requestGeneration = ++loadGeneration
         val requestWindowGeneration = ++windowGeneration
         clearExplicitSeekResyncMarker()
-        updateHotDanmakuPresentation(emptyList(), 0)
+        updateHotDanmakuPresentation(emptyList())
         cachedDanmakuList = null
         hotDanmakuIndex = null
         sourceDanmakuList = null
@@ -2529,7 +2575,7 @@ class DanmakuManager private constructor(
         val requestGeneration = ++loadGeneration
         val requestWindowGeneration = ++windowGeneration
         clearExplicitSeekResyncMarker()
-        updateHotDanmakuPresentation(emptyList(), 0)
+        updateHotDanmakuPresentation(emptyList())
         cachedDanmakuList = null
         hotDanmakuIndex = null
         sourceDanmakuList = null
@@ -2635,7 +2681,7 @@ class DanmakuManager private constructor(
         clearTapSelection()
         isSeekScrubbing = false
         Log.d(TAG, "clearForVideoChange() - canceling active load and clearing displayed danmakus")
-        updateHotDanmakuPresentation(emptyList(), 0)
+        updateHotDanmakuPresentation(emptyList())
         loadJob?.cancel()
         windowLoadJob?.cancel()
         maskLoadJob?.cancel()
@@ -2739,18 +2785,48 @@ class DanmakuManager private constructor(
      * 
      * @param positionMs 目标位置（毫秒）
      */
+    fun snapshotExportableDanmaku(): Pair<Long, List<DanmakuItem>> {
+        val list = sourceDanmakuList ?: cachedDanmakuList.orEmpty()
+        return cachedCid to list
+    }
+
+    fun updateTimeOffsetMs(offsetMs: Long) {
+        val normalized = normalizeDanmakuTimeOffsetMs(offsetMs)
+        if (normalized == timeOffsetMs) return
+        timeOffsetMs = normalized
+        val positionMs = player?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        val danmakuPos = applyDanmakuTimeOffsetMs(positionMs, normalized)
+        val shouldPlay = player?.isPlaying == true
+        requestSpecialDanmakuWindow(danmakuPos, "time_offset_change")
+        if (shouldReplaceDanmakuWindow(activeSegmentIndices, danmakuPos, totalSegmentCount)) {
+            controller?.pause()
+            controller?.clear()
+            requestSegmentWindow(danmakuPos, "time_offset_change")
+        } else {
+            cachedDanmakuList?.let { list ->
+                resyncDanmakuTimeline(
+                    list = list,
+                    positionMs = positionMs,
+                    shouldPlay = shouldPlay,
+                    reason = "time_offset_change",
+                )
+            }
+        }
+    }
+
     fun seekTo(positionMs: Long) {
         clearTapSelection()
         isSeekScrubbing = false
-        cancelObsoleteWindowRequest(positionMs)
-        requestSpecialDanmakuWindow(positionMs, "manual_seek")
+        val danmakuPos = applyDanmakuTimeOffsetMs(positionMs, timeOffsetMs)
+        cancelObsoleteWindowRequest(danmakuPos)
+        requestSpecialDanmakuWindow(danmakuPos, "manual_seek")
         Log.w(TAG, "⏭️ seekTo($positionMs) - refreshing danmaku")
         val shouldPlay = player?.isPlaying == true
         markExplicitSeekResync(positionMs, startedPlayback = shouldPlay)
-        if (shouldReplaceDanmakuWindow(activeSegmentIndices, positionMs, totalSegmentCount)) {
+        if (shouldReplaceDanmakuWindow(activeSegmentIndices, danmakuPos, totalSegmentCount)) {
             controller?.pause()
             controller?.clear()
-            requestSegmentWindow(positionMs, "manual_seek")
+            requestSegmentWindow(danmakuPos, "manual_seek")
         } else cachedDanmakuList?.let { list ->
             resyncDanmakuTimeline(
                 list = list,
@@ -3114,7 +3190,9 @@ class DanmakuManager private constructor(
     fun release() {
         clearTapSelection()
         Log.d(TAG, " release")
-        updateHotDanmakuPresentation(emptyList(), 0)
+        updateHotDanmakuPresentation(emptyList())
+        requestedHotDanmakuSlotHeightPx = 0f
+        config.hotBarReservedHeightPx = 0f
         clearViewReference()
         loadJob?.cancel()
         loadJob = null

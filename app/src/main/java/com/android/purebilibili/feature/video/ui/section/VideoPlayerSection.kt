@@ -27,6 +27,7 @@ import com.android.purebilibili.core.ui.components.AppText
 import com.android.purebilibili.feature.video.danmaku.DanmakuManager
 import com.android.purebilibili.feature.video.danmaku.rememberDanmakuManager
 import com.android.purebilibili.feature.video.danmaku.filterVisibleCommandDanmakuItems
+import com.android.purebilibili.feature.video.danmaku.resolveHotDanmakuSlotHeightPx
 import com.android.purebilibili.feature.video.player.MiniPlayerManager
 import com.android.purebilibili.feature.video.state.VideoPlayerState
 import com.android.purebilibili.feature.video.viewmodel.CommentSubjectKey
@@ -38,6 +39,7 @@ import com.android.purebilibili.feature.video.ui.overlay.VideoPlayerOverlay
 import com.android.purebilibili.feature.video.ui.overlay.VideoPlayerOverlayState
 import com.android.purebilibili.feature.video.ui.overlay.VideoPlayerOverlayActions
 import com.android.purebilibili.feature.video.ui.overlay.SubtitleControlUiState
+import com.android.purebilibili.feature.video.ui.overlay.hotDanmakuBarMinHeightPx
 import com.android.purebilibili.feature.video.ui.overlay.nextFullscreenSeekFeedbackEvent
 import com.android.purebilibili.feature.video.ui.overlay.resolveFullscreenDoubleTapAction
 import com.android.purebilibili.feature.video.ui.overlay.resolveLandscapeEndDrawerReservedWidthDp
@@ -59,6 +61,7 @@ import com.android.purebilibili.feature.video.ui.components.toFullscreenAspectRa
 import com.android.purebilibili.feature.video.ui.components.toVideoAspectRatio
 import com.android.purebilibili.feature.video.ui.gesture.GestureLevelOverlayHost
 import com.android.purebilibili.feature.video.ui.gesture.SwipeToFullscreenHint
+import com.android.purebilibili.feature.video.ui.gesture.detectEdgeSafeDragGestures
 import com.android.purebilibili.feature.video.ui.gesture.detectPlayerTapGestures
 import com.android.purebilibili.feature.video.ui.gesture.LockedTwoFingerSpeedAxis
 import com.android.purebilibili.feature.video.ui.gesture.TwoFingerSpeedGestureMode
@@ -1522,6 +1525,12 @@ private fun VideoPlayerSectionContent(
     val lockHaptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_GESTURES)
     //  共享弹幕管理器（用于所有 seek 路径的一致同步）
     val danmakuManager = rememberDanmakuManager(bvid)
+    val abLoopController = com.android.purebilibili.feature.video.playback.policy.rememberPlayerAbLoopController(
+        player = playerState.player,
+        identityKey = bvid to currentSeekSessionCid,
+        isScrubbingProvider = { sharedSeekSession.isSliderMoving },
+        onSeekedToA = { pointA -> danmakuManager.seekTo(pointA) },
+    )
     val danmakuTapCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
     val danmakuTapEnabled by rememberUpdatedState(
         danmakuHostActive && !isInPipMode && !suppressTransientOverlaysForTransition &&
@@ -1785,6 +1794,8 @@ private fun VideoPlayerSectionContent(
     val inputDevicePolicy = com.android.purebilibili.core.ui.adaptive.resolveInputDevicePolicy(
         com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current,
     )
+    val keyboardShortcutOverrides = com.android.purebilibili.core.ui.adaptive.LocalKeyboardShortcutOverrides.current
+    val theaterModeController = com.android.purebilibili.feature.video.screen.LocalTabletTheaterModeController.current
     if (inputDevicePolicy.enableKeyboardNavigation) {
         rootModifier = rootModifier
             .focusGroup()
@@ -1793,7 +1804,8 @@ private fun VideoPlayerSectionContent(
                     event = event,
                     isScreenLocked = isScreenLocked,
                     isInPipMode = isInPipMode,
-                    isTextInputActive = danmakuComposerVisible
+                    isTextInputActive = danmakuComposerVisible,
+                    overrides = keyboardShortcutOverrides,
                 ) ?: return@onKeyEvent false
 
                 when (action) {
@@ -1849,6 +1861,14 @@ private fun VideoPlayerSectionContent(
                             AudioManager.FLAG_SHOW_UI
                         )
                         true
+                    }
+                    PlayerKeyAction.ToggleTheaterMode -> {
+                        if (!isFullscreen && theaterModeController != null) {
+                            theaterModeController.toggle()
+                            true
+                        } else {
+                            false
+                        }
                     }
                     PlayerKeyAction.ToggleFullscreen -> {
                         onToggleFullscreen()
@@ -2273,26 +2293,9 @@ private fun VideoPlayerSectionContent(
                 }
                 if (!isInPipMode) {
                     var portraitFullscreenTriggered = false
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            portraitFullscreenTriggered = false
-                            // [新增] 如果处于缩放状态，禁用常规拖拽手势，优先处理平移
-                            if (scale > 1.01f) {  // 留一点浮点数buffer
-                                return@detectDragGestures
-                            }
-
-                            // 🔒 锁定时禁用拖拽手势
-                            if (isScreenLocked) {
-                                return@detectDragGestures
-                            }
-                            // 长按倍速进行中禁用拖拽：此时竖移在调倍速值。
-                            // 仅锁定（手指已松开、倍速固定）不阻断音量/亮度/进度滑动，
-                            // 否则锁定 2x 后侧边滑动调音量会完全失效。
-                            if (isLongPressing) {
-                                return@detectDragGestures
-                            }
-                            //  [新增] 边缘防误触检测
-                            //  如果在屏幕顶部或底部区域开始滑动，则视为系统手势（如下拉通知栏），不触发播放器手势
+                    detectEdgeSafeDragGestures(
+                        shouldIgnoreStart = { downOffset ->
+                            // 边缘防误触检测基于初始落点，避免全屏快速从系统手势边上滑越过排除区
                             val requestedBottomGestureExclusionPx = if (showControls) {
                                 // 竖屏全屏的进度条位于底部控制区上方；扩大排除区，
                                 // 避免外层“横向滑动快进”与进度条拖动同时响应，导致跨度叠加。
@@ -2317,56 +2320,67 @@ private fun VideoPlayerSectionContent(
                                 requestedBottomControlsExclusionPx = requestedBottomGestureExclusionPx,
                                 inlineTopExclusionPx = with(localDensity) { INLINE_PLAYER_TOP_GESTURE_EXCLUSION_DP.dp.toPx() },
                                 inlineBottomExclusionPx = with(localDensity) { INLINE_PLAYER_BOTTOM_GESTURE_EXCLUSION_DP.dp.toPx() },
-                                fullscreenEdgeExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_EDGE_GESTURE_EXCLUSION_DP.dp.toPx() }
+                                fullscreenEdgeExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_EDGE_GESTURE_EXCLUSION_DP.dp.toPx() },
+                                fullscreenBottomExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_BOTTOM_GESTURE_EXCLUSION_DP.dp.toPx() },
                             )
-                            val shouldIgnoreDragStart = shouldIgnoreVideoPlayerDragStart(
-                                offsetY = offset.y,
+                            shouldIgnoreVideoPlayerDragStart(
+                                offsetY = downOffset.y,
                                 containerHeightPx = size.height.toFloat(),
                                 topGestureExclusionPx = gestureExclusions.topPx,
                                 bottomGestureExclusionPx = gestureExclusions.bottomPx
                             ) || shouldIgnoreVideoPlayerHorizontalEdgeDragStart(
-                                offsetX = offset.x,
+                                offsetX = downOffset.x,
                                 containerWidthPx = size.width.toFloat(),
                                 isFullscreen = isFullscreen,
                                 edgeGestureExclusionPx = with(localDensity) { FULLSCREEN_PLAYER_EDGE_GESTURE_EXCLUSION_DP.dp.toPx() },
                             )
+                        },
+                        onDragStart = { offset ->
+                            portraitFullscreenTriggered = false
+                            // [新增] 如果处于缩放状态，禁用常规拖拽手势，优先处理平移
+                            if (scale > 1.01f) {  // 留一点浮点数buffer
+                                return@detectEdgeSafeDragGestures
+                            }
 
-                            if (shouldIgnoreDragStart) {
-                                isGestureVisible = false
-                                gestureMode = VideoGestureMode.None
-                                dragStartX = -1f
-                                // 不需要 return，直接不执行下面的初始化逻辑即可
-                            } else {
-                                isGestureVisible = true
-                                gestureMode = VideoGestureMode.None
-                                dragStartX = offset.x
-                                totalDragDistanceY = 0f
-                                totalDragDistanceX = 0f
+                            // 🔒 锁定时禁用拖拽手势
+                            if (isScreenLocked) {
+                                return@detectEdgeSafeDragGestures
+                            }
+                            // 长按倍速进行中禁用拖拽：此时竖移在调倍速值。
+                            // 仅锁定（手指已松开、倍速固定）不阻断音量/亮度/进度滑动，
+                            // 否则锁定 2x 后侧边滑动调音量会完全失效。
+                            if (isLongPressing) {
+                                return@detectEdgeSafeDragGestures
+                            }
+                            isGestureVisible = true
+                            gestureMode = VideoGestureMode.None
+                            dragStartX = offset.x
+                            totalDragDistanceY = 0f
+                            totalDragDistanceX = 0f
 
-                                startVolumeStep = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                                startPosition = resolveGestureSeekStartPositionMs(
-                                    seekSession = sharedSeekSession,
-                                    playbackPositionMs = playerState.player.currentPosition
-                                )
-                                seekTargetTime = startPosition
-                                seekCancelPending = false
+                            startVolumeStep = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            startPosition = resolveGestureSeekStartPositionMs(
+                                seekSession = sharedSeekSession,
+                                playbackPositionMs = playerState.player.currentPosition
+                            )
+                            seekTargetTime = startPosition
+                            seekCancelPending = false
 
-                                val attributes = getActivity()?.window?.attributes
-                                val currentWindowBrightness = attributes?.screenBrightness ?: -1f
+                            val attributes = getActivity()?.window?.attributes
+                            val currentWindowBrightness = attributes?.screenBrightness ?: -1f
 
-                                if (currentWindowBrightness < 0) {
-                                    try {
-                                        val sysBrightness = Settings.System.getInt(
-                                            context.contentResolver,
-                                            Settings.System.SCREEN_BRIGHTNESS
-                                        )
-                                        startBrightness = sysBrightness / 255f
-                                    } catch (e: Exception) {
-                                        startBrightness = 0.5f
-                                    }
-                                } else {
-                                    startBrightness = currentWindowBrightness
+                            if (currentWindowBrightness < 0) {
+                                try {
+                                    val sysBrightness = Settings.System.getInt(
+                                        context.contentResolver,
+                                        Settings.System.SCREEN_BRIGHTNESS
+                                    )
+                                    startBrightness = sysBrightness / 255f
+                                } catch (e: Exception) {
+                                    startBrightness = 0.5f
                                 }
+                            } else {
+                                startBrightness = currentWindowBrightness
                             }
                         },
                         onDragEnd = {
@@ -2380,7 +2394,7 @@ private fun VideoPlayerSectionContent(
                                     state = sharedSeekSession,
                                     playbackPositionMs = playerState.player.currentPosition
                                 )
-                                return@detectDragGestures
+                                return@detectEdgeSafeDragGestures
                             }
                             if (completedGestureMode == VideoGestureMode.Seek) {
                                 val currentPosition = playerState.player.currentPosition
@@ -2454,7 +2468,7 @@ private fun VideoPlayerSectionContent(
                                     state = sharedSeekSession,
                                     playbackPositionMs = playerState.player.currentPosition
                                 )
-                                return@detectDragGestures
+                                return@detectEdgeSafeDragGestures
                             }
                             isGestureVisible = false
                             if (gestureMode == VideoGestureMode.Seek) {
@@ -2468,7 +2482,7 @@ private fun VideoPlayerSectionContent(
                         onDrag = { change, dragAmount ->
                             if (portraitFullscreenTriggered) {
                                 change.consume()
-                                return@detectDragGestures
+                                return@detectEdgeSafeDragGestures
                             }
                             if (shouldConsumeExclusiveLongPressSpeedDrag(
                                     isLongPressing = isLongPressing,
@@ -2483,7 +2497,7 @@ private fun VideoPlayerSectionContent(
                                     )
                                 ) {
                                     change.consume()
-                                    return@detectDragGestures
+                                    return@detectEdgeSafeDragGestures
                                 }
                                 totalDragDistanceY += dragAmount.y
                                 val lockZoneHeightPx = longPressSpeedLockSensitivity.lockZoneHeightDp.dp.toPx()
@@ -2510,7 +2524,7 @@ private fun VideoPlayerSectionContent(
                                     ).show()
                                 }
                                 change.consume()
-                                return@detectDragGestures
+                                return@detectEdgeSafeDragGestures
                             }
                             // 如果手势不可见（即在 safe zone 中启动被忽略），则停止处理
                             if (!isGestureVisible && gestureMode == VideoGestureMode.None) {
@@ -2606,7 +2620,7 @@ private fun VideoPlayerSectionContent(
                                         com.android.purebilibili.core.util.Logger.d("VideoPlayerSection") {
                                             "🎯 Gesture ignored in center zone (fullscreen, startX=$startX, width=$width)"
                                         }
-                                        return@detectDragGestures
+                                        return@detectEdgeSafeDragGestures
                                     }
 
                                     com.android.purebilibili.core.util.Logger.d("VideoPlayerSection") {
@@ -2624,7 +2638,7 @@ private fun VideoPlayerSectionContent(
                                         change.consume()
                                         latestOnPortraitFullscreen()
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        return@detectDragGestures
+                                        return@detectEdgeSafeDragGestures
                                     }
                                     // 累积 Y 轴距离已在上方处理；这里驱动跟随提示进度。
                                     swipeToFullscreenHintFraction = resolveSwipeToFullscreenHintFraction(
@@ -4513,6 +4527,7 @@ private fun VideoPlayerSectionContent(
                     }
                 }
                 val danmakuContainerHeightPx = with(density) { maxHeight.roundToPx() }
+                val hotDanmakuBarMinHeight = hotDanmakuBarMinHeightPx()
                 val danmakuSurfaceModifier = with(density) {
                     Modifier.requiredSize(
                         width = viewportLayout.width.toDp(),
@@ -4520,6 +4535,27 @@ private fun VideoPlayerSectionContent(
                     )
                 }
                 DanmakuViewportHost(danmakuSurfaceModifier) { viewport ->
+                // 计数条显隐只改变内容，不改变引擎槽位；槽位仅在功能、视口或字号变化时更新。
+                val hotDanmakuSlotHeightPx = remember(
+                    danmakuHotBarEnabled,
+                    viewport,
+                    danmakuFontScale,
+                    danmakuLineHeight,
+                    useFullscreenDanmakuBaseline,
+                    hotDanmakuBarMinHeight,
+                ) {
+                    resolveHotDanmakuSlotHeightPx(
+                        enabled = danmakuHotBarEnabled,
+                        viewport = viewport,
+                        fontScale = danmakuFontScale,
+                        lineHeightMultiplier = danmakuLineHeight,
+                        isFullscreen = useFullscreenDanmakuBaseline,
+                        barMinHeightPx = hotDanmakuBarMinHeight,
+                    )
+                }
+                SideEffect {
+                    danmakuManager.updateHotDanmakuSlotHeight(hotDanmakuSlotHeightPx)
+                }
                 VideoDanmakuRenderSurface(
                     manager = danmakuManager,
                     viewport = viewport,
@@ -4533,7 +4569,7 @@ private fun VideoPlayerSectionContent(
                     viewport = viewport,
                     danmakuList = advancedDanmakuList,
                     player = playerState.player,
-                    opacity = danmakuOpacity,
+                    opacity = danmakuManager.liveOpacity,
                     fontScale = danmakuFontScale,
                     fontWeight = danmakuFontWeight,
                     renderingPaused = !shouldShowDanmakuLayer || !danmakuRenderWorkActive,
@@ -4543,7 +4579,7 @@ private fun VideoPlayerSectionContent(
                     items = basDanmakuList,
                     player = playerState.player,
                     viewport = viewport,
-                    opacity = danmakuOpacity,
+                    opacity = danmakuManager.liveOpacity,
                     fontScale = danmakuFontScale,
                     fontWeight = danmakuFontWeight,
                     renderingPaused = !shouldShowDanmakuLayer || !danmakuRenderWorkActive,
@@ -4731,6 +4767,8 @@ private fun VideoPlayerSectionContent(
                             likedDanmakuIds = hotBarLikedDanmakuIds,
                             onLikeDanmaku = actions.onLikeDanmakuToggle,
                             isSending = sendingHotDanmaku || isSendingDanmakuComposer,
+                            opacity = danmakuManager.liveOpacity,
+                            slotHeight = with(density) { hotDanmakuSlotHeightPx.toDp() },
                             onSendSame = sendSameDanmaku?.takeIf { canSendHotBarDanmaku }?.let { send ->
                                 { message: String ->
                                     if (!sendingHotDanmaku && !isSendingDanmakuComposer) {
@@ -4876,15 +4914,17 @@ private fun VideoPlayerSectionContent(
             subtitleBelongsToCurrentVideo,
             subtitleDisplayModePreference,
             subtitlePrimaryAvailable,
-            subtitleSecondaryAvailable
+            subtitleSecondaryAvailable,
+            subtitlePrimaryTrackBound,
+            subtitleSecondaryTrackBound
         ) {
             if (!subtitleFeatureEnabled || !subtitleBelongsToCurrentVideo) {
                 SubtitleDisplayMode.OFF
             } else {
                 normalizeSubtitleDisplayMode(
                     preferredMode = subtitleDisplayModePreference,
-                    hasPrimaryTrack = subtitlePrimaryAvailable,
-                    hasSecondaryTrack = subtitleSecondaryAvailable
+                    hasPrimaryTrack = subtitlePrimaryTrackBound || subtitlePrimaryAvailable,
+                    hasSecondaryTrack = subtitleSecondaryTrackBound || subtitleSecondaryAvailable
                 )
             }
         }
@@ -5335,6 +5375,7 @@ private fun VideoPlayerSectionContent(
                     coverUrl = uiState.info.pic,
                     isFlippedHorizontal = effectiveFlippedHorizontal,
                     isFlippedVertical = effectiveFlippedVertical,
+                    videoScale = scale,
                     //  [新增] CDN 线路切换
                     currentCdnIndex = currentCdnIndex,
                     cdnCount = cdnCount,
@@ -5359,6 +5400,8 @@ private fun VideoPlayerSectionContent(
                     }.orEmpty(),
                     //  [新增] 定时关闭
                     sleepTimerMinutes = sleepTimerMinutes,
+                    abLoopState = abLoopController.state,
+                    danmakuTimeOffsetMs = danmakuManager.timeOffsetMs,
                     // 🖼️ [新增] 视频预览图数据
                     videoshotData = videoshotData,
                     // 📖 [新增] 视频章节数据
@@ -5400,6 +5443,8 @@ private fun VideoPlayerSectionContent(
                     // [新增] 侧边栏抽屉数据与交互
                     relatedVideos = relatedVideos,
                     ugcSeason = ugcSeason,
+                    aiSummary = uiState.aiSummary,
+                    aiSummaryPrompt = uiState.aiSummaryPrompt,
                     isFollowed = isFollowed,
                     followStatusKnown = followStatusKnown,
                     isLiked = isLiked,
@@ -5448,6 +5493,38 @@ private fun VideoPlayerSectionContent(
                     onSponsorContributionMarkWholeVideo = onSponsorContributionMarkWholeVideo,
                     onSponsorContributionCancel = onSponsorContributionCancel,
                     onDanmakuInputClick = onDanmakuInputClick,
+                    onDanmakuTimeOffsetMsChange = { offsetMs ->
+                        danmakuManager.updateTimeOffsetMs(offsetMs)
+                    },
+                    onExportDanmaku = { format ->
+                        val (exportCid, items) = danmakuManager.snapshotExportableDanmaku()
+                        if (items.isEmpty()) {
+                            Toast.makeText(context, "当前暂无可导出的弹幕", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val title = uiState.info.title.ifBlank { bvid }
+                            scope.launch {
+                                val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                    when (format) {
+                                        com.android.purebilibili.feature.video.danmaku.DanmakuExportFormat.XML ->
+                                            com.android.purebilibili.feature.video.danmaku.encodeDanmakuToBilibiliXml(exportCid, items)
+                                        com.android.purebilibili.feature.video.danmaku.DanmakuExportFormat.ASS ->
+                                            com.android.purebilibili.feature.video.danmaku.encodeDanmakuToAss(title, items)
+                                    }
+                                }
+                                val result = com.android.purebilibili.feature.video.danmaku.exportDanmakuToDownloads(
+                                    context = context,
+                                    fileNameBase = "${title}_${bvid}",
+                                    format = format,
+                                    content = content,
+                                )
+                                result.onSuccess { path ->
+                                    Toast.makeText(context, "已导出 ${items.size} 条弹幕至 $path", Toast.LENGTH_LONG).show()
+                                }.onFailure { error ->
+                                    Toast.makeText(context, "导出弹幕失败：${error.message ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
                     onDismissDanmakuComposer = onDismissDanmakuComposer,
                     onSendDanmakuComposer = onSendDanmakuComposer,
                     onDanmakuComposerDraftChange = onDanmakuComposerDraftChange,
@@ -5473,6 +5550,15 @@ private fun VideoPlayerSectionContent(
                             Toast.makeText(context, "HDR 原色输出不支持画面翻转，请先切换至普通画质", Toast.LENGTH_SHORT).show()
                         } else isFlippedVertical = !isFlippedVertical
                     },
+                    onVideoScaleChange = { nextScale ->
+                        val clamped = nextScale.coerceIn(0.5f, 2.0f)
+                        scale = clamped
+                        if (kotlin.math.abs(clamped - 1f) < 0.01f) {
+                            scale = 1f
+                            panX = 0f
+                            panY = 0f
+                        }
+                    },
                     //  [新增] 画质切换（用于设置面板）
                     onQualityChange = { qid ->
                         onQualityChange(qid)
@@ -5494,6 +5580,9 @@ private fun VideoPlayerSectionContent(
                         },
                     ),
                     onSleepTimerChange = onSleepTimerChange,
+                    onSetAbLoopPointA = abLoopController.setPointA,
+                    onSetAbLoopPointB = abLoopController.setPointB,
+                    onClearAbLoop = abLoopController.clear,
                     onPortraitFullscreen = onPortraitFullscreen,
                     // 📲 [新增] 小窗模式
                     // 📲 [新增] 小窗模式

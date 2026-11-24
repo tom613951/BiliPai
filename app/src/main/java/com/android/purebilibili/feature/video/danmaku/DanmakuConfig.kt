@@ -58,6 +58,7 @@ class DanmakuConfig {
     var mergeDuplicates = true
     var duplicateMergeWindowMs = 15_000
     var duplicateMergeCountThreshold = 2
+    var duplicateSuppressThreshold = 0
 
     // [新增] 类型屏蔽（与 B 站 blockxxx 语义对齐，true=显示/不屏蔽）
     var allowScroll = true
@@ -74,7 +75,7 @@ class DanmakuConfig {
     
     // 顶部边距（像素）
     var topMarginPx = 0
-    /** 顶部计数条实测高度，普通和海量模式均从显示区域中预留。 */
+    /** 顶部计数条的固定槽位高度，普通和海量模式均从显示区域中预留。 */
     var hotBarReservedHeightPx = 0f
     
     /** Resolve app settings into the renderer-neutral configuration contract. */
@@ -269,6 +270,32 @@ internal fun resolveDanmakuHotBarReservedHeightPx(
     viewportHeightPx: Int,
 ): Float = if (!requestedHeightPx.isFinite()) 0f
 else requestedHeightPx.coerceIn(0f, viewportHeightPx.coerceAtLeast(0).toFloat())
+
+/**
+ * One stable band for the counted-danmaku bar. It depends only on layout
+ * inputs, never on the bar's current items, so showing or hiding a banner
+ * cannot reflow the rest of the danmaku layer.
+ */
+internal fun resolveHotDanmakuSlotHeightPx(
+    enabled: Boolean,
+    viewport: DanmakuViewport,
+    fontScale: Float,
+    lineHeightMultiplier: Float,
+    isFullscreen: Boolean,
+    barMinHeightPx: Float,
+): Float {
+    if (!enabled || viewport.heightPx <= 0) return 0f
+    val lineHeightPx = resolveDanmakuLayerLineHeightPx(
+        fontSize = resolveDanmakuTextSizePx(viewport.density, fontScale, isFullscreen),
+        lineHeightMultiplier = lineHeightMultiplier,
+    )
+    val barHeightPx = barMinHeightPx.takeIf { it.isFinite() && it > 0f } ?: 0f
+    val lineHeight = lineHeightPx.takeIf { it.isFinite() && it > 0f } ?: 0f
+    return resolveDanmakuHotBarReservedHeightPx(
+        requestedHeightPx = maxOf(lineHeight, barHeightPx),
+        viewportHeightPx = viewport.heightPx,
+    )
+}
 
 internal fun resolveDanmakuMinimumVisibleLines(displayAreaRatio: Float): Int {
     return when {
