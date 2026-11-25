@@ -534,6 +534,19 @@ internal fun shouldShowDanmakuLayers(
     return true
 }
 
+/**
+ * 弹幕渲染不能依赖窗口焦点：小窗/分屏失焦时窗口仍可见，进度条曾因同一原因停住。
+ * PiP 下 Activity 可能只到 STARTED，仍应继续渲染；真正进后台（STOPPED）才停。
+ */
+internal fun shouldRunDanmakuRenderWork(
+    pageActive: Boolean,
+    resumed: Boolean,
+    started: Boolean,
+    isInPipMode: Boolean
+): Boolean {
+    return pageActive && (resumed || (isInPipMode && started))
+}
+
 internal fun shouldPollVideoPlayerProgress(
     controlsVisible: Boolean,
     gestureVisible: Boolean,
@@ -677,8 +690,185 @@ internal fun shouldTriggerSeekStepHaptic(
     return previousTargetMs / stepMs != currentTargetMs / stepMs
 }
 
-internal fun resolveOrientationSwitchHintText(isFullscreen: Boolean): String {
-    return if (isFullscreen) "已切换到横屏" else "已切换到竖屏"
+internal val LONG_PRESS_SLIDE_SPEED_PRESETS = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f)
+internal const val LONG_PRESS_SLIDE_SPEED_STEP_DP = 44f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_MIN = 0.5f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_MAX = 5.0f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_STEP = 0.1f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_DEADZONE_DP = 18f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_STEP_DP = 14f
+internal const val LONG_PRESS_CONTINUOUS_SPEED_APPLY_THROTTLE_MS = 55L
+internal const val LONG_PRESS_CONTINUOUS_SPEED_HAPTIC_THROTTLE_MS = 45L
+
+internal fun resolveLongPressSlideSpeed(
+    initialSpeed: Float,
+    accumulatedDragXPx: Float,
+    stepPx: Float,
+    presets: List<Float> = LONG_PRESS_SLIDE_SPEED_PRESETS,
+): Float {
+    if (presets.isEmpty() || stepPx <= 0f) return initialSpeed
+    val baseIndex = presets.indices.minByOrNull { kotlin.math.abs(presets[it] - initialSpeed) } ?: 0
+    val deltaSteps = (accumulatedDragXPx / stepPx).toInt()
+    val targetIndex = (baseIndex + deltaSteps).coerceIn(0, presets.lastIndex)
+    return presets[targetIndex]
+}
+
+/**
+ * 长按左右无极调速（0.5x–5.0x，步长 0.1x）：
+ * 保留水平起手死区防止下滑锁速时误蹭偏倍速；按 0.1x 量化输出消除浮点尾数误差。
+ */
+internal fun resolveLongPressContinuousSlideSpeed(
+    initialSpeed: Float,
+    accumulatedDragXPx: Float,
+    deadzonePx: Float,
+    stepPx: Float,
+    minSpeed: Float = LONG_PRESS_CONTINUOUS_SPEED_MIN,
+    maxSpeed: Float = LONG_PRESS_CONTINUOUS_SPEED_MAX,
+    step: Float = LONG_PRESS_CONTINUOUS_SPEED_STEP,
+): Float {
+    val safeMin = minOf(minSpeed, maxSpeed)
+    val safeMax = maxOf(minSpeed, maxSpeed)
+    val quantizedBase = (kotlin.math.round(initialSpeed.coerceIn(safeMin, safeMax) / step) * step)
+        .coerceIn(safeMin, safeMax)
+    if (stepPx <= 0f || step <= 0f) return roundSpeedToSingleDecimalIfClose(quantizedBase)
+    val absDrag = kotlin.math.abs(accumulatedDragXPx)
+    val safeDeadzone = deadzonePx.coerceAtLeast(0f)
+    if (absDrag <= safeDeadzone) return roundSpeedToSingleDecimalIfClose(quantizedBase)
+    val effectiveDrag = if (accumulatedDragXPx > 0f) {
+        accumulatedDragXPx - safeDeadzone
+    } else {
+        accumulatedDragXPx + safeDeadzone
+    }
+    val deltaSteps = (effectiveDrag / stepPx).toInt()
+    val rawTarget = quantizedBase + deltaSteps * step
+    val clamped = rawTarget.coerceIn(safeMin, safeMax)
+    return roundSpeedToSingleDecimalIfClose(clamped)
+}
+
+private fun roundSpeedToSingleDecimalIfClose(value: Float): Float {
+    val tenths = kotlin.math.round(value * 10f) / 10f
+    return if (kotlin.math.abs(value - tenths) < 0.005f) tenths else value
+}
+
+internal fun isLongPressSpeedAnchorTick(speed: Float): Boolean {
+    val anchors = floatArrayOf(0.5f, 1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 4.0f, 5.0f)
+    return anchors.any { kotlin.math.abs(speed - it) < 0.02f }
+}
+
+internal fun formatLongPressSpeedLabel(speed: Float): String {
+    val scaled100 = kotlin.math.round(speed * 100f).toInt()
+    val whole = scaled100 / 100
+    val frac = scaled100 % 100
+    return when {
+        frac == 0 -> "${whole}.0x"
+        frac % 10 == 0 -> "${whole}.${frac / 10}x"
+        else -> "${whole}.${frac.toString().padStart(2, '0')}x"
+    }
+}
+
+internal fun normalizeLongPressSpeedFraction(
+    speed: Float,
+    minSpeed: Float = LONG_PRESS_CONTINUOUS_SPEED_MIN,
+    maxSpeed: Float = LONG_PRESS_CONTINUOUS_SPEED_MAX,
+): Float {
+    if (maxSpeed <= minSpeed) return 0f
+    return ((speed - minSpeed) / (maxSpeed - minSpeed)).coerceIn(0f, 1f)
+}
+
+internal data class PinchZoomReleaseResult(
+    val scale: Float,
+    val resetPan: Boolean,
+    val snappedToFill: Boolean,
+)
+
+internal fun resolveFillZoomScale(
+    containerWidth: Int,
+    containerHeight: Int,
+    videoWidth: Int,
+    videoHeight: Int,
+): Float {
+    if (containerWidth <= 0 || containerHeight <= 0 || videoWidth <= 0 || videoHeight <= 0) return 1f
+    val containerAspect = containerWidth.toFloat() / containerHeight.toFloat()
+    val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+    val ratio = maxOf(containerAspect / videoAspect, videoAspect / containerAspect)
+    return if (ratio > 1.04f && ratio.isFinite()) ratio.coerceAtMost(3f) else 1f
+}
+
+internal fun resolvePinchZoomReleaseScale(
+    currentScale: Float,
+    fillScale: Float,
+    snapEnabled: Boolean,
+): PinchZoomReleaseResult {
+    if (!snapEnabled) {
+        return PinchZoomReleaseResult(scale = currentScale, resetPan = currentScale <= 1.01f, snappedToFill = false)
+    }
+    if (currentScale < 1.06f) {
+        return PinchZoomReleaseResult(scale = 1f, resetPan = true, snappedToFill = false)
+    }
+    if (fillScale > 1.05f && kotlin.math.abs(currentScale - fillScale) <= 0.14f) {
+        return PinchZoomReleaseResult(scale = fillScale, resetPan = true, snappedToFill = true)
+    }
+    return PinchZoomReleaseResult(scale = currentScale, resetPan = false, snappedToFill = false)
+}
+
+internal fun formatPinchZoomRestoreLabel(scale: Float, showScaleBadge: Boolean): String {
+    if (!showScaleBadge) return "还原画面"
+    return String.format(java.util.Locale.US, "%.1fx · 还原", scale)
+}
+
+internal data class ChapterSkipTarget(
+    val positionMs: Long,
+    val title: String,
+    val isNext: Boolean,
+)
+
+internal fun resolveAdjacentChapterTarget(
+    currentPositionMs: Long,
+    viewPoints: List<com.android.purebilibili.data.model.response.ViewPoint>,
+    forward: Boolean,
+): ChapterSkipTarget? {
+    val chapters = viewPoints
+        .filter { it.from >= 0 }
+        .sortedBy { it.from }
+    if (chapters.isEmpty()) return null
+    if (forward) {
+        val next = chapters.firstOrNull { it.from.toLong() * 1000L > currentPositionMs + 1_500L }
+            ?: return null
+        return ChapterSkipTarget(
+            positionMs = next.from.toLong() * 1000L,
+            title = next.content.trim().ifEmpty { "下一章" },
+            isNext = true,
+        )
+    }
+    val currentIndex = chapters.indexOfLast { it.from.toLong() * 1000L <= currentPositionMs }
+    if (currentIndex < 0) return null
+    val currentStartMs = chapters[currentIndex].from.toLong() * 1000L
+    val targetChapter = if (currentPositionMs - currentStartMs > 3_000L || currentIndex == 0) {
+        chapters[currentIndex]
+    } else {
+        chapters[currentIndex - 1]
+    }
+    return ChapterSkipTarget(
+        positionMs = targetChapter.from.toLong() * 1000L,
+        title = targetChapter.content.trim().ifEmpty { "上一章" },
+        isNext = false,
+    )
+}
+
+internal const val PORTRAIT_SWIPE_DOWN_MINIMIZE_THRESHOLD_DP = 64f
+
+internal fun shouldTriggerPortraitSwipeDownMinimize(
+    enabled: Boolean,
+    isFullscreen: Boolean,
+    isPortraitFullscreen: Boolean,
+    isInPipMode: Boolean,
+    reverseGesture: Boolean,
+    totalDragDistanceY: Float,
+    thresholdPx: Float,
+): Boolean {
+    if (!enabled || isFullscreen || isPortraitFullscreen || isInPipMode || reverseGesture) return false
+    if (thresholdPx <= 0f) return false
+    return totalDragDistanceY >= thresholdPx
 }
 
 /** 上滑/下滑触发全屏的拖动阈值；跟随提示与松手判定共用同一距离。 */

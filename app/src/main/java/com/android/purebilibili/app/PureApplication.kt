@@ -101,6 +101,7 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
     //  保存 ImageLoader 引用以便在 onTrimMemory 中使用
     private var _imageLoader: ImageLoader? = null
     private var imageMemoryBudget: BackgroundImageCacheBudget? = null
+    private var deepBackgroundTrimJob: kotlinx.coroutines.Job? = null
     private var fairMemoryTrimReceiver: android.content.BroadcastReceiver? = null
     private var launcherIconUiModeSnapshot: Int? = null
     private val telemetryInitialized = AtomicBoolean(false)
@@ -108,14 +109,57 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
     private val backgroundImageTrimListener = object : BackgroundManager.BackgroundStateListener {
         override fun onEnterBackground() {
             // 系统可能在延迟任务前冻结进程，进入后台时就收紧预算并释放可重建缓存。
-            if (StartupRecovery.isRecoveryMode || !releaseBackgroundPageImages()) return
+            if (StartupRecovery.isRecoveryMode) return
+            // 转场离屏快照与源卡位图仅用于前后台可见时的开合动画，切后台即可释放。
+            releaseTransitionVisualCaches()
+            // 即使当前处于 PiP 过渡豁免窗口，可重建数据缓存与 15 秒深度后台回收仍需照常安排；
+            // 避免 pendingPlaybackRoutePip 瞬态标志导致整次后台驻留跳过回收。
+            releaseBackgroundPageImages()
             releaseRebuildableMemoryCaches()
+            scheduleDeepBackgroundMemoryTrim()
         }
 
         override fun onEnterForeground() {
+            deepBackgroundTrimJob?.cancel()
+            deepBackgroundTrimJob = null
             imageMemoryBudget?.foreground()
             AppPageImageMemory.resume()
         }
+    }
+
+    private fun scheduleDeepBackgroundMemoryTrim() {
+        deepBackgroundTrimJob?.cancel()
+        // 持续驻留后台超过 15 秒后进一步清空图片强缓存、闲置播放器缓冲与空闲连接，
+        // 避免大内存设备上系统迟迟不发 TRIM_MEMORY_BACKGROUND 导致后台体积长期居高不下。
+        deepBackgroundTrimJob = AppScope.ioScope.launch {
+            delay(15_000L)
+            val shouldEvictIdleConnections = kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+                if (!BackgroundManager.isInBackground) return@withContext false
+                val miniPlayer = com.android.purebilibili.feature.video.player.MiniPlayerManager.getInstanceOrNull()
+                if (miniPlayer?.shouldKeepPlaybackForPipTransition() == true) return@withContext false
+                releaseTransitionVisualCaches()
+                releaseBackgroundPageImages()
+                com.android.purebilibili.core.util.CardPositionManager.clear()
+                _imageLoader?.memoryCache?.clear()
+                com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.clearMemoryCache()
+                com.android.purebilibili.feature.video.danmaku.DanmakuSessionFactory.trimCachesForBackground()
+                releaseRebuildableMemoryCaches()
+                miniPlayer?.onMemoryPressureTrim(
+                    level = ComponentCallbacks2.TRIM_MEMORY_BACKGROUND,
+                    requestIdlePlaybackRelease = true,
+                )
+                val isAudioPlaying = miniPlayer?.let { it.isActive && it.player?.isPlaying == true } ?: false
+                !isAudioPlaying
+            }
+            if (shouldEvictIdleConnections) {
+                NetworkModule.evictIdleConnections()
+            }
+        }
+    }
+
+    private fun releaseTransitionVisualCaches() {
+        com.android.purebilibili.core.ui.transition.VideoCardTransitionSnapshotRegistry.releaseAll()
+        com.android.purebilibili.core.util.CardPositionManager.clearNativeVideoCardLayers()
     }
 
     private fun releasePageImageReferences() {
@@ -341,8 +385,11 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
             scope = AppScope.ioScope,
             trim = {
                 kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+                    releaseTransitionVisualCaches()
                     releaseBackgroundPageImages()
                     _imageLoader?.memoryCache?.clear()
+                    com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.clearMemoryCache()
+                    com.android.purebilibili.feature.video.danmaku.DanmakuSessionFactory.trimCachesForBackground()
                 }
                 releaseRebuildableMemoryCaches()
                 // 预警只清可重建缓存，不重置播放器、音频会话、画中画或活跃网络连接。
@@ -457,26 +504,31 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         Logger.recordStartupStage(task.id)
         when (task.id) {
             "plugin_manager_context_init" -> PluginManager.initialize(this)
-            "network_module_init" -> NetworkModule.init(
-                this,
-                com.android.purebilibili.core.network.CoreNetworkConfig(
-                    debug = BuildConfig.DEBUG,
-                    allowHardcodedDnsFallback = BuildConfig.ALLOW_HARDCODED_DNS_FALLBACK,
-                    log = { level, tag, message, error ->
-                        when (level) {
-                            "D" -> com.android.purebilibili.core.util.Logger.d(tag, message)
-                            "W" -> com.android.purebilibili.core.util.Logger.w(tag, message, error)
-                            "E" -> com.android.purebilibili.core.util.Logger.e(tag, message, error)
-                        }
-                    },
-                    reportApiError = { endpoint, code, message ->
-                        com.android.purebilibili.core.util.CrashReporter.reportApiError(
-                            endpoint = endpoint, httpCode = code, errorMessage = message,
-                        )
-                    },
-                    isPrivacyModeEnabled = SettingsManager::isPrivacyModeEnabledSync,
-                ),
-            )
+            "network_module_init" -> {
+                NetworkModule.init(
+                    this,
+                    com.android.purebilibili.core.network.CoreNetworkConfig(
+                        debug = BuildConfig.DEBUG,
+                        allowHardcodedDnsFallback = BuildConfig.ALLOW_HARDCODED_DNS_FALLBACK,
+                        log = { level, tag, message, error ->
+                            when (level) {
+                                "D" -> com.android.purebilibili.core.util.Logger.d(tag, message)
+                                "W" -> com.android.purebilibili.core.util.Logger.w(tag, message, error)
+                                "E" -> com.android.purebilibili.core.util.Logger.e(tag, message, error)
+                            }
+                        },
+                        reportApiError = { endpoint, code, message ->
+                            com.android.purebilibili.core.util.CrashReporter.reportApiError(
+                                endpoint = endpoint, httpCode = code, errorMessage = message,
+                            )
+                        },
+                        isPrivacyModeEnabled = SettingsManager::isPrivacyModeEnabledSync,
+                    ),
+                )
+                AppScope.ioScope.launch {
+                    NetworkModule.prewarmCoreHosts()
+                }
+            }
             "token_manager_init" -> TokenManager.init(this)
             "wbi_key_restore" -> WbiKeyManager.restoreFromStorage(this)
             "video_repository_init" -> com.android.purebilibili.data.repository.VideoRepository.init(this)
@@ -553,7 +605,9 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         //  [BiliPai 移植] 推荐流过滤(默认关闭, 可在插件中心启用)
         PluginManager.register(com.android.purebilibili.feature.plugin.BiliPaiFeedFilterPlugin())
         PluginManager.register(com.android.purebilibili.feature.plugin.SubscriptionFeedPlugin())
-        Logger.d(PureApplicationRuntimeConfig.TAG, " Plugin system initialized with 12 built-in plugins")
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.initialize(this)
+        PluginManager.register(com.android.purebilibili.feature.plugin.GamepadControlPlugin())
+        Logger.d(PureApplicationRuntimeConfig.TAG, " Plugin system initialized with 13 built-in plugins")
 
         AppScope.ioScope.launch {
             com.android.purebilibili.core.plugin.json.JsonPluginManager.initialize(this@PureApplication)
@@ -656,6 +710,12 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         if (StartupRecovery.isRecoveryMode) return
         // Android 14 起，前后台生命周期仍会主动回收，系统回调可补充清理。
         val plan = PureApplicationRuntimeConfig.resolveBackgroundMemoryTrimPlan(level)
+        if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN ||
+            plan.clearImageMemoryCache ||
+            plan.releaseDerivedCaches
+        ) {
+            releaseTransitionVisualCaches()
+        }
         if (plan.clearImageMemoryCache) releaseBackgroundPageImages()
         if (plan.imageCacheTrimLevel != null) {
             _imageLoader?.memoryCache?.apply {
@@ -683,6 +743,9 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         // （BACKGROUND / MODERATE / COMPLETE）或前台临界（RUNNING_CRITICAL）时执行。
         // 壁纸调色板与封面代表色表体积可忽略，重建代价却是「解码 + Palette 聚类」，故不清理。
         if (plan.releaseDerivedCaches) {
+            if (BackgroundManager.isInBackground) {
+                com.android.purebilibili.feature.video.danmaku.DanmakuSessionFactory.trimCachesForBackground()
+            }
             releaseRebuildableMemoryCaches()
         }
 
@@ -710,6 +773,14 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         com.android.purebilibili.core.cache.PlayUrlCache.clear()
         com.android.purebilibili.data.repository.VideoRepository.clearVideoDetailCaches()
         com.android.purebilibili.data.repository.VideoRepository.clearSubtitleCueCache()
+        com.android.purebilibili.data.repository.VideoCatalogRepository.clearRelatedVideosCache()
+        com.android.purebilibili.data.repository.VideoCatalogRepository.clearCreatorCardStatsCache()
+        com.android.purebilibili.feature.message.MessageUserInfoLoader.clear()
+        com.android.purebilibili.feature.video.danmaku.clearDanmakuBlockRuleMatcherCache()
+        com.android.purebilibili.feature.video.viewmodel.sharedVideoCommentCache.clear()
+        com.android.purebilibili.feature.video.ui.components.clearReplyPreviewCache()
+        com.android.purebilibili.feature.dynamic.components.DynamicEmoteCatalog.clear()
+        com.android.purebilibili.core.plugin.js.ExternalMediaLaunchStore.trimToSize(4)
     }
 
     override fun onLowMemory() {
@@ -719,10 +790,12 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
         val plan = PureApplicationRuntimeConfig.resolveBackgroundMemoryTrimPlan(
             ComponentCallbacks2.TRIM_MEMORY_COMPLETE
         )
+        releaseTransitionVisualCaches()
         releaseBackgroundPageImages()
         _imageLoader?.memoryCache?.clear()
         com.android.purebilibili.core.plugin.feed.PublicContentImageLoader.clearMemoryCache()
-        com.android.purebilibili.data.repository.DanmakuContentRepository.clearCache()
+        com.android.purebilibili.feature.video.danmaku.DanmakuSessionFactory.trimCachesForBackground()
+        releaseRebuildableMemoryCaches()
         if (plan.notifyPlayerHeavyOptimization) {
             com.android.purebilibili.feature.video.player.MiniPlayerManager
                 .getInstanceOrNull()
@@ -731,14 +804,6 @@ class PureApplication : Application(), SingletonImageLoader.Factory, ComponentCa
                     requestIdlePlaybackRelease = plan.requestIdlePlaybackRelease
                 )
         }
-        // 同 releaseRebuildableMemoryCaches：容量 512 已被扩过，trimToSize(64) 是"砍到 1/8"，
-        // 单次淘汰比例比容量 128 时代更大，回收更激进。淘汰到 64 之后上限仍是 512，
-        // 会随使用自然回涨 —— 预期行为，不要改成 clear()。
-        com.android.purebilibili.feature.home.components.cards.VideoCardCoverColorStore
-            .trimToSize(BACKGROUND_COVER_COLOR_CACHE_MAX_ENTRIES)
-        com.android.purebilibili.core.cache.PlayUrlCache.clear()
-        com.android.purebilibili.data.repository.VideoRepository.clearVideoDetailCaches()
-        com.android.purebilibili.data.repository.VideoRepository.clearSubtitleCueCache()
         NetworkModule.evictIdleConnections()
         Logger.d(PureApplicationRuntimeConfig.TAG, "🚨 onLowMemory, cleared all caches")
     }

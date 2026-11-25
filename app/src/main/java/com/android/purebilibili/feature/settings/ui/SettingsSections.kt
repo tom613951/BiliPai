@@ -756,6 +756,14 @@ internal fun SettingsRootCategoryContent(
                     onHeroHeightChanged = onAboutHeroHeightChanged,
                 )
             }
+            SettingsRootCategory.GAMEPAD_CONTROL -> {
+                SettingsRootCategoryEntranceSection {
+                    com.android.purebilibili.feature.settings.GamepadControlSettingsBody(
+                        showMasterSwitch = true,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -1945,9 +1953,10 @@ fun AboutSection(
     afterOverview: (@Composable () -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val appIconAppearance by SettingsManager.getAppIconAppearance(context)
+    val initialIconAppearance = remember(context) { SettingsManager.getAppIconAppearanceSync(context) }
+    val appIconAppearance by remember(context) { SettingsManager.getAppIconAppearance(context) }
         .collectAsStateWithLifecycle(
-            initialValue = SettingsManager.getAppIconAppearanceSync(context)
+            initialValue = initialIconAppearance
         )
     val appIconRes = remember(appIconKey, appIconAppearance) {
         resolveIconOptionPreviewRes(appIconKey, appIconAppearance)

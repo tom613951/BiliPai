@@ -2,6 +2,7 @@ package com.android.purebilibili.feature.settings
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class SettingsRootCategoryPolicyTest {
 
@@ -35,6 +36,7 @@ class SettingsRootCategoryPolicyTest {
                 "隐私与权限",
                 "下载与备份",
                 "插件中心",
+                "手柄控制",
                 "帮助与关于",
             ),
             resolveSettingsRootCategoryOrder().map { it.title },
@@ -68,6 +70,10 @@ class SettingsRootCategoryPolicyTest {
             resolveSettingsRootCategoryForSearchTarget(SettingsSearchTarget.PLUGINS),
         )
         assertEquals(
+            SettingsRootCategory.PLUGINS_EXTENSIONS,
+            resolveSettingsRootCategoryForSearchTarget(SettingsSearchTarget.GAMEPAD_CONTROL),
+        )
+        assertEquals(
             SettingsRootCategory.SYSTEM_ABOUT,
             resolveSettingsRootCategoryForSearchTarget(SettingsSearchTarget.TELEGRAM),
         )
@@ -79,6 +85,8 @@ class SettingsRootCategoryPolicyTest {
             SettingsRootCategory.SYSTEM_ABOUT,
             resolveSettingsRootCategoryForSearchTarget(SettingsSearchTarget.EXPORT_LOGS),
         )
+        assertFalse(SettingsRootCategory.PLUGINS_EXTENSIONS.title.contains("Beta", ignoreCase = true))
+        assertFalse(SettingsRootCategory.PLUGINS_EXTENSIONS.subtitle.contains("Beta", ignoreCase = true))
     }
 
     @Suppress("DEPRECATION")

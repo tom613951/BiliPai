@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -68,6 +69,7 @@ enum class ExternalPlaylistSource {
     UNKNOWN
 }
 
+@androidx.compose.runtime.Immutable
 data class PlaylistUiState(
     val playMode: PlayMode = PlayMode.SEQUENTIAL,
     val playlist: List<PlaylistItem> = emptyList(),
@@ -426,7 +428,9 @@ object PlaylistManager {
             Logger.d(TAG, " ${item.bvid} 已在播放列表中")
             return
         }
-        _playlist.value = _playlist.value + item
+        _playlist.update { current ->
+            if (current.any { it.bvid == item.bvid }) current else current + item
+        }
         Logger.d(TAG, "➕ 添加到播放列表: ${item.title}")
         persistState()
     }
@@ -445,11 +449,16 @@ object PlaylistManager {
     }
 
     private fun addAllToCurrentPlaylist(items: List<PlaylistItem>) {
-        val existingBvids = _playlist.value.map { it.bvid }.toSet()
-        val newItems = items.filter { it.bvid !in existingBvids }
-        if (newItems.isNotEmpty()) {
-            _playlist.value = _playlist.value + newItems
-            Logger.d(TAG, "➕ 批量添加 ${newItems.size} 项到播放列表")
+        if (items.isEmpty()) return
+        val beforeSize = _playlist.value.size
+        _playlist.update { current ->
+            val existingBvids = current.mapTo(HashSet(current.size)) { it.bvid }
+            val newItems = items.filter { existingBvids.add(it.bvid) }
+            if (newItems.isEmpty()) current else current + newItems
+        }
+        val addedCount = _playlist.value.size - beforeSize
+        if (addedCount > 0) {
+            Logger.d(TAG, "➕ 批量添加 $addedCount 项到播放列表")
             persistState()
         }
     }
@@ -460,12 +469,18 @@ object PlaylistManager {
     fun removeFromPlaylist(bvid: String) {
         val index = _playlist.value.indexOfFirst { it.bvid == bvid }
         if (index >= 0) {
-            _playlist.value = _playlist.value.toMutableList().apply { removeAt(index) }
+            _playlist.update { current ->
+                val targetIndex = current.indexOfFirst { it.bvid == bvid }
+                if (targetIndex < 0) current else current.toMutableList().apply { removeAt(targetIndex) }
+            }
+            val newLastIndex = _playlist.value.lastIndex.coerceAtLeast(0)
             // 调整当前索引
-            if (index < _currentIndex.value) {
-                _currentIndex.value = _currentIndex.value - 1
-            } else if (index == _currentIndex.value && _currentIndex.value >= _playlist.value.size) {
-                _currentIndex.value = _playlist.value.lastIndex.coerceAtLeast(0)
+            _currentIndex.update { currentIdx ->
+                when {
+                    index < currentIdx -> currentIdx - 1
+                    index == currentIdx && currentIdx > newLastIndex -> newLastIndex
+                    else -> currentIdx
+                }
             }
             Logger.d(TAG, "➖ 从播放列表移除: $bvid")
             persistState()
@@ -500,7 +515,7 @@ object PlaylistManager {
         beginPlaylistSession()
         val previousProgress = snapshotShuffleProgress()
         val updated = old.toMutableList().apply { removeAt(index) }
-        if (index < _currentIndex.value) _currentIndex.value--
+        if (index < _currentIndex.value) _currentIndex.update { it - 1 }
         nextOverrideIndex = nextOverrideIndex?.let { next ->
             when { next == index -> null; next > index -> next - 1; else -> next }
         }
@@ -528,6 +543,68 @@ object PlaylistManager {
         nextOverrideIndex = (_currentIndex.value + 1).takeIf { it in _playlist.value.indices }
         userEdited = true
         persistState()
+    }
+
+    /** 将外部视频插播为下一集；若已在队列中则移至当前项之后，不修改收藏夹或稍后再看。 */
+    fun enqueuePlayNext(item: PlaylistItem): Boolean {
+        if (item.bvid.isBlank()) return false
+        val old = _playlist.value
+        val existingIndex = old.indexOfFirst { it.bvid == item.bvid }
+        if (existingIndex >= 0) {
+            if (existingIndex == _currentIndex.value) return false
+            playQueueItemNext(existingIndex)
+            return true
+        }
+        beginPlaylistSession()
+        val previousProgress = snapshotShuffleProgress()
+        val insertIndex = if (old.isEmpty()) 0 else (_currentIndex.value + 1).coerceIn(0, old.size)
+        val updated = old.toMutableList().apply { add(insertIndex, item) }
+        if (old.isEmpty()) {
+            _currentIndex.value = 0
+        } else {
+            nextOverrideIndex = insertIndex
+        }
+        _playlist.value = updated
+        userEdited = true
+        restoreShuffleProgressForPlaylistUpdate(old, updated, _currentIndex.value, previousProgress)
+        Logger.d(TAG, "⏭️ 插播下一集: ${item.title}")
+        persistState()
+        return true
+    }
+
+    /** 将外部视频追加到待播队列末尾；若已在队列中返回 false。 */
+    fun enqueueToEnd(item: PlaylistItem): Boolean {
+        if (item.bvid.isBlank()) return false
+        val old = _playlist.value
+        if (old.any { it.bvid == item.bvid }) return false
+        beginPlaylistSession()
+        val previousProgress = snapshotShuffleProgress()
+        val updated = old + item
+        if (old.isEmpty()) {
+            _currentIndex.value = 0
+        }
+        _playlist.value = updated
+        userEdited = true
+        restoreShuffleProgressForPlaylistUpdate(old, updated, _currentIndex.value, previousProgress)
+        Logger.d(TAG, "➕ 加入待播队列: ${item.title}")
+        persistState()
+        return true
+    }
+
+    /** 读取队列中下一首待播项（优先已插播项），供片尾倒计时等界面展示。 */
+    fun peekUpcomingNext(currentBvid: String): PlaylistItem? {
+        val list = _playlist.value
+        if (list.isEmpty()) return null
+        val overrideItem = nextOverrideIndex?.let { list.getOrNull(it) }
+        if (overrideItem != null && overrideItem.bvid.isNotBlank() && overrideItem.bvid != currentBvid) {
+            return overrideItem
+        }
+        val nextIndex = _currentIndex.value + 1
+        val nextItem = list.getOrNull(nextIndex)
+        if (nextItem != null && nextItem.bvid.isNotBlank() && nextItem.bvid != currentBvid) {
+            return nextItem
+        }
+        return null
     }
     
     /**
@@ -604,17 +681,24 @@ object PlaylistManager {
             addToPlaylist(item)
             playAt(_playlist.value.lastIndex)
         } else {
-            val existing = _playlist.value[index]
-            val updated = item.copy(
-                ownerFace = item.ownerFace.ifBlank { existing.ownerFace },
-                playCount = item.playCount ?: existing.playCount,
-                commentCount = item.commentCount ?: existing.commentCount,
-                publishedAt = item.publishedAt ?: existing.publishedAt,
-            )
-            if (existing != updated) {
-                _playlist.value = _playlist.value.toMutableList().also { it[index] = updated }
+            var didUpdate = false
+            val existing = _playlist.value.getOrNull(index)
+            if (existing != null) {
+                val updated = item.copy(
+                    ownerFace = item.ownerFace.ifBlank { existing.ownerFace },
+                    playCount = item.playCount ?: existing.playCount,
+                    commentCount = item.commentCount ?: existing.commentCount,
+                    publishedAt = item.publishedAt ?: existing.publishedAt,
+                )
+                if (existing != updated) {
+                    didUpdate = true
+                    _playlist.update { list ->
+                        val targetIndex = list.indexOfFirst { it.bvid == item.bvid }
+                        if (targetIndex < 0) list else list.toMutableList().also { it[targetIndex] = updated }
+                    }
+                }
             }
-            if (_currentIndex.value != index) playAt(index) else if (existing != updated) persistState()
+            if (_currentIndex.value != index) playAt(index) else if (didUpdate) persistState()
         }
     }
 

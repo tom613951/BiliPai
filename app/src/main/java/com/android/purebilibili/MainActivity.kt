@@ -265,10 +265,14 @@ internal fun resolvePluginInstallDeepLink(rawDeepLink: String): PluginInstallDee
     val normalizedHost = uri.host?.lowercase() ?: return null
     val normalizedPath = uri.path?.trim()?.trimEnd('/') ?: ""
 
+    if (normalizedScheme == "bilipai" && normalizedHost == "ext" && normalizedPath == "/preview") {
+        return PluginInstallDeepLinkRequest(pluginUrl = rawDeepLink.trim())
+    }
+
     val installLinkMatched = when (normalizedScheme) {
-        "bilipai" -> normalizedHost == "plugin" && normalizedPath == "/install"
+        "bilipai" -> (normalizedHost == "plugin" || normalizedHost == "ext") && normalizedPath == "/install"
         "https", "http" -> normalizedHost in PLUGIN_INSTALL_HTTPS_HOSTS &&
-            normalizedPath in setOf("/plugin/install", "/plugins/install")
+            normalizedPath in setOf("/plugin/install", "/plugins/install", "/ext/install")
         else -> false
     }
     if (!installLinkMatched) return null
@@ -1566,6 +1570,11 @@ class MainActivity : AppCompatActivity() {
                 .collectAsState(initial = com.android.purebilibili.core.store.KeyboardShortcutStore.current)
 
             // 6. 传入参数
+            com.android.purebilibili.core.theme.ThemeSwitchSnapshotHost(
+                preferredStyle = appThemeSettings.themeSwitchTransitionStyle,
+                animationsEnabled = uiEntranceAnimationEnabled,
+                systemReduceMotion = com.android.purebilibili.core.ui.motion.rememberSystemReduceMotion(),
+            ) {
             PureBiliBiliTheme(
                 syncLauncherIcon = true,
                 themeTransitionEnabled = uiEntranceAnimationEnabled,
@@ -1779,6 +1788,10 @@ class MainActivity : AppCompatActivity() {
                                     if (showingSetup) {
                                         com.android.purebilibili.feature.onboarding.FirstLaunchSetupScreen(
                                             onFinished = { showFirstLaunchSetup = false },
+                                            onFinishedAndLogin = {
+                                                pendingNavigationRoute = ScreenRoutes.Login.route
+                                                showFirstLaunchSetup = false
+                                            },
                                         )
                                     } else {
                                 var isExternalDropActive by remember { mutableStateOf(false) }
@@ -2084,6 +2097,20 @@ class MainActivity : AppCompatActivity() {
                             isPipRenderingActive
                     )
                     PluginEffectHintHost()
+                    com.android.purebilibili.feature.plugin.GamepadOverlayHost()
+                    LaunchedEffect(Unit) {
+                        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.navigationActions.collect { action ->
+                            when (action) {
+                                com.android.purebilibili.core.input.gamepad.GamepadNavigationAction.OpenSearch -> {
+                                    pendingRoute = "search"
+                                }
+                                com.android.purebilibili.core.input.gamepad.GamepadNavigationAction.OpenSettings -> {
+                                    pendingRoute = "settings"
+                                }
+                                else -> Unit
+                            }
+                        }
+                    }
                     
                     // [New] Custom Splash Wallpaper Overlay
                     val readCustomSplashPrefs = remember { shouldReadCustomSplashPreferences() }
@@ -2586,10 +2613,14 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             }
+            }
         }
     }
 
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (com.android.purebilibili.core.input.gamepad.GamepadControlEngine.handleKeyEvent(event)) {
+            return true
+        }
         if (
             event.keyCode == android.view.KeyEvent.KEYCODE_ESCAPE &&
             !event.isCtrlPressed && !event.isAltPressed && !event.isMetaPressed
@@ -2615,6 +2646,23 @@ class MainActivity : AppCompatActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean {
+        if (com.android.purebilibili.core.input.gamepad.GamepadControlEngine.handleGenericMotionEvent(ev)) {
+            return true
+        }
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.observeActivityTouchEvent(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.onActivityWindowFocusChanged(this, hasFocus)
     }
 
     override fun onProvideKeyboardShortcuts(
@@ -2727,10 +2775,12 @@ class MainActivity : AppCompatActivity() {
         if (!hasCompletedInitialResume) {
             hasCompletedInitialResume = true
         }
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.attachActivity(this)
         StartupRecovery.onMainResumed(this)
     }
 
     override fun onPause() {
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.detachActivity(this)
         if (!startupRecoveryRedirected) {
             StartupRecovery.onMainPaused(this)
         }

@@ -4,6 +4,7 @@ import android.graphics.Rect as AndroidRect
 import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -33,10 +34,11 @@ internal class VideoCardSourceInstance(
     val shape: Shape,
     val density: Density,
     val layoutDirection: LayoutDirection,
+    val sharedSource: com.android.purebilibili.navigation3.NavigationSharedContainerSource? = null,
     val returnHandledByOwner: Boolean = false,
 ) {
     var coordinates: LayoutCoordinates? = null
-    val returnLanding = if (returnHandledByOwner) null else NavigationReturnLanding()
+    val returnLanding = if (returnHandledByOwner) null else sharedSource?.origin?.returnLanding ?: NavigationReturnLanding()
 
     fun boundsInRoot(): Rect? = coordinates?.takeIf { it.isAttached }?.videoCardSourceBoundsInRoot()
 
@@ -81,6 +83,61 @@ internal fun sameVideoCardBounds(first: Rect, second: Rect): Boolean =
     abs(first.left - second.left) <= 1f && abs(first.top - second.top) <= 1f &&
         abs(first.right - second.right) <= 1f && abs(first.bottom - second.bottom) <= 1f
 
+internal fun isCompatibleVideoCardReturnGeometry(
+    currentWidth: Int,
+    currentHeight: Int,
+    expectedWidth: Int,
+    expectedHeight: Int,
+    currentRadiusPx: Float?,
+    expectedRadiusPx: Float,
+): Boolean = currentWidth > 1 && currentHeight > 1 &&
+    currentRadiusPx == expectedRadiusPx &&
+    abs(currentWidth - expectedWidth) <= 1 &&
+    abs(currentHeight - expectedHeight) <= 1
+
+/** 返回时校验最新可见矩形：允许在同窗口内平移，但尺寸差超 1px 或圆角变化时拒绝回卡。 */
+internal fun resolveCompatibleVideoCardReturnBounds(
+    currentBounds: AndroidRect?,
+    expectedBounds: AndroidRect,
+    currentRadiusPx: Float?,
+    expectedRadiusPx: Float,
+): AndroidRect? {
+    val current = currentBounds ?: return null
+    return current.takeIf {
+        isCompatibleVideoCardReturnGeometry(
+            currentWidth = it.width(),
+            currentHeight = it.height(),
+            expectedWidth = expectedBounds.width(),
+            expectedHeight = expectedBounds.height(),
+            currentRadiusPx = currentRadiusPx,
+            expectedRadiusPx = expectedRadiusPx,
+        )
+    }
+}
+
+private fun resolveClosestVideoCardSourceCandidate(
+    candidates: List<VideoCardSourceInstance>,
+    clickedBounds: Rect,
+): VideoCardSourceInstance? {
+    if (candidates.isEmpty()) return null
+    val maxDx = maxOf(clickedBounds.width * 0.5f, 24f)
+    val maxDy = maxOf(clickedBounds.height * 0.5f, 24f)
+    var best: VideoCardSourceInstance? = null
+    var bestDistSq = Float.POSITIVE_INFINITY
+    for (candidate in candidates) {
+        val actual = candidate.boundsInRoot() ?: continue
+        val dx = actual.center.x - clickedBounds.center.x
+        val dy = actual.center.y - clickedBounds.center.y
+        if (abs(dx) > maxDx || abs(dy) > maxDy) continue
+        val distSq = dx * dx + dy * dy
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq
+            best = candidate
+        }
+    }
+    return best
+}
+
 /** 返回只测量打开时的实例；同视频的新组合不能接替落点。 */
 internal class VideoCardSourceAnchor(source: VideoCardSourceInstance) {
     private val reference = WeakReference(source)
@@ -88,6 +145,15 @@ internal class VideoCardSourceAnchor(source: VideoCardSourceInstance) {
     fun requestReturnLanding() {
         reference.get()?.takeIf { VideoCardSourceInstances.isAttached(it) }?.returnLanding?.request()
     }
+
+    fun prepareSharedFallback(target: com.android.purebilibili.navigation3.BiliPaiNavKey): Boolean {
+        val source = reference.get()?.takeIf { VideoCardSourceInstances.isAttached(it) } ?: return false
+        val shared = source.sharedSource ?: return false
+        if (!shared.activate(target)) return false
+        com.android.purebilibili.navigation3.SystemWindowControlNeighbors.linkShared(this, shared.origin)
+        return true
+    }
+
     fun hasCoordinates(coordinates: LayoutCoordinates?): Boolean = coordinates != null &&
         reference.get()?.let { VideoCardSourceInstances.isAttached(it) && it.coordinates === coordinates } == true
 
@@ -110,6 +176,23 @@ internal class VideoCardSourceAnchor(source: VideoCardSourceInstance) {
         bounds(windowCoordinates, allowPartial) == expectedBounds &&
         radiusPx() == expectedRadiusPx
 
+    /** 返回时允许来源卡片在同窗口内平移，只要可见且宽高与圆角未改变就返回最新落点。 */
+    fun resolveReturnBounds(
+        decor: View,
+        expectedBounds: AndroidRect,
+        expectedRadiusPx: Float,
+        windowCoordinates: Boolean,
+        allowPartial: Boolean,
+    ): AndroidRect? {
+        if (!belongsToWindow(decor)) return null
+        return resolveCompatibleVideoCardReturnBounds(
+            currentBounds = bounds(windowCoordinates, allowPartial),
+            expectedBounds = expectedBounds,
+            currentRadiusPx = radiusPx(),
+            expectedRadiusPx = expectedRadiusPx,
+        )
+    }
+
     fun cornerRadiusDp(): Int? = reference.get()?.takeIf { VideoCardSourceInstances.isAttached(it) }
         ?.let { (it.radiusPx() / it.density.density).roundToInt() }
 
@@ -130,10 +213,14 @@ internal object VideoCardSourceInstances {
     }
 
     fun recordClick(bvid: String, bounds: Rect) {
-        clickedSource = sources.singleOrNull {
-            it.bvid == bvid && it.view.hasWindowFocus() &&
-                it.boundsInRoot()?.let { actual -> sameVideoCardBounds(actual, bounds) } == true
-        }?.let {
+        val candidates = sources.filter {
+            it.bvid == bvid && it.view.hasWindowFocus() && it.coordinates?.isAttached == true
+        }
+        val matched = candidates.singleOrNull {
+            it.boundsInRoot()?.let { actual -> sameVideoCardBounds(actual, bounds) } == true
+        } ?: candidates.singleOrNull()
+            ?: resolveClosestVideoCardSourceCandidate(candidates, bounds)
+        clickedSource = matched?.let {
             it.returnLanding?.clear()
             WeakReference(it)
         }
@@ -162,6 +249,8 @@ internal fun Modifier.videoCardSourceAnchor(
     shape: Shape,
     // 导航内容外的横条显式启用；页面卡片仍沿用原有导航作用域开关。
     enabled: Boolean = LocalVideoCardSourceTrackingEnabled.current,
+    sharedSource: com.android.purebilibili.navigation3.NavigationSharedContainerSource? = null,
+    drawSharedContent: Boolean = true,
     returnHandledByOwner: Boolean = false,
     landingStyle: NavigationReturnLandingStyle = NavigationReturnLandingStyle.CONTROL,
     // 卡片自身布局：系统接口落位按它取与引擎一致的压缩行程。
@@ -172,8 +261,12 @@ internal fun Modifier.videoCardSourceAnchor(
     val view = LocalView.current
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
-    val source = remember(bvid, view, shape, density, direction, returnHandledByOwner) {
-        VideoCardSourceInstance(bvid, view, shape, density, direction, returnHandledByOwner)
+    val fallback = sharedSource ?: com.android.purebilibili.navigation3.rememberNavigationSharedContainerSource(bvid)
+    val source = remember(bvid, view, shape, density, direction, fallback, returnHandledByOwner) {
+        VideoCardSourceInstance(bvid, view, shape, density, direction, fallback, returnHandledByOwner)
+    }
+    if (fallback != null) {
+        SideEffect { fallback.origin.returnLandingHandledByOwner = returnHandledByOwner }
     }
     DisposableEffect(source) {
         VideoCardSourceInstances.attach(source)
@@ -187,8 +280,12 @@ internal fun Modifier.videoCardSourceAnchor(
         onPositioned?.invoke(it)
     }.navigationReturnLanding(
         source.returnLanding,
+        sharedBoundsReleased = fallback?.origin?.sharedBounds == null,
         style = landingStyle,
         sourceLayout = sourceLayout,
         isSourceVisible = { source.coordinates.isVisibleReturnLanding() },
+    ).then(
+        if (drawSharedContent) com.android.purebilibili.navigation3.navigationSharedContainerSourceModifier(fallback, shape)
+        else Modifier,
     )
 }

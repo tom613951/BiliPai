@@ -51,6 +51,7 @@ import com.android.purebilibili.feature.video.viewmodel.SponsorContributionUiSta
 import com.android.purebilibili.feature.video.ui.components.TwoFingerSpeedFeedbackOverlay
 import com.android.purebilibili.feature.video.ui.components.VideoAspectRatio
 import com.android.purebilibili.feature.video.ui.components.applyPlayerViewResizeMode
+import com.android.purebilibili.feature.video.ui.components.resolveExpectedPlayerViewportSize
 import com.android.purebilibili.feature.video.ui.components.resolveSafeVideoAspectRatio
 import com.android.purebilibili.feature.video.ui.components.resolveVideoViewportLayout
 import com.android.purebilibili.feature.video.ui.components.schedulePlayerViewViewportRefresh
@@ -112,6 +113,7 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import com.android.purebilibili.feature.video.ui.gesture.PlayerGestureInputSurface
 import androidx.compose.foundation.clickable
@@ -479,6 +481,246 @@ private fun BoxScope.VideoSubtitleOverlayHost(
     }
 }
 
+@Composable
+private fun BoxScope.VideoPlayerJumpAheadChip(
+    candidate: com.android.purebilibili.feature.video.ui.overlay.JumpAheadCandidate?,
+    generation: Long,
+    enabled: Boolean,
+    isFullscreen: Boolean,
+    isInPipMode: Boolean,
+    isScreenLocked: Boolean,
+    onJumpAhead: (Long) -> Unit,
+    onClearCandidate: () -> Unit,
+) {
+    LaunchedEffect(generation) {
+        if (generation > 0L) {
+            delay(3200L)
+            onClearCandidate()
+        }
+    }
+    AnimatedVisibility(
+        visible = candidate != null && enabled && !isInPipMode && !isScreenLocked,
+        enter = fadeIn(animationSpec = tween(160)) + slideInHorizontally(initialOffsetX = { it / 3 }),
+        exit = fadeOut(animationSpec = tween(180)),
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = if (isFullscreen) 84.dp else 56.dp)
+            .zIndex(122f),
+    ) {
+        if (candidate != null) {
+            AppSurface(
+                color = Color.Black.copy(alpha = 0.78f),
+                shape = RoundedCornerShape(999.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable {
+                        onJumpAhead(candidate.targetPositionMs)
+                        onClearCandidate()
+                    }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    AppText(
+                        text = "${candidate.label} →",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoxScope.VideoPlayerUpNextAndDrawerOverlays(
+    bvid: String,
+    uiState: VideoPlaybackUiState,
+    isFullscreen: Boolean,
+    isPortraitFullscreen: Boolean,
+    isInPipMode: Boolean,
+    isScreenLocked: Boolean,
+    showControls: Boolean,
+    fullscreenSwipeUpMoreEnabled: Boolean,
+    showFullscreenRelatedDrawer: Boolean,
+    onShowFullscreenRelatedDrawerChange: (Boolean) -> Unit,
+    playbackCompletionBehavior: com.android.purebilibili.core.store.PlaybackCompletionBehavior,
+    endScreenNextCountdownEnabled: Boolean,
+    endScreenCountdownDismissed: Boolean,
+    onDismissEndScreenCountdown: () -> Unit,
+    endScreenNextVideo: com.android.purebilibili.data.model.response.RelatedVideo?,
+    endScreenCountdownSeconds: Int?,
+    queuedNextItem: com.android.purebilibili.feature.video.player.PlaylistItem?,
+    relatedVideos: List<com.android.purebilibili.data.model.response.RelatedVideo>,
+    queuedPlaylist: List<com.android.purebilibili.feature.video.player.PlaylistItem>,
+    onRelatedVideoClick: (String, android.os.Bundle?) -> Unit,
+) {
+    var fullscreenDrawerHintVisible by remember(bvid) { mutableStateOf(false) }
+    LaunchedEffect(
+        isFullscreen,
+        showControls,
+        isScreenLocked,
+        fullscreenSwipeUpMoreEnabled,
+        showFullscreenRelatedDrawer,
+        isInPipMode,
+        isPortraitFullscreen,
+        relatedVideos.isNotEmpty(),
+        queuedPlaylist.isNotEmpty(),
+    ) {
+        val shouldShowHint = isFullscreen &&
+            showControls &&
+            !isScreenLocked &&
+            fullscreenSwipeUpMoreEnabled &&
+            !showFullscreenRelatedDrawer &&
+            !isInPipMode &&
+            !isPortraitFullscreen &&
+            (relatedVideos.isNotEmpty() || queuedPlaylist.isNotEmpty())
+        fullscreenDrawerHintVisible = shouldShowHint
+        if (shouldShowHint) {
+            delay(5_000L)
+            fullscreenDrawerHintVisible = false
+        }
+    }
+
+    val endScreenAllowsAutoNext = playbackCompletionBehavior !=
+        com.android.purebilibili.core.store.PlaybackCompletionBehavior.REPEAT_ONE &&
+        playbackCompletionBehavior !=
+        com.android.purebilibili.core.store.PlaybackCompletionBehavior.STOP_AFTER_CURRENT
+    val successInfoForEndScreen = (uiState as? VideoPlaybackUiState.Success)?.info
+    val videoPagesForEndScreen = successInfoForEndScreen?.pages.orEmpty()
+    val activePageIndexForEndScreen = videoPagesForEndScreen
+        .indexOfFirst { it.cid == successInfoForEndScreen?.cid }
+        .coerceAtLeast(0)
+    val hasNextVideoPage = videoPagesForEndScreen.size > 1 &&
+        activePageIndexForEndScreen in 0 until (videoPagesForEndScreen.size - 1)
+    com.android.purebilibili.feature.video.ui.components.EndScreenUpNextCountdownCard(
+        visible = com.android.purebilibili.feature.video.ui.components.shouldShowEndScreenNextCard(
+            enabled = endScreenNextCountdownEnabled,
+            isInPipMode = isInPipMode,
+            isScreenLocked = isScreenLocked,
+            dismissed = endScreenCountdownDismissed || showFullscreenRelatedDrawer,
+            nextVideo = endScreenNextVideo,
+            countdownSeconds = endScreenCountdownSeconds,
+            allowAutoNext = endScreenAllowsAutoNext,
+            hasNextPage = hasNextVideoPage,
+        ),
+        nextVideo = endScreenNextVideo,
+        countdownSeconds = endScreenCountdownSeconds,
+        fromQueue = queuedNextItem != null && endScreenNextVideo?.bvid == queuedNextItem.bvid,
+        onPlayNow = { video ->
+            onDismissEndScreenCountdown()
+            onRelatedVideoClick(video.bvid, null)
+        },
+        onDismiss = onDismissEndScreenCountdown,
+        modifier = Modifier
+            .align(Alignment.BottomEnd)
+            .padding(end = 16.dp, bottom = if (isFullscreen) 78.dp else 50.dp)
+            .zIndex(123f),
+    )
+
+    com.android.purebilibili.feature.video.ui.components.FullscreenSwipeUpDrawerHint(
+        visible = fullscreenDrawerHintVisible,
+        hasQueuedItems = queuedPlaylist.isNotEmpty(),
+        onClick = { onShowFullscreenRelatedDrawerChange(true) },
+        onSwipeUp = { onShowFullscreenRelatedDrawerChange(true) },
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 4.dp)
+            .zIndex(124f),
+    )
+
+    com.android.purebilibili.feature.video.ui.components.FullscreenSwipeUpRelatedDrawer(
+        visible = showFullscreenRelatedDrawer && isFullscreen && fullscreenSwipeUpMoreEnabled && !isInPipMode,
+        relatedVideos = relatedVideos,
+        queuedItems = queuedPlaylist,
+        currentBvid = bvid,
+        onVideoClick = { video ->
+            onShowFullscreenRelatedDrawerChange(false)
+            onRelatedVideoClick(video.bvid, null)
+        },
+        onQueueItemClick = { item ->
+            onShowFullscreenRelatedDrawerChange(false)
+            if (item.bvid != bvid) {
+                onRelatedVideoClick(item.bvid, null)
+            }
+        },
+        onRemoveQueueItem = { index ->
+            com.android.purebilibili.feature.video.player.PlaylistManager.removeQueueItem(index)
+        },
+        onClearUpcomingQueue = {
+            com.android.purebilibili.feature.video.player.PlaylistManager.clearUpcomingQueue()
+        },
+        onDismiss = { onShowFullscreenRelatedDrawerChange(false) },
+        modifier = Modifier.zIndex(125f),
+    )
+}
+
+@Composable
+private fun VideoPlayerDanmakuPoolHost(
+    bvid: String,
+    cid: Long,
+    danmakuManager: DanmakuManager,
+    activeDanmakuScope: com.android.purebilibili.core.store.DanmakuSettingsScope,
+    currentPositionMs: Long,
+    likedDanmakuIdsFlow: kotlinx.coroutines.flow.StateFlow<Set<Long>>,
+    onSeekTo: (Long) -> Unit,
+    onLikeDanmaku: (dmid: Long, like: Boolean) -> Unit,
+    onRecallDanmaku: (Long) -> Unit,
+    onReportDanmaku: (dmid: Long, reason: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val poolSheetDanmakuLikedIds by likedDanmakuIdsFlow.collectAsStateWithLifecycle()
+    var poolReportSnapshot by remember(bvid, cid) {
+        mutableStateOf(danmakuManager.getLoadedDanmakuList().toList())
+    }
+    DanmakuPoolSheet(
+        danmakuList = poolReportSnapshot,
+        videoCid = cid,
+        onRefreshSnapshot = {
+            danmakuManager.getLoadedDanmakuList().toList().also {
+                poolReportSnapshot = it
+            }
+        },
+        upOwnerUserHash = danmakuManager.upOwnerUserHash,
+        currentPositionMs = currentPositionMs,
+        onSeekTo = onSeekTo,
+        likedDanmakuIds = poolSheetDanmakuLikedIds,
+        onLikeDanmaku = onLikeDanmaku,
+        onRecallDanmaku = onRecallDanmaku,
+        onReportDanmaku = onReportDanmaku,
+        onReportDanmakuWithDetails = { dmid, reason, explanation, blockUser ->
+            val sender = poolReportSnapshot.firstOrNull { it.danmakuId == dmid }?.userHash.orEmpty()
+            scope.launch {
+                com.android.purebilibili.feature.video.ui.components.submitPiliDanmakuReport(
+                    context = context,
+                    cid = cid,
+                    dmid = dmid,
+                    reason = reason,
+                    explanation = explanation,
+                    userHash = sender,
+                    blockUser = blockUser,
+                    settingsScope = activeDanmakuScope,
+                )
+            }
+        },
+        onBlockSender = { userHash ->
+            scope.launch {
+                com.android.purebilibili.feature.video.ui.components.blockPiliDanmakuSender(
+                    context = context,
+                    userHash = userHash,
+                    settingsScope = activeDanmakuScope,
+                )
+            }
+        },
+        onDismiss = onDismiss,
+    )
+}
+
 // 相关推荐/同页切集后新播放器 duration 就绪等待参数：
 // 最长等待 4s（20 × 200ms），超时按当前可用值加载（仓库层会回退）。
 private const val DANMAKU_DURATION_WAIT_ATTEMPTS = 20
@@ -521,6 +763,8 @@ private fun VideoPlayerSectionContent(
     state: VideoPlayerSectionState,
     actions: VideoPlayerSectionActions,
 ) {
+    val sharedSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
+    val sharedTextureSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedTextureSurfaceVisible.current
     val playerState = state.playerState
     var playerInViewport by remember { mutableStateOf(false) }
     val playerVisualWorkActive = com.android.purebilibili.core.ui.rememberVisualWorkActive() &&
@@ -807,6 +1051,22 @@ private fun VideoPlayerSectionContent(
     val autoEnterFullscreenEnabled = playerInteractionSettings.autoEnterFullscreenEnabled
     val autoExitFullscreenEnabled = playerInteractionSettings.autoExitFullscreenEnabled
     val autoExitFullscreenMode = playerInteractionSettings.autoExitFullscreenMode
+    val longPressSpeedSlideMode = playerInteractionSettings.longPressSpeedSlideMode
+    val longPressSpeedSlideAdjustEnabled =
+        longPressSpeedSlideMode != com.android.purebilibili.core.store.LongPressSpeedSlideMode.OFF
+    val doubleTapJumpAheadEnabled = playerInteractionSettings.doubleTapJumpAheadEnabled
+    val fullscreenSwipeUpMoreEnabled = playerInteractionSettings.fullscreenSwipeUpMoreEnabled
+    val endScreenNextCountdownEnabled = playerInteractionSettings.endScreenNextCountdownEnabled
+    val pinchZoomSnapAndBadgeEnabled = playerInteractionSettings.pinchZoomSnapAndBadgeEnabled
+    val twoFingerChapterSkipEnabled = playerInteractionSettings.twoFingerChapterSkipEnabled
+    val portraitSwipeDownMinimizeEnabled = playerInteractionSettings.portraitSwipeDownMinimizeEnabled
+    val currentPinchZoomSnapAndBadgeEnabled by rememberUpdatedState(pinchZoomSnapAndBadgeEnabled)
+    val currentTwoFingerChapterSkipEnabled by rememberUpdatedState(twoFingerChapterSkipEnabled)
+    val currentPortraitSwipeDownMinimizeEnabled by rememberUpdatedState(portraitSwipeDownMinimizeEnabled)
+    val latestOnBack by rememberUpdatedState(onBack)
+    val currentDoubleTapJumpAheadEnabled by rememberUpdatedState(doubleTapJumpAheadEnabled)
+    val currentViewPoints by rememberUpdatedState(viewPoints)
+    val currentPbpRidgeSamples by rememberUpdatedState(pbpRidgeSamples)
     val allowPlaybackStateAutoFullscreen = remember(configuration.screenWidthDp) {
         shouldAllowPlaybackStateAutoFullscreen(
             hasValidWindow = configuration.screenWidthDp > 0
@@ -856,6 +1116,106 @@ private fun VideoPlayerSectionContent(
     var longPressSpeedStartedAtMs by remember { mutableLongStateOf(0L) }
     var longPressSpeedStartX by remember { mutableFloatStateOf(-1f) }
     var longPressSpeedStartY by remember { mutableFloatStateOf(-1f) }
+    var longPressSlideBaseSpeed by remember { mutableFloatStateOf(longPressSpeed) }
+    val longPressSlideSession = remember(bvid) {
+        LongPressSlideSpeedSessionState(
+            initialSpeed = longPressSpeed,
+            initialObservedSpeed = playerState.player.playbackParameters.speed,
+        )
+    }
+    var jumpAheadCandidate by remember(bvid) {
+        mutableStateOf<com.android.purebilibili.feature.video.ui.overlay.JumpAheadCandidate?>(null)
+    }
+    var jumpAheadGeneration by remember(bvid) { mutableLongStateOf(0L) }
+    var showFullscreenRelatedDrawer by remember(bvid) { mutableStateOf(false) }
+    var endScreenCountdownDismissed by remember(bvid) { mutableStateOf(false) }
+    var endScreenCountdownSeconds by remember(bvid) { mutableStateOf<Int?>(null) }
+    var zoomSnapHintText by remember(bvid) { mutableStateOf<String?>(null) }
+    var zoomSnapHintGeneration by remember(bvid) { mutableLongStateOf(0L) }
+    LaunchedEffect(zoomSnapHintGeneration) {
+        if (zoomSnapHintGeneration > 0L) {
+            delay(1200L)
+            zoomSnapHintText = null
+        }
+    }
+    val queuedPlaylist by com.android.purebilibili.feature.video.player.PlaylistManager.playlist
+        .collectAsStateWithLifecycle()
+    val queuedCurrentIndex by com.android.purebilibili.feature.video.player.PlaylistManager.currentIndex
+        .collectAsStateWithLifecycle()
+    val queuedNextItem = remember(bvid, queuedPlaylist, queuedCurrentIndex) {
+        com.android.purebilibili.feature.video.player.PlaylistManager.peekUpcomingNext(bvid)
+    }
+    val endScreenNextVideo = remember(bvid, relatedVideos, queuedNextItem) {
+        com.android.purebilibili.feature.video.ui.components.resolveEndScreenNextVideo(
+            currentBvid = bvid,
+            relatedVideos = relatedVideos,
+            queuedNext = queuedNextItem,
+        )
+    }
+    LaunchedEffect(
+        playerState.player,
+        bvid,
+        endScreenNextCountdownEnabled,
+        endScreenCountdownDismissed,
+        endScreenNextVideo,
+        isInPipMode,
+        playerVisualWorkActive,
+        lifecycleOwner,
+    ) {
+        if (!endScreenNextCountdownEnabled ||
+            endScreenCountdownDismissed ||
+            endScreenNextVideo == null ||
+            isInPipMode ||
+            !playerVisualWorkActive
+        ) {
+            endScreenCountdownSeconds = null
+            return@LaunchedEffect
+        }
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            val player = playerState.player
+            val events = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+            val listener = object : Player.Listener {
+                override fun onEvents(player: Player, playerEvents: Player.Events) {
+                    events.trySend(Unit)
+                }
+            }
+            player.addListener(listener)
+            try {
+                while (true) {
+                    val duration = player.duration
+                    val pos = player.currentPosition
+                    val playing = player.isPlaying
+                    val nextSeconds = if (playing) {
+                        com.android.purebilibili.feature.video.ui.components.resolveEndScreenCountdownSeconds(
+                            positionMs = pos,
+                            durationMs = duration,
+                        )
+                    } else {
+                        null
+                    }
+                    endScreenCountdownSeconds = nextSeconds
+                    val sleepMs = when {
+                        !playing || duration <= 0L -> null
+                        nextSeconds != null -> 500L
+                        else -> {
+                            val remaining = (duration - pos.coerceAtLeast(0L)).coerceAtLeast(0L)
+                            val speed = player.playbackParameters.speed
+                                .takeIf { it.isFinite() && it > 0f }?.coerceIn(0.25f, 4f) ?: 1f
+                            ((remaining - 10_000L) / speed).toLong().coerceIn(500L, 60_000L)
+                        }
+                    }
+                    if (sleepMs == null) {
+                        events.receive()
+                    } else {
+                        kotlinx.coroutines.withTimeoutOrNull(sleepMs) { events.receive() }
+                    }
+                }
+            } finally {
+                player.removeListener(listener)
+                events.close()
+            }
+        }
+    }
     val longPressSpeedLockSensitivity = remember(isFullscreen) {
         resolveLongPressSpeedLockSensitivityPolicy(isFullscreen = isFullscreen)
     }
@@ -1162,6 +1522,11 @@ private fun VideoPlayerSectionContent(
 
     // 🔒 [新增] 屏幕锁定状态（全屏时防误触）
     var isScreenLocked by remember { mutableStateOf(false) }
+    LaunchedEffect(isFullscreen, isInPipMode, isScreenLocked) {
+        if (!isFullscreen || isInPipMode || isScreenLocked) {
+            showFullscreenRelatedDrawer = false
+        }
+    }
     LaunchedEffect(isScreenLocked, showControls) {
         if (isScreenLocked && showControls) {
             delay(2_000L)
@@ -1216,9 +1581,6 @@ private fun VideoPlayerSectionContent(
         derivedStateOf { (gesturePercent * 100f).roundToInt().coerceIn(0, 100) }
     }
     var previousGesturePercentDisplay by remember { mutableIntStateOf(gesturePercentDisplay) }
-    var orientationHintVisible by remember { mutableStateOf(false) }
-    var orientationHintText by remember { mutableStateOf(resolveOrientationSwitchHintText(isFullscreen)) }
-    var hasObservedOrientationChange by remember { mutableStateOf(false) }
     val gestureMotionSpec = remember { resolveVideoGestureMotionSpec() }
     val playerChromeProfile = rememberAppPlayerChromeProfile()
     val manualStartPlayIcon = painterResource(R.drawable.ic_pili_tv_play)
@@ -1644,6 +2006,11 @@ private fun VideoPlayerSectionContent(
             longPressSpeedLocked = false
         }
         effectiveLongPressSpeed = startDecision.targetPlaybackParameters.speed
+        longPressSlideBaseSpeed = effectiveLongPressSpeed
+        longPressSlideSession.onLongPressStart(
+            appliedSpeed = effectiveLongPressSpeed,
+            nowMs = android.os.SystemClock.elapsedRealtime(),
+        )
         applyLongPressPlaybackParameters(startDecision.targetPlaybackParameters)
         if (!longPressSpeedLockEnabled && !hasShownLongPressSpeedLockHint) {
             hasShownLongPressSpeedLockHintLocally = true
@@ -1699,6 +2066,7 @@ private fun VideoPlayerSectionContent(
         lockedLongPressSpeed = originalPlaybackParameters.speed
         applyLongPressPlaybackParameters(originalPlaybackParameters)
         isLongPressing = false
+        longPressSlideSession.onLongPressEnd()
         longPressSpeedFeedbackVisible = false
         totalDragDistanceY = 0f
         totalDragDistanceX = 0f
@@ -1728,6 +2096,7 @@ private fun VideoPlayerSectionContent(
             applyLongPressPlaybackParameters(originalPlaybackParameters)
         }
         isLongPressing = false
+        longPressSlideSession.onLongPressEnd()
         longPressSpeedFeedbackVisible = false
         totalDragDistanceY = 0f
         totalDragDistanceX = 0f
@@ -1751,6 +2120,18 @@ private fun VideoPlayerSectionContent(
             }
         }
     }
+
+    BindLongPressSlideSpeedEffects(
+        session = longPressSlideSession,
+        isLongPressing = isLongPressing,
+        longPressSpeedLocked = longPressSpeedLocked,
+        slideMode = longPressSpeedSlideMode,
+        effectiveLongPressSpeed = effectiveLongPressSpeed,
+        observedPlaybackSpeed = observedPlaybackSpeed,
+        onApplySpeed = { speed ->
+            applyLongPressPlaybackParameters(originalPlaybackParameters.withSpeed(speed))
+        },
+    )
 
     // 换集/换片后收口侧栏与手势中间态，避免全屏遮罩或 multi-touch 标志卡住导致触摸无响应。
     LaunchedEffect(currentPlaybackIdentity) {
@@ -1782,6 +2163,162 @@ private fun VideoPlayerSectionContent(
                 requestedSpeed = speed,
                 currentAudioQuality = currentAudioQuality
             )
+        }
+    }
+
+    // 🎮 Xbox / 通用手柄场景注册与播放快捷动作订阅（即使焦点不在播放器或处于光标模式也能直通操控）
+    val gamepadSceneToken = remember { Any() }
+    var gamepadSavedSpeedParams by remember { mutableStateOf<PlaybackParameters?>(null) }
+    val latestGamepadUiState by androidx.compose.runtime.rememberUpdatedState(uiState)
+    val latestGamepadInPip by androidx.compose.runtime.rememberUpdatedState(isInPipMode)
+    val latestGamepadLocked by androidx.compose.runtime.rememberUpdatedState(isScreenLocked)
+    val latestGamepadToggleFullscreen by androidx.compose.runtime.rememberUpdatedState(onToggleFullscreen)
+    val latestGamepadToggleLike by androidx.compose.runtime.rememberUpdatedState(onToggleLike)
+    val latestGamepadTriple by androidx.compose.runtime.rememberUpdatedState(onTriple)
+    val latestGamepadLikeKnown by androidx.compose.runtime.rememberUpdatedState(likeStatusKnown)
+    val latestGamepadPageSelect by androidx.compose.runtime.rememberUpdatedState(onPageSelect)
+    val latestGamepadAudioQuality by androidx.compose.runtime.rememberUpdatedState(currentAudioQuality)
+    DisposableEffect(gamepadSceneToken, isFullscreen, isInPipMode) {
+        if (!isInPipMode) {
+            com.android.purebilibili.core.input.gamepad.GamepadControlEngine.registerScene(
+                token = gamepadSceneToken,
+                scene = if (isFullscreen) {
+                    com.android.purebilibili.core.input.gamepad.GamepadScene.VIDEO_FULLSCREEN
+                } else {
+                    com.android.purebilibili.core.input.gamepad.GamepadScene.VIDEO_DETAIL
+                },
+            )
+        } else {
+            com.android.purebilibili.core.input.gamepad.GamepadControlEngine.unregisterScene(gamepadSceneToken)
+        }
+        onDispose {
+            gamepadSavedSpeedParams?.let { saved ->
+                playerState.player.playbackParameters = saved
+                gamepadSavedSpeedParams = null
+            }
+            com.android.purebilibili.core.input.gamepad.GamepadControlEngine.unregisterScene(gamepadSceneToken)
+        }
+    }
+    LaunchedEffect(gamepadSceneToken) {
+        com.android.purebilibili.core.input.gamepad.GamepadControlEngine.playerActions.collect { action ->
+            if (!com.android.purebilibili.core.input.gamepad.GamepadControlEngine.isTopScene(gamepadSceneToken)) {
+                return@collect
+            }
+            if (latestGamepadInPip) return@collect
+            if (latestGamepadLocked && action !is com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleScreenLock) {
+                return@collect
+            }
+            val player = playerState.player
+            when (action) {
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.PlayPause -> {
+                    togglePlayerPlaybackFromUserAction(player)
+                    showControls = true
+                }
+                is com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.SeekRelative -> {
+                    val target = calculateSeekTargetPositionMs(
+                        currentPositionMs = player.currentPosition,
+                        durationMs = player.duration,
+                        action = PlayerKeyAction.SeekRelative(action.deltaMs),
+                    ) ?: return@collect
+                    seekPlayerFromUserAction(player, target)
+                    danmakuManager.seekTo(target)
+                    showControls = true
+                }
+                is com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.AdjustVolume -> {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        if (action.direction >= 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                        AudioManager.FLAG_SHOW_UI,
+                    )
+                }
+                is com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.AdjustBrightness -> {
+                    val window = getActivity()?.window ?: return@collect
+                    val params = window.attributes
+                    val base = if (params.screenBrightness >= 0f) {
+                        params.screenBrightness
+                    } else {
+                        runCatching {
+                            android.provider.Settings.System.getInt(
+                                context.contentResolver,
+                                android.provider.Settings.System.SCREEN_BRIGHTNESS,
+                            ) / 255f
+                        }.getOrDefault(0.5f)
+                    }
+                    params.screenBrightness = (base + action.deltaFraction).coerceIn(0.02f, 1.0f)
+                    window.attributes = params
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleMute -> {
+                    audioManager.adjustStreamVolume(
+                        AudioManager.STREAM_MUSIC,
+                        AudioManager.ADJUST_TOGGLE_MUTE,
+                        AudioManager.FLAG_SHOW_UI,
+                    )
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleDanmaku -> {
+                    val newState = !danmakuManager.isEnabled
+                    danmakuManager.isEnabled = newState
+                    if (!newState) danmakuManager.clear()
+                    settingsScope.launch {
+                        SettingsManager.setDanmakuEnabled(context, newState)
+                    }
+                    Toast.makeText(context, if (newState) "弹幕已开启" else "弹幕已关闭", Toast.LENGTH_SHORT).show()
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleFullscreen -> {
+                    latestGamepadToggleFullscreen()
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleLike -> {
+                    latestGamepadToggleLike()
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.TripleAction -> {
+                    if (latestGamepadLikeKnown) latestGamepadTriple()
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleScreenLock -> {
+                    isScreenLocked = !isScreenLocked
+                    showControls = true
+                    Toast.makeText(context, if (isScreenLocked) "屏幕已锁定" else "屏幕已解锁", Toast.LENGTH_SHORT).show()
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.PreviousPart -> {
+                    val pages = (latestGamepadUiState as? VideoPlaybackUiState.Success)?.info?.pages.orEmpty()
+                    val currentCid = (latestGamepadUiState as? VideoPlaybackUiState.Success)?.info?.cid ?: 0L
+                    val currentIndex = pages.indexOfFirst { it.cid == currentCid }
+                    if (currentIndex > 0) {
+                        latestGamepadPageSelect(pages[currentIndex - 1].page)
+                        Toast.makeText(context, "切换至上一分P", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "已经是第一分P了", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.NextPart -> {
+                    val pages = (latestGamepadUiState as? VideoPlaybackUiState.Success)?.info?.pages.orEmpty()
+                    val currentCid = (latestGamepadUiState as? VideoPlaybackUiState.Success)?.info?.cid ?: 0L
+                    val currentIndex = pages.indexOfFirst { it.cid == currentCid }
+                    if (currentIndex in 0 until pages.lastIndex) {
+                        latestGamepadPageSelect(pages[currentIndex + 1].page)
+                        Toast.makeText(context, "切换至下一分P", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "已经是最后一分P了", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.ToggleControls -> {
+                    showControls = !showControls
+                }
+                is com.android.purebilibili.core.input.gamepad.GamepadPlayerAction.SpeedBoostChanged -> {
+                    if (action.active) {
+                        if (gamepadSavedSpeedParams == null) {
+                            gamepadSavedSpeedParams = player.playbackParameters
+                        }
+                        player.playbackParameters = resolveSpeedSafePlaybackParameters(
+                            requestedSpeed = action.speed,
+                            currentAudioQuality = latestGamepadAudioQuality,
+                        )
+                    } else {
+                        gamepadSavedSpeedParams?.let { saved ->
+                            player.playbackParameters = saved
+                            gamepadSavedSpeedParams = null
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1998,7 +2535,6 @@ private fun VideoPlayerSectionContent(
     )
     val effectiveFlippedHorizontal = isFlippedHorizontal && !navigationHdrSurfaceRequired
     val effectiveFlippedVertical = isFlippedVertical && !navigationHdrSurfaceRequired
-    val playerPageBackdrop = rememberPlayerPageBackdrop()
     val pageGlassSupported = supportsPlayerPageGlass(
         liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         fullscreen = isFullscreen,
@@ -2039,6 +2575,10 @@ private fun VideoPlayerSectionContent(
         visualWorkActive = playerVisualWorkActive,
         miniMode = MiniPlayerManager.getInstance(context).isMiniMode,
         overlaysSuppressed = suppressTransientOverlaysForTransition,
+    )
+    val playerPageBackdrop = rememberPlayerPageBackdrop(
+        recordingEnabled = capturePlayerPage &&
+            com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current,
     )
     val pageChromeBackdrop = playerPageBackdrop.backdrop.takeIf {
         capturePlayerPage && playerPageBackdrop.video.isReady &&
@@ -2124,141 +2664,60 @@ private fun VideoPlayerSectionContent(
                     "playWhenReady=${playerState.player.playWhenReady} playbackState=${playerState.player.playbackState}"
             }
             //  [新增] 处理双指缩放/平移，并在全屏时支持双指调倍速
-            .pointerInput(
-                currentPlaybackIdentity,
-                playerState.player,
-                isFullscreen,
-                isInPipMode,
-                isScreenLocked,
-                twoFingerSpeedMode,
-                playbackSpeedOptions,
-                isPortraitFullscreen,
-            ) {
-                if (!shouldEnableInlinePlayerGestures(isPortraitFullscreen)) {
-                    return@pointerInput
-                }
-                try {
-                    awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    var totalPanX = 0f
-                    var totalPanY = 0f
-                    var lockedAxis: LockedTwoFingerSpeedAxis? = null
-                    var gestureStartSpeed = playerState.player.playbackParameters.speed
-                    val directionThresholdPx = viewConfiguration.touchSlop * 1.5f
-                    var observedMultiTouch = false
-                    var viewportTransformObserved = false
-
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val pressedCount = event.changes.count { it.pressed }
-                        if (pressedCount == 0) {
-                            isMultiTouchActive = false
-                            break
-                        }
-                        if (pressedCount < 2) {
-                            if (observedMultiTouch) {
-                                isMultiTouchActive = false
-                                break
-                            }
-                            continue
-                        }
-                        observedMultiTouch = true
-                        isMultiTouchActive = true
-
-                        if (isLongPressing) {
-                            finishLongPressSpeedGesture(gestureEnded = true)
-                        }
-
-                        val pan = event.calculatePan()
-                        val zoom = event.calculateZoom()
-                        if (kotlin.math.abs(zoom - 1f) > 0.005f) {
-                            viewportTransformObserved = true
-                        }
-                        totalPanX += pan.x
-                        totalPanY += pan.y
-
-                        val speedModeAllowed = isFullscreen &&
-                            !isInPipMode &&
-                            !isScreenLocked &&
-                            !viewportTransformObserved &&
-                            twoFingerSpeedMode != TwoFingerSpeedGestureMode.Off
-
-                        if (speedModeAllowed && lockedAxis == null) {
-                            lockedAxis = resolveLockedTwoFingerSpeedAxis(
-                                mode = twoFingerSpeedMode,
-                                totalDragX = totalPanX,
-                                totalDragY = totalPanY,
-                                thresholdPx = directionThresholdPx
-                            )
-                            if (lockedAxis != null) {
-                                gestureStartSpeed = playerState.player.playbackParameters.speed
-                                showControls = false
-                                isGestureVisible = false
-                            }
-                        }
-
-                        if (speedModeAllowed && lockedAxis != null) {
-                            val resolvedSpeed = resolveTwoFingerGesturePlaybackSpeed(
-                                startSpeed = gestureStartSpeed,
-                                mode = twoFingerSpeedMode,
-                                totalDragX = totalPanX,
-                                totalDragY = totalPanY,
-                                containerWidthPx = size.width.toFloat(),
-                                containerHeightPx = size.height.toFloat(),
-                                supportedSpeeds = playbackSpeedOptions
-                            )
-                            val effectiveSpeed = resolveEffectivePlaybackSpeed(
-                                requestedSpeed = resolvedSpeed,
-                                currentAudioQuality = currentAudioQuality
-                            )
-                            if (abs(playerState.player.playbackParameters.speed - effectiveSpeed) > 0.001f) {
-                                applyExplicitPlaybackSpeedChange(resolvedSpeed)
-                            }
+            .videoPlayerMultiTouchGestures(
+                currentPlaybackIdentity = currentPlaybackIdentity,
+                player = playerState.player,
+                isFullscreen = isFullscreen,
+                isInPipMode = isInPipMode,
+                isScreenLocked = isScreenLocked,
+                twoFingerSpeedMode = twoFingerSpeedMode,
+                playbackSpeedOptions = playbackSpeedOptions,
+                isPortraitFullscreen = isPortraitFullscreen,
+                callbacks = remember(playerState.player, currentPlaybackIdentity) {
+                    VideoPlayerMultiTouchCallbacks(
+                        getScale = { scale },
+                        setScale = { scale = it },
+                        getPanX = { panX },
+                        setPanX = { panX = it },
+                        getPanY = { panY },
+                        setPanY = { panY = it },
+                        setMultiTouchActive = { isMultiTouchActive = it },
+                        isLongPressing = { isLongPressing },
+                        onFinishLongPress = { finishLongPressSpeedGesture(gestureEnded = true) },
+                        isVerticalVideo = { isVerticalVideo },
+                        getCurrentAudioQuality = { currentAudioQuality },
+                        onHideControlsAndGesture = {
+                            showControls = false
+                            isGestureVisible = false
+                        },
+                        onApplyPlaybackSpeed = { applyExplicitPlaybackSpeedChange(it) },
+                        onShowTwoFingerSpeedFeedback = { effectiveSpeed ->
                             twoFingerFeedbackSpeed = effectiveSpeed
                             twoFingerSpeedFeedbackVisible = true
                             twoFingerSpeedFeedbackRevision++
-                            event.changes.forEach { change ->
-                                if (change.position != change.previousPosition) {
-                                    change.consume()
-                                }
-                            }
-                            continue
-                        }
-
-                        if (
-                            shouldEnableViewportTransformGesture(
-                                isScreenLocked = isScreenLocked,
-                                isFullscreen = isFullscreen,
-                                isPortraitFullscreen = isPortraitFullscreen,
-                                isVerticalVideo = isVerticalVideo,
-                            ) && (zoom != 1f || pan != Offset.Zero)
-                        ) {
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-
-                            if (scale > 1f) {
-                                val maxPanX = (size.width * scale - size.width) / 2
-                                val maxPanY = (size.height * scale - size.height) / 2
-                                panX = (panX + pan.x * scale).coerceIn(-maxPanX, maxPanX)
-                                panY = (panY + pan.y * scale).coerceIn(-maxPanY, maxPanY)
-                                isGestureVisible = false
-                                showControls = false
-                            } else {
-                                panX = 0f
-                                panY = 0f
-                            }
-
-                            event.changes.forEach { change ->
-                                if (change.position != change.previousPosition) {
-                                    change.consume()
-                                }
-                            }
-                        }
-                    }
-                    }
-                } finally {
-                    isMultiTouchActive = false
-                }
-            }
+                        },
+                        isTwoFingerChapterSkipEnabled = { currentTwoFingerChapterSkipEnabled },
+                        getViewPoints = { currentViewPoints },
+                        onChapterSeek = { positionMs, feedbackText ->
+                            seekSceneHaptic.performHapticFeedback(
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                            )
+                            commitExplicitSeek(positionMs)
+                            seekFeedbackGeneration += 1L
+                            seekFeedbackText = feedbackText
+                            seekFeedbackVisible = true
+                        },
+                        isPinchZoomSnapAndBadgeEnabled = { currentPinchZoomSnapAndBadgeEnabled },
+                        onZoomSnappedToFill = {
+                            haptic.performHapticFeedback(
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                            )
+                            zoomSnapHintText = "已缩放至铺满画面"
+                            zoomSnapHintGeneration += 1L
+                        },
+                    )
+                },
+            )
             //  先处理拖拽手势 (音量/亮度/进度)
             .pointerInput(
                 currentPlaybackIdentity,
@@ -2267,7 +2726,6 @@ private fun VideoPlayerSectionContent(
                 isScreenLocked,
                 isFullscreen,
                 isVerticalVideo,
-                showControls,
                 portraitSwipeToFullscreenEnabled,
                 centerSwipeToFullscreenEnabled,
                 slideVolumeBrightnessEnabled,
@@ -2452,6 +2910,19 @@ private fun VideoPlayerSectionContent(
                                             "👆 Swipe to fullscreen triggered"
                                         }
                                     }
+                                } else if (
+                                    shouldTriggerPortraitSwipeDownMinimize(
+                                        enabled = currentPortraitSwipeDownMinimizeEnabled,
+                                        isFullscreen = isFullscreen,
+                                        isPortraitFullscreen = isPortraitFullscreen,
+                                        isInPipMode = isInPipMode,
+                                        reverseGesture = fullscreenGestureReverse,
+                                        totalDragDistanceY = totalDragDistanceY,
+                                        thresholdPx = PORTRAIT_SWIPE_DOWN_MINIMIZE_THRESHOLD_DP.dp.toPx(),
+                                    )
+                                ) {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    latestOnBack()
                                 }
                             }
                             isGestureVisible = false
@@ -2516,10 +2987,13 @@ private fun VideoPlayerSectionContent(
                                 ) {
                                     longPressSpeedLocked = true
                                     lockedLongPressSpeed = effectiveLongPressSpeed
+                                    longPressSlideSession.flushPendingSpeedIfNeeded(effectiveLongPressSpeed) { speed ->
+                                        applyLongPressPlaybackParameters(originalPlaybackParameters.withSpeed(speed))
+                                    }
                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                     Toast.makeText(
                                         context,
-                                        "已锁定 ${effectiveLongPressSpeed}x",
+                                        "已锁定 ${formatLongPressSpeedLabel(effectiveLongPressSpeed)}",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -2583,7 +3057,8 @@ private fun VideoPlayerSectionContent(
                                         leftZoneEnd = leftZoneEnd,
                                         rightZoneStart = rightZoneStart,
                                         portraitSwipeToFullscreenEnabled = portraitSwipeToFullscreenEnabled,
-                                        centerSwipeToFullscreenEnabled = centerSwipeToFullscreenEnabled,
+                                        centerSwipeToFullscreenEnabled = centerSwipeToFullscreenEnabled ||
+                                            (currentPortraitSwipeDownMinimizeEnabled && !isFullscreen && !isSwipeUp && !fullscreenGestureReverse),
                                         slideVolumeBrightnessEnabled = slideVolumeBrightnessEnabled
                                     )
 
@@ -2765,11 +3240,9 @@ private fun VideoPlayerSectionContent(
                 longPressSpeed,
                 isScreenLocked,
                 currentAudioQuality,
-                hasShownHiResCompatHint,
-                scale,
-                isMultiTouchActive,
                 isFullscreen,
                 longPressSpeedLockEnabled,
+                longPressSpeedSlideMode,
                 isPortraitFullscreen,
             ) {
                 if (!shouldEnableInlinePlayerGestures(isPortraitFullscreen)) {
@@ -2798,6 +3271,28 @@ private fun VideoPlayerSectionContent(
                         }
                         totalDragDistanceY += dragAmount.y
                         totalDragDistanceX += dragAmount.x
+                        if (
+                            longPressSpeedSlideAdjustEnabled &&
+                            isLongPressing &&
+                            !longPressSpeedLocked &&
+                            kotlin.math.abs(totalDragDistanceX) > kotlin.math.abs(totalDragDistanceY)
+                        ) {
+                            longPressSlideSession.handleHorizontalSlide(
+                                mode = longPressSpeedSlideMode,
+                                baseSpeed = longPressSlideBaseSpeed,
+                                currentSpeed = effectiveLongPressSpeed,
+                                accumulatedDragXPx = totalDragDistanceX,
+                                deadzonePx = LONG_PRESS_CONTINUOUS_SPEED_DEADZONE_DP.dp.toPx(),
+                                continuousStepPx = LONG_PRESS_CONTINUOUS_SPEED_STEP_DP.dp.toPx(),
+                                presetStepPx = LONG_PRESS_SLIDE_SPEED_STEP_DP.dp.toPx(),
+                                nowMs = android.os.SystemClock.elapsedRealtime(),
+                                haptic = haptic,
+                                onSpeedChanged = { effectiveLongPressSpeed = it },
+                                applySpeed = { speed ->
+                                    applyLongPressPlaybackParameters(originalPlaybackParameters.withSpeed(speed))
+                                },
+                            )
+                        }
                         if (!longPressSpeedLockEnabled) {
                             change.consume()
                             return@detectDragGesturesAfterLongPress
@@ -2841,10 +3336,13 @@ private fun VideoPlayerSectionContent(
                         ) {
                             longPressSpeedLocked = true
                             lockedLongPressSpeed = effectiveLongPressSpeed
+                            longPressSlideSession.flushPendingSpeedIfNeeded(effectiveLongPressSpeed) { speed ->
+                                applyLongPressPlaybackParameters(originalPlaybackParameters.withSpeed(speed))
+                            }
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             Toast.makeText(
                                 context,
-                                "已锁定 ${effectiveLongPressSpeed}x",
+                                "已锁定 ${formatLongPressSpeedLabel(effectiveLongPressSpeed)}",
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
@@ -2893,6 +3391,13 @@ private fun VideoPlayerSectionContent(
                         }
                         // 🔒 锁定时禁用双击
                         if (isScreenLocked) return@detectPlayerTapGestures
+                        // 放大状态下双击直接复位画幅，避免锁在缩放态
+                        if (scale > 1.01f) {
+                            scale = 1f
+                            panX = 0f
+                            panY = 0f
+                            return@detectPlayerTapGestures
+                        }
 
                         val screenWidth = size.width.toFloat()
                         val player = playerState.player
@@ -2926,6 +3431,19 @@ private fun VideoPlayerSectionContent(
                                 seekFeedbackGeneration = feedback.generation
                                 seekFeedbackText = feedback.text
                                 seekFeedbackVisible = true
+                                if (currentDoubleTapJumpAheadEnabled) {
+                                    val candidate = com.android.purebilibili.feature.video.ui.overlay
+                                        .resolveDoubleTapJumpAheadCandidate(
+                                            currentPositionMs = newPos,
+                                            durationMs = player.duration,
+                                            viewPoints = currentViewPoints,
+                                            pbpRidgeSamples = currentPbpRidgeSamples,
+                                        )
+                                    if (candidate != null) {
+                                        jumpAheadCandidate = candidate
+                                        jumpAheadGeneration += 1L
+                                    }
+                                }
                                 com.android.purebilibili.core.util.Logger.d("VideoPlayerSection") {
                                     "⏩ DoubleTap right: +${seekForwardSeconds}s"
                                 }
@@ -2959,6 +3477,57 @@ private fun VideoPlayerSectionContent(
                             }
                         }
                     }
+                )
+            }
+            // 全屏底部居中上滑呼出相关视频抽屉：挂在同一手势节点上，保留该区域单击/双击/长按/横滑快进
+            .pointerInput(
+                bvid,
+                isFullscreen,
+                fullscreenSwipeUpMoreEnabled,
+                showControls,
+                isScreenLocked,
+                isInPipMode,
+                showFullscreenRelatedDrawer,
+                relatedVideos.isNotEmpty(),
+                queuedPlaylist.isNotEmpty(),
+            ) {
+                if (
+                    !isFullscreen ||
+                    !fullscreenSwipeUpMoreEnabled ||
+                    showControls ||
+                    isScreenLocked ||
+                    isInPipMode ||
+                    showFullscreenRelatedDrawer ||
+                    (relatedVideos.isEmpty() && queuedPlaylist.isEmpty())
+                ) {
+                    return@pointerInput
+                }
+                var inBottomCenterZone = false
+                var dragY = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { startOffset ->
+                        val halfWidthPx = 160.dp.toPx()
+                        val zoneHeightPx = 64.dp.toPx()
+                        inBottomCenterZone =
+                            startOffset.y >= size.height - zoneHeightPx &&
+                            kotlin.math.abs(startOffset.x - size.width / 2f) <= halfWidthPx
+                        dragY = 0f
+                    },
+                    onDragEnd = { inBottomCenterZone = false },
+                    onDragCancel = { inBottomCenterZone = false },
+                    onVerticalDrag = { change, amount ->
+                        if (!inBottomCenterZone) return@detectVerticalDragGestures
+                        dragY += amount
+                        if (dragY < -20.dp.toPx()) {
+                            inBottomCenterZone = false
+                            change.consume()
+                            showControls = false
+                            showFullscreenRelatedDrawer = true
+                            haptic.performHapticFeedback(
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                            )
+                        }
+                    },
                 )
             }
     ) {
@@ -3378,17 +3947,6 @@ private fun VideoPlayerSectionContent(
             }
         }
 
-        LaunchedEffect(isFullscreen) {
-            if (!hasObservedOrientationChange) {
-                hasObservedOrientationChange = true
-                return@LaunchedEffect
-            }
-            orientationHintText = resolveOrientationSwitchHintText(isFullscreen)
-            orientationHintVisible = true
-            delay(760)
-            orientationHintVisible = false
-        }
-
         //  弹幕设置变化时实时应用
         LaunchedEffect(danmakuManager, danmakuSettings) {
             danmakuManager.updateSettings(settings = danmakuSettings)
@@ -3706,6 +4264,14 @@ private fun VideoPlayerSectionContent(
         val surfaceCanCrossfade = canSurfaceParticipateInAlphaCrossfade(
             usesTextureSurface = useTextureSurface,
         )
+        // TextureView 位于主窗口渲染树内，可随确定性共享容器同步缩放、圆角裁切与叠化；
+        // 首帧已出画且无 Anime4K 独立 SurfaceView 时在自身形变期间保留实时画面，消除侧滑硬切封面与取消回弹闪烁。
+        val effectiveSharedSurfaceVisible = sharedSurfaceVisible || (
+            sharedTextureSurfaceVisible &&
+                useTextureSurface &&
+                !shouldUseAnime4kPipeline &&
+                isFirstFrameRendered
+            )
         // isPortraitFullscreen 不作为 key：退出竖屏全屏保留 PlayerView 实例，由上方
         // LaunchedEffect 在退出瞬间直接重绑 surface（rebindPlayerSurfaceIfNeeded）恢复画面。
         // HDR/色彩元数据与纹理翻转维度仍触发重建。
@@ -3720,7 +4286,7 @@ private fun VideoPlayerSectionContent(
                     // PlayerView leaves this backing opaque over the source-cover underlay.
                     // Shared by glass, MD3 and Miuix; their viewport geometry stays unchanged.
                     .graphicsLayer {
-                        alpha = if (isPlayerSurfaceReady) playerSurfaceAlpha.value else 0f
+                        alpha = if (isPlayerSurfaceReady && effectiveSharedSurfaceVisible) playerSurfaceAlpha.value else 0f
                     }
                     .background(Color.Black),
                 contentAlignment = Alignment.Center
@@ -3783,11 +4349,17 @@ private fun VideoPlayerSectionContent(
                     // 尺寸由布局回调发布，只在副作用中观察；不要把实测尺寸作为
                     // 组合阶段的 effect key，让 PlayerView 每次测量后再重组整块播放视口。
                     snapshotFlow { measuredPlayerViewportSize.value }.collect { viewportSize ->
+                        val expectedViewport = resolveExpectedPlayerViewportSize(
+                            measuredWidth = viewportSize.width,
+                            measuredHeight = viewportSize.height,
+                            layoutWidth = viewportLayout.width,
+                            layoutHeight = viewportLayout.height,
+                        )
                         schedulePlayerViewViewportRefresh(
                             playerView = playerView,
                             resizeMode = targetResizeMode,
-                            expectedWidth = viewportSize.width,
-                            expectedHeight = viewportSize.height,
+                            expectedWidth = expectedViewport.width,
+                            expectedHeight = expectedViewport.height,
                             videoWidth = playerVideoSize.width,
                             videoHeight = playerVideoSize.height,
                         )
@@ -3823,7 +4395,7 @@ private fun VideoPlayerSectionContent(
                                 forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation
                             )
                         )
-                        (playerView.videoSurfaceView as? TextureView)?.isOpaque = !isTransitionActive
+                        (playerView.videoSurfaceView as? TextureView)?.isOpaque = !isTransitionActive && sharedSurfaceVisible
                         applyPlayerViewResizeMode(
                             playerView = playerView,
                             resizeMode = targetResizeMode,
@@ -3831,8 +4403,9 @@ private fun VideoPlayerSectionContent(
                         )
                         playerView.keepScreenOn = keepVideoPlaybackAwake
                         // Keep the decoder output attached so cancelling the gesture reveals a live frame.
-                        playerView.videoSurfaceView?.alpha = if (miniPlayerPreviewCoversVideo) 0f else 1f
-                        playerView.visibility = if (!handingOffToMiniPlayer && !anime4kFrameVisible && shouldShowInlinePlayerView(
+                        playerView.alpha = if (effectiveSharedSurfaceVisible) 1f else 0f
+                        playerView.videoSurfaceView?.alpha = if (miniPlayerPreviewCoversVideo || !effectiveSharedSurfaceVisible) 0f else 1f
+                        playerView.visibility = if (effectiveSharedSurfaceVisible && !handingOffToMiniPlayer && !anime4kFrameVisible && shouldShowInlinePlayerView(
                                 isPortraitFullscreen = isPortraitFullscreen,
                                 forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
                                 shouldKeepCoverForManualStart = keepCoverForManualStart
@@ -3848,6 +4421,7 @@ private fun VideoPlayerSectionContent(
                     // 不清空播放绑定；HDR 不进行纹理截图或输出面降级。
                     onReset = { view ->
                         cancelPlayerViewViewportRefresh(view)
+                        measuredPlayerViewportSize.value = IntSize.Zero
                         val texture = view.videoSurfaceView as? TextureView
                         if (hasCurrentOutputFrame && texture?.isAvailable == true &&
                             texture.width > 0 && texture.height > 0
@@ -3921,6 +4495,9 @@ private fun VideoPlayerSectionContent(
                 }
 
                 if (isPlayerSurfaceReady && shouldUseAnime4kPipeline) {
+                    val lastAnime4kDisplayState = remember(playerState.player) {
+                        arrayOfNulls<Any>(6)
+                    }
                     AndroidView(
                         factory = { ctx ->
                             Anime4KGLSurfaceView(ctx, initialConfig = anime4kConfig).apply {
@@ -3941,36 +4518,53 @@ private fun VideoPlayerSectionContent(
                                         anime4kInputSurface = null
                                     }
                                 }
+                                val displayScaleMode = viewportAspectRatio.toAnime4KDisplayScaleMode()
                                 updateConfig(anime4kConfig)
                                 updateInputSize(videoSizeState.first, videoSizeState.second)
                                 updateFlip(effectiveFlippedHorizontal, effectiveFlippedVertical)
-                                updateDisplayScaleMode(viewportAspectRatio.toAnime4KDisplayScaleMode())
+                                updateDisplayScaleMode(displayScaleMode)
+                                lastAnime4kDisplayState[0] = anime4kConfig
+                                lastAnime4kDisplayState[1] = videoSizeState.first
+                                lastAnime4kDisplayState[2] = videoSizeState.second
+                                lastAnime4kDisplayState[3] = effectiveFlippedHorizontal
+                                lastAnime4kDisplayState[4] = effectiveFlippedVertical
+                                lastAnime4kDisplayState[5] = displayScaleMode
                                 visibility = View.VISIBLE
                             }
                         },
                         update = { surfaceView ->
                             anime4kSurfaceViewRef = surfaceView
-                            surfaceView.onInputSurfaceChanged = { surface ->
-                                if (anime4kSurfaceViewRef === surfaceView) {
-                                    anime4kInputSurface = surface
-                                    if (surface == null) anime4kDisplayedFirstFrame = false
-                                }
+                            val displayScaleMode = viewportAspectRatio.toAnime4KDisplayScaleMode()
+                            if (lastAnime4kDisplayState[0] != anime4kConfig) {
+                                surfaceView.updateConfig(anime4kConfig)
+                                lastAnime4kDisplayState[0] = anime4kConfig
                             }
-                            surfaceView.onFirstFrameRendered = {
-                                if (anime4kSurfaceViewRef === surfaceView) anime4kDisplayedFirstFrame = true
+                            if (lastAnime4kDisplayState[1] != videoSizeState.first ||
+                                lastAnime4kDisplayState[2] != videoSizeState.second
+                            ) {
+                                surfaceView.updateInputSize(videoSizeState.first, videoSizeState.second)
+                                lastAnime4kDisplayState[1] = videoSizeState.first
+                                lastAnime4kDisplayState[2] = videoSizeState.second
                             }
-                            surfaceView.onPipelineError = { error ->
-                                if (anime4kSurfaceViewRef === surfaceView) {
-                                    Logger.e("VideoPlayerSection", "Anime4K 管线不可用，已回退原始视频输出", error)
-                                    anime4kPipelineFailed = true
-                                    anime4kInputSurface = null
-                                }
+                            if (lastAnime4kDisplayState[3] != effectiveFlippedHorizontal ||
+                                lastAnime4kDisplayState[4] != effectiveFlippedVertical
+                            ) {
+                                surfaceView.updateFlip(effectiveFlippedHorizontal, effectiveFlippedVertical)
+                                lastAnime4kDisplayState[3] = effectiveFlippedHorizontal
+                                lastAnime4kDisplayState[4] = effectiveFlippedVertical
                             }
-                            surfaceView.updateConfig(anime4kConfig)
-                            surfaceView.updateInputSize(videoSizeState.first, videoSizeState.second)
-                            surfaceView.updateFlip(effectiveFlippedHorizontal, effectiveFlippedVertical)
-                            surfaceView.updateDisplayScaleMode(viewportAspectRatio.toAnime4KDisplayScaleMode())
-                            surfaceView.visibility = View.VISIBLE
+                            if (lastAnime4kDisplayState[5] != displayScaleMode) {
+                                surfaceView.updateDisplayScaleMode(displayScaleMode)
+                                lastAnime4kDisplayState[5] = displayScaleMode
+                            }
+                            val targetVisibility = if (sharedSurfaceVisible) View.VISIBLE else View.INVISIBLE
+                            if (surfaceView.visibility != targetVisibility) {
+                                surfaceView.visibility = targetVisibility
+                            }
+                            val targetAlpha = if (sharedSurfaceVisible) 1f else 0f
+                            if (surfaceView.alpha != targetAlpha) {
+                                surfaceView.alpha = targetAlpha
+                            }
                         },
                         onRelease = { surfaceView ->
                             surfaceView.onInputSurfaceChanged = {}
@@ -4155,7 +4749,7 @@ private fun VideoPlayerSectionContent(
     val isSurfaceRevealSettling = hasStartedSmoothReveal && !hasSurfaceRevealSettled
     // 装载媒体和 videoSize 不能证明当前输出面已经出画。玻璃与原生路径共用首帧揭开
     // 时序：淡入期间保留不透明封面垫底，直到视频层不透明后才移除，避免中途露出黑底。
-    val holdEntryCoverUnderlay = !isPlayerSurfaceReady || shouldHoldEntryCoverUnderlay(
+    val holdEntryCoverUnderlay = !effectiveSharedSurfaceVisible || !isPlayerSurfaceReady || shouldHoldEntryCoverUnderlay(
         isFirstFrameRendered = isFirstFrameRendered,
         forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
         shouldKeepCoverForManualStart = keepCoverForManualStart,
@@ -4276,7 +4870,7 @@ private fun VideoPlayerSectionContent(
     val forcedReturnCoverSharedElementSourceRoute = resolveForcedReturnCoverSharedElementSourceRoute(
         sourceRouteForSharedElement
     )
-    val coverLayerZIndex = resolveVideoPlayerCoverLayerZIndex(
+    val coverLayerZIndex = if (!effectiveSharedSurfaceVisible) 100f else resolveVideoPlayerCoverLayerZIndex(
         forceCoverDuringReturnAnimation = forceCoverDuringReturnAnimation,
         shouldKeepCoverForManualStart = keepCoverForManualStart,
     )
@@ -4468,7 +5062,8 @@ private fun VideoPlayerSectionContent(
     )
 
     // 2. DanmakuView (使用 ByteDance DanmakuRenderEngine - 覆盖在 PlayerView 上方)
-    val danmakuRenderWorkActive = playerVisualWorkActive
+    // 不能复用 playerVisualWorkActive：它含窗口焦点，小窗/分屏失焦会让弹幕整层消失。
+    val danmakuRenderWorkActive = rememberDanmakuRenderWorkActive(isInPipMode) && playerInViewport
     val shouldShowDanmakuLayer = danmakuHostActive && !suppressTransientOverlaysForTransition &&
         !forceCoverDuringReturnAnimation && shouldShowDanmakuLayers(
         isInPipMode = isInPipMode,
@@ -5073,6 +5668,56 @@ private fun VideoPlayerSectionContent(
             isFullscreen = isFullscreen,
         )
 
+        var showFirstFullscreenGestureHint by remember { mutableStateOf(false) }
+        LaunchedEffect(isFullscreen, isInPipMode) {
+            if (!isFullscreen || isInPipMode) {
+                showFirstFullscreenGestureHint = false
+                return@LaunchedEffect
+            }
+            val alreadyShown = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                com.android.purebilibili.feature.onboarding.FirstLaunchSetupStore
+                    .isFullscreenGestureHintShown(context)
+            }
+            if (!alreadyShown) {
+                showFirstFullscreenGestureHint = true
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.android.purebilibili.feature.onboarding.FirstLaunchSetupStore
+                        .markFullscreenGestureHintShown(context)
+                }
+                kotlinx.coroutines.delay(4500)
+                showFirstFullscreenGestureHint = false
+            }
+        }
+        LaunchedEffect(isGestureVisible) {
+            if (isGestureVisible && showFirstFullscreenGestureHint) {
+                showFirstFullscreenGestureHint = false
+            }
+        }
+        AnimatedVisibility(
+            visible = showFirstFullscreenGestureHint && isFullscreen && !isInPipMode,
+            enter = fadeIn() + slideInVertically { -it / 2 },
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 56.dp, start = 16.dp, end = 16.dp)
+                .zIndex(122f),
+        ) {
+            AppSurface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.72f),
+                border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.18f)),
+                modifier = Modifier.clickable { showFirstFullscreenGestureHint = false },
+            ) {
+                AppText(
+                    text = "左右滑进度 · 左亮度右音量 · 长按倍速 · 底边上滑看推荐",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+        }
+
         PlayerSeekCancelHint(
             visible = shouldShowSeekIndicator && seekCancelPending,
             gestureMotionSpec = gestureMotionSpec,
@@ -5080,15 +5725,6 @@ private fun VideoPlayerSectionContent(
                 .align(Alignment.Center)
                 .padding(top = uiLayoutPolicy.seekCancelHintOffsetDp.dp)
                 .zIndex(121f),
-        )
-
-        PlayerOrientationHint(
-            visible = orientationHintVisible && !isInPipMode,
-            orientationHintText = orientationHintText,
-            gestureMotionSpec = gestureMotionSpec,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .padding(bottom = 196.dp),
         )
 
         //  [新增] 双击跳转视觉反馈 (±Ns 提示)
@@ -5106,6 +5742,45 @@ private fun VideoPlayerSectionContent(
             modifier = Modifier.align(Alignment.Center),
         )
 
+        VideoPlayerJumpAheadChip(
+            candidate = jumpAheadCandidate,
+            generation = jumpAheadGeneration,
+            enabled = doubleTapJumpAheadEnabled,
+            isFullscreen = isFullscreen,
+            isInPipMode = isInPipMode,
+            isScreenLocked = isScreenLocked,
+            onJumpAhead = { targetPositionMs ->
+                seekSceneHaptic.performHapticFeedback(
+                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                )
+                commitExplicitSeek(targetPositionMs)
+            },
+            onClearCandidate = { jumpAheadCandidate = null },
+        )
+
+        VideoPlayerUpNextAndDrawerOverlays(
+            bvid = bvid,
+            uiState = uiState,
+            isFullscreen = isFullscreen,
+            isPortraitFullscreen = isPortraitFullscreen,
+            isInPipMode = isInPipMode,
+            isScreenLocked = isScreenLocked,
+            showControls = showControls,
+            fullscreenSwipeUpMoreEnabled = fullscreenSwipeUpMoreEnabled,
+            showFullscreenRelatedDrawer = showFullscreenRelatedDrawer,
+            onShowFullscreenRelatedDrawerChange = { showFullscreenRelatedDrawer = it },
+            playbackCompletionBehavior = playbackCompletionBehavior,
+            endScreenNextCountdownEnabled = endScreenNextCountdownEnabled,
+            endScreenCountdownDismissed = endScreenCountdownDismissed,
+            onDismissEndScreenCountdown = { endScreenCountdownDismissed = true },
+            endScreenNextVideo = endScreenNextVideo,
+            endScreenCountdownSeconds = endScreenCountdownSeconds,
+            queuedNextItem = queuedNextItem,
+            relatedVideos = relatedVideos,
+            queuedPlaylist = queuedPlaylist,
+            onRelatedVideoClick = onRelatedVideoClick,
+        )
+
         TwoFingerSpeedFeedbackOverlay(
             visible = twoFingerSpeedFeedbackVisible && !isInPipMode,
             speed = twoFingerFeedbackSpeed,
@@ -5113,9 +5788,19 @@ private fun VideoPlayerSectionContent(
             hazeState = overlayDrawerHazeState
         )
 
+        PlayerOrientationHint(
+            visible = zoomSnapHintText != null && !isInPipMode,
+            orientationHintText = zoomSnapHintText ?: "",
+            gestureMotionSpec = gestureMotionSpec,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(bottom = 196.dp),
+        )
+
         PlayerRestorePictureButton(
             visible = scale > 1.05f && !isInPipMode,
             uiLayoutPolicy = uiLayoutPolicy,
+            label = formatPinchZoomRestoreLabel(scale, pinchZoomSnapAndBadgeEnabled),
             onRestore = {
                 scale = 1f
                 panX = 0f
@@ -5133,20 +5818,33 @@ private fun VideoPlayerSectionContent(
             modifier = Modifier.matchParentSize(),
         )
 
+        val longPressHintActive = shouldShowLongPressSpeedFeedback(
+            isLongPressing = isLongPressing,
+            isPlaybackSurfaceActive = !isInPipMode,
+            hintDismissed = longPressSpeedHintDismissed,
+            hintHidden = longPressSpeedHintHidden,
+        )
+        val manualSpeedHintActive = !longPressHintActive &&
+            !isLongPressing &&
+            !longPressSpeedHintHidden &&
+            !isInPipMode &&
+            longPressSlideSession.manualFeedbackVisible
         PlayerLongPressSpeedHint(
-            visible = shouldShowLongPressSpeedFeedback(
-                isLongPressing = isLongPressing,
-                isPlaybackSurfaceActive = !isInPipMode,
-                hintDismissed = longPressSpeedHintDismissed,
-                hintHidden = longPressSpeedHintHidden,
-            ),
-            longPressSpeedLocked = longPressSpeedLocked,
-            effectiveLongPressSpeed = effectiveLongPressSpeed,
+            visible = longPressHintActive || manualSpeedHintActive,
+            longPressSpeedLocked = longPressSpeedLocked && !manualSpeedHintActive,
+            effectiveLongPressSpeed = if (manualSpeedHintActive) {
+                longPressSlideSession.manualFeedbackSpeed
+            } else {
+                effectiveLongPressSpeed
+            },
             longPressSpeedHintScale = longPressSpeedHintScale,
             longPressSpeedHintAlpha = longPressSpeedHintAlpha,
             longPressSpeedHintCloseEnabled = longPressSpeedHintCloseEnabled,
             gestureMotionSpec = gestureMotionSpec,
             onDismiss = { longPressSpeedHintDismissed = true },
+            isManualSwitchFeedback = manualSpeedHintActive,
+            slideMode = longPressSpeedSlideMode,
+            isSlidingSpeed = longPressSlideSession.isSlidingSpeed,
             // 非沉浸状态栏下继续按系统 inset 避让，沿用原有各材质与窗口布局。
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -5157,72 +5855,38 @@ private fun VideoPlayerSectionContent(
                 ),
         )
 
-        AnimatedVisibility(
+        PlayerLongPressSpeedLockPrompt(
             visible = shouldShowLongPressSpeedLockHint(
                 hintRequested = showLongPressSpeedLockHint,
                 isLongPressing = isLongPressing,
                 isInPipMode = isInPipMode,
             ),
+            hintScale = longPressSpeedHintScale,
+            hintAlpha = longPressSpeedHintAlpha,
+            gestureMotionSpec = gestureMotionSpec,
+            onEnableLock = {
+                showLongPressSpeedLockHint = false
+                hasShownLongPressSpeedLockHintLocally = true
+                settingsScope.launch {
+                    com.android.purebilibili.core.store.SettingsManager
+                        .setLongPressSpeedLockEnabled(context, true)
+                    com.android.purebilibili.core.store.SettingsManager
+                        .setLongPressSpeedLockHintShown(context, true)
+                }
+            },
+            onDismissForever = {
+                showLongPressSpeedLockHint = false
+                hasShownLongPressSpeedLockHintLocally = true
+                finishLongPressSpeedGesture(gestureEnded = true)
+                settingsScope.launch {
+                    com.android.purebilibili.core.store.SettingsManager
+                        .setLongPressSpeedLockHintShown(context, true)
+                }
+            },
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .padding(top = 62.dp, start = 16.dp, end = 16.dp),
-            enter = fadeIn(animationSpec = tween(gestureMotionSpec.longPressHintDurationMillis)) +
-                slideInVertically(initialOffsetY = { -it / 2 }),
-            exit = fadeOut(animationSpec = tween(gestureMotionSpec.longPressHintDurationMillis))
-        ) {
-            AppSurface(
-                shape = AppShapes.scaledContainer(ContainerLevel.Floating, longPressSpeedHintScale),
-                color = Color.Black.copy(alpha = (0.62f * longPressSpeedHintAlpha).coerceIn(0f, 1f)),
-                contentColor = Color.White,
-                tonalElevation = 0.dp
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(
-                        horizontal = 12.dp * longPressSpeedHintScale,
-                        vertical = 8.dp * longPressSpeedHintScale
-                    )
-                ) {
-                    AppText(
-                        text = "需要长按锁定倍速吗？",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = MaterialTheme.typography.bodyMedium.fontSize * longPressSpeedHintScale
-                        )
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AppTextButton(
-                            onClick = {
-                                showLongPressSpeedLockHint = false
-                                hasShownLongPressSpeedLockHintLocally = true
-                                settingsScope.launch {
-                                    com.android.purebilibili.core.store.SettingsManager
-                                        .setLongPressSpeedLockEnabled(context, true)
-                                    com.android.purebilibili.core.store.SettingsManager
-                                        .setLongPressSpeedLockHintShown(context, true)
-                                }
-                            },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                        ) {
-                            AppText("开启锁定")
-                        }
-                        AppTextButton(
-                            onClick = {
-                                showLongPressSpeedLockHint = false
-                                hasShownLongPressSpeedLockHintLocally = true
-                                finishLongPressSpeedGesture(gestureEnded = true)
-                                settingsScope.launch {
-                                    com.android.purebilibili.core.store.SettingsManager
-                                        .setLongPressSpeedLockHintShown(context, true)
-                                }
-                            },
-                            colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
-                        ) {
-                            AppText("不再提示")
-                        }
-                    }
-                }
-            }
-        }
+        )
 
         val waitingForStartup = manualStartPending || (!keepCoverForManualStart &&
             (uiState is VideoPlaybackUiState.Loading || (isBuffering && observedPlayWhenReady)))
@@ -5738,66 +6402,18 @@ private fun VideoPlayerSectionContent(
             )
 
             if (showDanmakuPoolSheet) {
-                val poolSheetDanmakuLikedIds by actions.likedDanmakuIds
-                    .collectAsStateWithLifecycle()
-                val poolVideoCid = uiState.info.cid
-                var poolReportSnapshot by remember(uiState.info.bvid, poolVideoCid) {
-                    mutableStateOf(danmakuManager.getLoadedDanmakuList().toList())
-                }
-                DanmakuPoolSheet(
-                    danmakuList = poolReportSnapshot,
-                    videoCid = poolVideoCid,
-                    onRefreshSnapshot = {
-                        danmakuManager.getLoadedDanmakuList().toList().also {
-                            poolReportSnapshot = it
-                        }
-                    },
-                    upOwnerUserHash = danmakuManager.upOwnerUserHash,
+                VideoPlayerDanmakuPoolHost(
+                    bvid = uiState.info.bvid,
+                    cid = uiState.info.cid,
+                    danmakuManager = danmakuManager,
+                    activeDanmakuScope = activeDanmakuScope,
                     currentPositionMs = playerState.player?.currentPosition ?: 0L,
-                    onSeekTo = { posMs ->
-                        val commitResult = commitPlaybackSeekInteraction(
-                            state = sharedSeekSession,
-                            player = playerState.player,
-                            positionMs = posMs
-                        )
-                        sharedSeekSession = commitResult.state
-                        seekPlayerFromUserAction(
-                            player = playerState.player,
-                            positionMs = commitResult.committedPositionMs,
-                            shouldResumePlaybackOverride = commitResult.shouldResumePlayback
-                        )
-                        danmakuManager.seekTo(commitResult.committedPositionMs)
-                        onUserSeek(commitResult.committedPositionMs)
-                    },
-                    likedDanmakuIds = poolSheetDanmakuLikedIds,
+                    likedDanmakuIdsFlow = actions.likedDanmakuIds,
+                    onSeekTo = ::commitExplicitSeek,
                     onLikeDanmaku = actions.onLikeDanmakuToggle,
                     onRecallDanmaku = onRecallDanmaku,
                     onReportDanmaku = actions.onReportDanmaku,
-                    onReportDanmakuWithDetails = { dmid, reason, explanation, blockUser ->
-                        val sender = poolReportSnapshot.firstOrNull { it.danmakuId == dmid }?.userHash.orEmpty()
-                        scope.launch {
-                            com.android.purebilibili.feature.video.ui.components.submitPiliDanmakuReport(
-                                context = context,
-                                cid = poolVideoCid,
-                                dmid = dmid,
-                                reason = reason,
-                                explanation = explanation,
-                                userHash = sender,
-                                blockUser = blockUser,
-                                settingsScope = activeDanmakuScope,
-                            )
-                        }
-                    },
-                    onBlockSender = { userHash ->
-                        scope.launch {
-                            com.android.purebilibili.feature.video.ui.components.blockPiliDanmakuSender(
-                                context = context,
-                                userHash = userHash,
-                                settingsScope = activeDanmakuScope,
-                            )
-                        }
-                    },
-                    onDismiss = { showDanmakuPoolSheet = false }
+                    onDismiss = { showDanmakuPoolSheet = false },
                 )
             }
     }
@@ -5808,11 +6424,16 @@ private fun VideoPlayerSectionContent(
     val haptic = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.PLAYER_GESTURES)
     val hapticScope = rememberCoroutineScope()
 
-    // 拦截系统返回事件 (仅在全屏时拦截以处理退出全屏，否则交给系统处理预测性返回)
+    // 拦截系统返回事件 (仅在全屏时拦截：锁屏时提示先解锁，未锁屏时退出全屏；非全屏交给系统预测性返回)
     com.android.purebilibili.core.ui.LocalNavigationBackHandler(
-        enabled = !isScreenLocked && isFullscreen,
+        enabled = isFullscreen,
     ) {
-        onBack()
+        if (isScreenLocked) {
+            showControls = true
+            Toast.makeText(context, "请先解锁屏幕", Toast.LENGTH_SHORT).show()
+        } else {
+            onBack()
+        }
     }
     }
 }

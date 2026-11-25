@@ -14,6 +14,7 @@ class BuiltinPluginDefaultPolicyTest {
 
     @Test
     fun optionalPluginsStayDisabledByDefault() {
+        assertFalse(resolvePluginDefaultEnabled(BuiltinPluginIds.GAMEPAD_CONTROL))
         assertFalse(resolvePluginDefaultEnabled(BuiltinPluginIds.SPONSOR_BLOCK))
         assertFalse(resolvePluginDefaultEnabled(BuiltinPluginIds.AD_FILTER))
         assertFalse(resolvePluginDefaultEnabled("unknown_plugin"))

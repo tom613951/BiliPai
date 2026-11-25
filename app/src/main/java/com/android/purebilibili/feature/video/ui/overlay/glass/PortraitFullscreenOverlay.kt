@@ -149,6 +149,7 @@ fun PortraitFullscreenOverlay(
     // 显示状态
     showControls: Boolean = true,
     commentExpansionProgress: Float = 0f,
+    commentExpansionProgressProvider: () -> Float = { commentExpansionProgress },
     videoshotData: VideoshotData? = null,
     videoAspectRatio: Float? = null,
     isPlaybackRecovering: Boolean = false,
@@ -176,6 +177,8 @@ fun PortraitFullscreenOverlay(
     onToggleStatusBar: () -> Unit,
     onRotateToLandscape: () -> Unit,
     onSearchClick: () -> Unit = {},
+    isAudioOnly: Boolean = false,
+    onAudioModeClick: (() -> Unit)? = null,
     onMoreClick: () -> Unit = {},
 
     playbackReady: Boolean = true,
@@ -192,25 +195,25 @@ fun PortraitFullscreenOverlay(
             widthDp = configuration.screenWidthDp
         )
     }
-    val progressTimeLabel = remember(seekPositionMs, progress.current, progress.duration, isSeekScrubbing) {
-        resolvePortraitProgressTimeLabel(
-            positionMs = if (isSeekScrubbing) seekPositionMs else progress.current,
-            durationMs = progress.duration
-        )
-    }
-    val commentProgress = commentExpansionProgress.coerceIn(0f, 1f)
-    val commentOverlayAlpha = (1f - commentProgress).coerceIn(0f, 1f)
     val density = LocalDensity.current
-    val commentOverlayOffsetPx = with(density) { 24.dp.toPx() } * commentProgress
+    val maxCommentOverlayOffsetPx = with(density) { 24.dp.toPx() }
+    val commentOverlayVisible by remember(commentExpansionProgressProvider) {
+        androidx.compose.runtime.derivedStateOf {
+            (1f - commentExpansionProgressProvider().coerceIn(0f, 1f)) > 0.001f
+        }
+    }
+    val backdropHostEnabled =
+        com.android.purebilibili.core.ui.LocalAppThemeConfig.current.playerGlassEnabled &&
+            com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current
 
     PlayerControlsBackdropHost(
-        enabled = true,
+        enabled = backdropHostEnabled,
         modifier = modifier.fillMaxSize(),
     ) {
 
         // 控件层动画
         AnimatedVisibility(
-            visible = showControls && commentOverlayAlpha > 0.001f,
+            visible = showControls && commentOverlayVisible,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.fillMaxSize()
@@ -220,8 +223,9 @@ fun PortraitFullscreenOverlay(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            alpha = commentOverlayAlpha
-                            translationY = -commentOverlayOffsetPx
+                            val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                            alpha = (1f - p).coerceIn(0f, 1f)
+                            translationY = -(maxCommentOverlayOffsetPx * p)
                         }
                 ) {
                     PortraitReadableTextScrims(layoutPolicy = layoutPolicy)
@@ -234,10 +238,13 @@ fun PortraitFullscreenOverlay(
                     onHomeClick = onHomeClick,
                     viewCount = statView,
                     onSearchClick = onSearchClick,
+                    isAudioOnly = isAudioOnly,
+                    onAudioModeClick = onAudioModeClick,
                     onMoreClick = onMoreClick,
                     modifier = Modifier.graphicsLayer {
-                        alpha = commentOverlayAlpha
-                        translationY = -commentOverlayOffsetPx
+                        val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                        alpha = (1f - p).coerceIn(0f, 1f)
+                        translationY = -(maxCommentOverlayOffsetPx * p)
                     }
                 )
 
@@ -263,8 +270,9 @@ fun PortraitFullscreenOverlay(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .graphicsLayer {
-                                alpha = commentOverlayAlpha
-                                translationX = commentOverlayOffsetPx
+                                val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                                alpha = (1f - p).coerceIn(0f, 1f)
+                                translationX = maxCommentOverlayOffsetPx * p
                             }
                     )
                 }
@@ -275,8 +283,9 @@ fun PortraitFullscreenOverlay(
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
                         .graphicsLayer {
-                            alpha = commentOverlayAlpha
-                            translationY = commentOverlayOffsetPx
+                            val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                            alpha = (1f - p).coerceIn(0f, 1f)
+                            translationY = maxCommentOverlayOffsetPx * p
                         }
                 ) {
                     // 视频信息 (Video Info)
@@ -320,7 +329,10 @@ fun PortraitFullscreenOverlay(
                     }
 
                     PortraitProgressControlStrip(
-                        timeLabel = progressTimeLabel,
+                        timeLabel = resolvePortraitProgressTimeLabel(
+                            positionMs = if (isSeekScrubbing) seekPositionMs else progress.current,
+                            durationMs = progress.duration
+                        ),
                         currentSpeed = currentSpeed,
                         currentQualityLabel = currentQualityLabel,
                         currentAudioQualityLabel = currentAudioQualityLabel,
@@ -388,8 +400,9 @@ fun PortraitFullscreenOverlay(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = layoutPolicy.bottomInputLiftDp.dp)
                         .graphicsLayer {
-                            alpha = commentOverlayAlpha
-                            translationY = commentOverlayOffsetPx
+                            val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                            alpha = (1f - p).coerceIn(0f, 1f)
+                            translationY = maxCommentOverlayOffsetPx * p
                         }
                 )
 
@@ -422,13 +435,16 @@ fun PortraitFullscreenOverlay(
 
         CenterPlaybackControl(
             visible = showControls && playbackReady && !isPlaybackRecovering &&
-                !isSeekScrubbing && commentOverlayAlpha > 0.001f,
+                !isSeekScrubbing && commentOverlayVisible,
             isPlaying = isPlaying,
             onPlayPause = onPlayPause,
             diameter = 72.dp,
             modifier = Modifier
                 .align(Alignment.Center)
-                .graphicsLayer { alpha = commentOverlayAlpha },
+                .graphicsLayer {
+                    val p = commentExpansionProgressProvider().coerceIn(0f, 1f)
+                    alpha = (1f - p).coerceIn(0f, 1f)
+                },
         )
 
         // 控件隐藏时仍显示底部细进度条，方便随时感知播放进度
@@ -605,6 +621,8 @@ private fun PortraitTopControlBar(
     onHomeClick: () -> Unit,
     viewCount: Int,
     onSearchClick: () -> Unit,
+    isAudioOnly: Boolean = false,
+    onAudioModeClick: (() -> Unit)? = null,
     onMoreClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -663,6 +681,16 @@ private fun PortraitTopControlBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(layoutPolicy.topActionSpacingDp.dp)
         ) {
+            if (onAudioModeClick != null) {
+                PortraitGlassIconButton(onClick = onAudioModeClick) {
+                    AppIcon(
+                        imageVector = androidx.compose.material.icons.Icons.Outlined.Headphones,
+                        contentDescription = if (isAudioOnly) "退出听视频" else "听视频",
+                        tint = if (isAudioOnly) AppContentColors.accent() else Color.White,
+                        modifier = Modifier.size(layoutPolicy.topActionIconSizeDp.dp)
+                    )
+                }
+            }
             PortraitGlassIconButton(onClick = onSearchClick) {
                 AppIcon(
                     imageVector = Icons.Rounded.Search,

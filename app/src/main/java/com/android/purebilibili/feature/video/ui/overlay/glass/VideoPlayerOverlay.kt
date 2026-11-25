@@ -470,7 +470,7 @@ fun VideoPlayerOverlay(
     // Keep the non-inline backdrop slot small. Capturing this screen's locals
     // here exceeds DEX's 255 argument-register limit in synthetic constructors.
     PlayerControlsBackdropHost(
-        enabled = true,
+        enabled = com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current,
         modifier = Modifier.fillMaxSize(),
     ) {
         VideoPlayerOverlayContent(state, actions)
@@ -1609,6 +1609,12 @@ private fun VideoPlayerOverlayContent(
                         .align(Alignment.BottomStart)
                         .onSizeChanged { onBottomControlsSizeChanged(it.height) }
                 ) {
+                    CompositionLocalProvider(
+                        LocalVideoProgressScrubbingConfig provides VideoProgressScrubbingConfig(
+                            fineScrubbingEnabled = overlaySettings.progressFineScrubbingEnabled,
+                            snapAndOriginCancelEnabled = overlaySettings.progressSnapAndOriginCancelEnabled,
+                        )
+                    ) {
                     key(player, bvid, cid) {
                     BottomControlBar(
                     onSelectionMenuSource = { secondaryMenuSource = it },
@@ -1733,6 +1739,7 @@ private fun VideoPlayerOverlayContent(
                     },
                     progressPlacement = effectiveProgressPlacement
                 )
+                    }
                     }
                 }
             }

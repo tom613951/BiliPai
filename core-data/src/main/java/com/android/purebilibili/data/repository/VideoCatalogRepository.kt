@@ -15,7 +15,6 @@ import com.android.purebilibili.data.model.response.VideoItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 首页热门/排行榜/每周必看/入站必刷、分区、相关推荐与 UP 主卡片的目录级 API。
@@ -271,7 +270,16 @@ object VideoCatalogRepository {
         relatedCache.clearCompleted()
     }
 
-    private val creatorCardStatsCache = ConcurrentHashMap<Long, CreatorCardStats>()
+    private const val MAX_CREATOR_CARD_STATS_CACHE_ENTRIES = 128
+    private const val CREATOR_CARD_STATS_TTL_MS = 5 * 60_000L
+
+    private val creatorCardStatsCache = OnDemandRequestCache<Long, Result<CreatorCardStats>>(
+        maxEntries = MAX_CREATOR_CARD_STATS_CACHE_ENTRIES,
+        maxAgeMs = CREATOR_CARD_STATS_TTL_MS,
+        canCache = { it.isSuccess },
+    )
+
+    fun clearCreatorCardStatsCache() = creatorCardStatsCache.clearCompleted()
 
     private val creatorLiveRoomCache = OnDemandRequestCache<Long, Result<SpaceLiveRoom?>>(
         maxEntries = 32,
@@ -299,30 +307,34 @@ object VideoCatalogRepository {
         }
     }
 
-    fun getCachedCreatorCardStats(mid: Long): CreatorCardStats? = creatorCardStatsCache[mid]
+    fun getCachedCreatorCardStats(mid: Long): CreatorCardStats? =
+        creatorCardStatsCache.peek(mid)?.getOrNull()
 
     suspend fun getCreatorCardStats(mid: Long): Result<CreatorCardStats> = withContext(Dispatchers.IO) {
         if (mid <= 0L) return@withContext Result.failure(IllegalArgumentException("Invalid mid"))
-        creatorCardStatsCache[mid]?.let { return@withContext Result.success(it) }
-        try {
-            val response = api.getUserCard(mid = mid, photo = false)
-            val data = response.data
-            if (response.code == 0 && data != null) {
-                val stats = CreatorCardStats(
-                    followerCount = data.follower.coerceAtLeast(0),
-                    videoCount = data.archive_count.coerceAtLeast(0),
-                    vipStatus = data.card?.vip?.status ?: 0,
-                    vipType = data.card?.vip?.type ?: 0,
-                    officialType = data.card?.Official?.type ?: -1,
-                    pendantImage = data.card?.pendant?.image.orEmpty(),
-                )
-                creatorCardStatsCache[mid] = stats
-                Result.success(stats)
-            } else {
-                Result.failure(Exception(response.message.ifBlank { "UP主信息加载失败(${response.code})" }))
+        creatorCardStatsCache.getOrLoad(mid) {
+            try {
+                val response = api.getUserCard(mid = mid, photo = false)
+                val data = response.data
+                if (response.code == 0 && data != null) {
+                    Result.success(
+                        CreatorCardStats(
+                            followerCount = data.follower.coerceAtLeast(0),
+                            videoCount = data.archive_count.coerceAtLeast(0),
+                            vipStatus = data.card?.vip?.status ?: 0,
+                            vipType = data.card?.vip?.type ?: 0,
+                            officialType = data.card?.Official?.type ?: -1,
+                            pendantImage = data.card?.pendant?.image.orEmpty(),
+                        )
+                    )
+                } else {
+                    Result.failure(Exception(response.message.ifBlank { "UP主信息加载失败(${response.code})" }))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 }

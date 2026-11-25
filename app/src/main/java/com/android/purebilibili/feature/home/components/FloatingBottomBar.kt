@@ -33,6 +33,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -193,6 +194,7 @@ fun PlainMiuixFloatingBottomBar(
     modifier: Modifier = Modifier,
     colors: FloatingBottomBarColors = FloatingBottomBarDefaults.colors(),
     indicatorContainerColor: Color = colors.indicatorColor.copy(alpha = 0.14f),
+    shellOverlay: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val safeCount = tabsCount.coerceAtLeast(1)
@@ -220,9 +222,21 @@ fun PlainMiuixFloatingBottomBar(
                 shape = shape,
                 shadow = Shadow(radius = 10.dp, color = Color.Black, alpha = 0.16f),
             )
-            .background(colors.containerColor, shape)
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+            .background(colors.containerColor, shape),
     ) {
+        if (shellOverlay != null) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(shape),
+                content = shellOverlay,
+            )
+        }
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 6.dp, vertical = 3.dp),
+        ) {
         val itemWidth = maxWidth / safeCount
         val itemWidthPx = with(density) { itemWidth.toPx() }
         val dragAnimation = remember(animationScope, safeCount, itemWidthPx, isLtr) {
@@ -310,6 +324,7 @@ fun PlainMiuixFloatingBottomBar(
                 .width(itemWidth)
                 .fillMaxHeight(),
         )
+        }
     }
 }
 
@@ -600,6 +615,7 @@ fun FloatingBottomBar(
     pagerTargetPositionProvider: (() -> Float)? = null,
     isPagerNavigatingProvider: (() -> Boolean)? = null,
     enabled: Boolean = true,
+    shellOverlay: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable RowScope.() -> Unit
 ) {
     // Do not use the system night flag here: BiliPai supports an app-only dark theme.
@@ -1399,11 +1415,14 @@ fun FloatingBottomBar(
     }
     SideEffect { onDockTranslationProviderChanged?.invoke(dockDragTranslationY) }
 
-    val indicatorHighlightVisible = if (isLiquidGlassMode) {
-        remember(dampedDragAnimation) {
-            derivedStateOf { dampedDragAnimation.pressProgress > 0.001f }
+    val indicatorOpticalActive = if (isLiquidGlassMode) {
+        remember(indicatorOpticalProgressProvider) {
+            derivedStateOf { indicatorOpticalProgressProvider() > 0.001f }
         }.value
     } else false
+    val hasVisibleShell = drawShell || LocalLinkedDockFusedGlassActive.current
+    // 静止态指示器完全位于可见外壳内且无折射，复用可见外壳材质即可，避免每帧重复跑全壳模糊与折射。
+    val captureShellBackdrop = !hasVisibleShell || indicatorOpticalActive
     val baseHighlight = if (isLiquidGlassMode) rememberBiliPaiGravityHighlight(
         extraDegrees = -45f,
         active = enabled && drawShell && parentGlass == null && materialBackdrop != null && gravityGate.active,
@@ -1414,11 +1433,11 @@ fun FloatingBottomBar(
             indicatorWidthDp = fittedIndicatorWidth.value,
             indicatorHeightDp = fittedIndicatorHeight.value,
         ).dp,
-        active = enabled && materialBackdrop != null && indicatorHighlightVisible && gravityGate.active,
+        active = enabled && materialBackdrop != null && indicatorOpticalActive && gravityGate.active,
     ) else null
 
     val combinedBackdrop = if (materialBackdrop != null && tabsBackdrop != null) {
-        rememberCombinedBackdrop(materialBackdrop, tabsBackdrop)
+        rememberCombinedBackdrop(materialBackdrop, tabsBackdrop, includeFirst = { captureShellBackdrop })
     } else {
         materialBackdrop
     }
@@ -1453,7 +1472,8 @@ fun FloatingBottomBar(
             LocalFloatingBottomBarBaseContentAlpha provides baseContentAlphaProvider,
             LocalFloatingBottomBarContentVerticalPadding provides verticalPadding,
         ) {
-            val shellModifier = if (drawShell) {
+            val effectiveDrawShell = drawShell && !LocalLinkedDockFusedGlassActive.current
+            val shellModifier = if (effectiveDrawShell) {
                 Modifier
                     .dropShadow(
                         shape = pillShape,
@@ -1556,7 +1576,7 @@ fun FloatingBottomBar(
                 Modifier
             }
             // 背景与文字分层；玻璃材质只裁剪背景，前景徽标可越过外壳上沿。
-            if (drawShell) {
+            if (effectiveDrawShell) {
                 Box(
                     Modifier
                         .matchParentSize()
@@ -1575,8 +1595,17 @@ fun FloatingBottomBar(
                             translationX = panelOffset
                             translationY = dockDragTranslationY()
                         }
-                        .then(shellModifier)
-                )
+                        .then(shellModifier),
+                ) {
+                    if (shellOverlay != null) {
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .clip(pillShape),
+                            content = shellOverlay,
+                        )
+                    }
+                }
             }
             Row(
                 Modifier
@@ -1658,42 +1687,64 @@ fun FloatingBottomBar(
                         .height(capturedContentHeight)
                         .align(Alignment.CenterStart),
                 ) {
-                    Box(
-                        Modifier.matchParentSize()
-                            .drawBackdrop(
-                                backdrop = materialBackdrop,
-                                shape = { indicatorShape },
-                                effects = {
-                                    // 捕获层与可见子外壳使用相同材质，不能在隐藏捕获中再做一次折射。
-                                    if (parentGlass == null) {
-                                        // 先声明折射所需边距，避免模糊构建后再扩边导致整条效果重新求值。
-                                        if (top.yukonga.miuix.kmp.material.isRuntimeShaderSupported() &&
-                                            shellRefractionHeightPx > 0f && shellRefractionAmountPx > 0f
-                                        ) {
-                                            padding = maxOf(padding, shellRefractionAmountPx)
-                                        }
-                                        vibrancy(liquidGlassTuning.saturation)
-                                        materialBlur(liquidGlassTuning.backdropBlurRadius.dp.toPx())
-                                        lens(
-                                            refractionHeight = shellRefractionHeightPx,
-                                            refractionAmount = shellRefractionAmountPx,
-                                            chromaticAberration =
-                                                liquidGlassTuning.shellChromaticAberrationAmount,
-                                        )
+                    if (captureShellBackdrop) {
+                        Box(
+                            Modifier.matchParentSize()
+                                .layout { measurable, constraints ->
+                                    val leading = shellContentInsetProvider(true).roundToInt()
+                                    val trailing = shellContentInsetProvider(false).roundToInt()
+                                    val shellWidth = (constraints.maxWidth - leading - trailing).coerceAtLeast(0)
+                                    val placeable = measurable.measure(constraints.copy(
+                                        minWidth = shellWidth, maxWidth = shellWidth,
+                                    ))
+                                    layout(constraints.maxWidth, placeable.height) {
+                                        placeable.placeRelative(leading, 0)
                                     }
-                                },
-                                onDrawSurface = {
-                                    drawRect(containerColor)
-                                    if (liquidGlassTuning.contentReadabilityScrimAlpha > 0f) {
-                                        drawRect(
-                                            readabilityScrimColor.copy(
-                                                alpha = liquidGlassTuning.contentReadabilityScrimAlpha
+                                }
+                                .drawBackdrop(
+                                    backdrop = materialBackdrop,
+                                    shape = { indicatorShape },
+                                    effects = {
+                                        // 捕获层与可见子外壳使用相同材质，不能在隐藏捕获中再做一次折射。
+                                        if (parentGlass == null) {
+                                            // 先声明折射所需边距，避免模糊构建后再扩边导致整条效果重新求值。
+                                            if (top.yukonga.miuix.kmp.material.isRuntimeShaderSupported() &&
+                                                shellRefractionHeightPx > 0f && shellRefractionAmountPx > 0f
+                                            ) {
+                                                padding = maxOf(padding, shellRefractionAmountPx)
+                                            }
+                                            vibrancy(liquidGlassTuning.saturation)
+                                            materialBlur(liquidGlassTuning.backdropBlurRadius.dp.toPx())
+                                            lens(
+                                                refractionHeight = shellRefractionHeightPx,
+                                                refractionAmount = shellRefractionAmountPx,
+                                                chromaticAberration =
+                                                    liquidGlassTuning.shellChromaticAberrationAmount,
                                             )
-                                        )
-                                    }
-                                },
-                            ),
-                    )
+                                        }
+                                    },
+                                    onDrawSurface = {
+                                        drawRect(containerColor)
+                                        if (liquidGlassTuning.contentReadabilityScrimAlpha > 0f) {
+                                            drawRect(
+                                                readabilityScrimColor.copy(
+                                                    alpha = liquidGlassTuning.contentReadabilityScrimAlpha
+                                                )
+                                            )
+                                        }
+                                    },
+                                ),
+                        ) {
+                            if (shellOverlay != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .clip(indicatorShape),
+                                    content = shellOverlay,
+                                )
+                            }
+                        }
+                    }
                     Row(
                         Modifier
                             .fillMaxSize()
@@ -1772,7 +1823,7 @@ fun FloatingBottomBar(
                                 if (isLiquidGlassMode || indicatorHighlightFromDrag) pillHighlight?.value else null
                             },
                             highlightAlphaProvider = {
-                                if (isLiquidGlassMode) dampedDragAnimation.pressProgress else indicatorOpticalProgressProvider()
+                                indicatorOpticalProgressProvider()
                             },
                             idleColor = indicatorIdleSurfaceColorOverride,
                         )

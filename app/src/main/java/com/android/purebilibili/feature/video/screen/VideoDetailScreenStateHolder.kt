@@ -546,13 +546,24 @@ internal fun VideoDetailScreenStateHolder(
         )
     // 卡片开合需要可合成的实时 SDR 画面；HDR 仍由播放器选择 SurfaceView。
     val isPlayerSurfaceReady = true
-    val liveSurfaceCardTransitionEnabled = transitionEnabled
+    val liveSurfaceTransitionPreference by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getLiveSurfaceCardTransitionEnabled(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = remember {
+            com.android.purebilibili.core.store.SettingsManager.getInitialLiveSurfaceCardTransitionEnabled()
+        },
+    )
+    val sharedContainerActive =
+        com.android.purebilibili.navigation3.LocalNavigationSharedContainerSources.current != null
+    val liveSurfaceCardTransitionEnabled = transitionEnabled ||
+        (sharedContainerActive && liveSurfaceTransitionPreference)
     val useTextureSurfaceForNavigation = remember(
         transitionEnabled,
+        sharedContainerActive,
         liveSurfaceCardTransitionEnabled,
     ) {
         resolveNavigationLiveSurfaceTextureEnabled(
-            cardTransitionEnabled = transitionEnabled,
+            cardTransitionEnabled = transitionEnabled || sharedContainerActive,
             liveSurfaceCardTransitionEnabled = liveSurfaceCardTransitionEnabled,
         )
     }
@@ -4657,18 +4668,34 @@ internal fun VideoDetailScreenStateHolder(
                                 autoPausedByPlayerCollapse = false
                             }
                         }
+                        val topOverscrollZoomAllowed =
+                            !isFullscreenMode &&
+                                !isPortraitFullscreen &&
+                                !isPipMode &&
+                                !com.android.purebilibili.core.ui.LocalSystemReduceMotion.current &&
+                                com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current
+                        val topOverscrollZoomState = rememberVideoDetailTopOverscrollZoomState(
+                            enabled = topOverscrollZoomAllowed,
+                            density = videoCardTransitionDensity.density,
+                        )
                         val nestedScrollConnection = remember(
                             inlinePortraitScrollEnabled,
                             isPortraitFullscreen,
                             inlinePlayerCollapseState,
                             skipGesturePlayerCollapse,
                             collapseRangePx,
+                            topOverscrollZoomAllowed,
+                            topOverscrollZoomState,
                         ) {
                             object : NestedScrollConnection {
                                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                                    val reverseZoomConsumed = if (topOverscrollZoomAllowed) {
+                                        topOverscrollZoomState.consumeReverseDrag(available.y, source)
+                                    } else 0f
+                                    val remainingY = available.y - reverseZoomConsumed
                                     val scrollUpdate = reduceVideoDetailPreScroll(
                                         currentOffsetPx = inlinePlayerCollapseState.offsetPx,
-                                        deltaPx = available.y,
+                                        deltaPx = remainingY,
                                         // 切页后位移可能暂时超出新范围；先允许它从当前位置
                                         // 平滑回到合法范围，避免手势第一帧被硬夹到新终点。
                                         minOffsetPx = minOf(
@@ -4679,7 +4706,8 @@ internal fun VideoDetailScreenStateHolder(
                                         isPortraitFullscreen = isPortraitFullscreen,
                                         layoutAlreadyCollapsed = skipGesturePlayerCollapse,
                                     )
-                                    return Offset(0f, inlinePlayerCollapseState.consumeScroll(scrollUpdate))
+                                    val collapseConsumed = inlinePlayerCollapseState.consumeScroll(scrollUpdate)
+                                    return Offset(0f, reverseZoomConsumed + collapseConsumed)
                                 }
 
                                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
@@ -4694,7 +4722,40 @@ internal fun VideoDetailScreenStateHolder(
                                         isPortraitFullscreen = isPortraitFullscreen,
                                         layoutAlreadyCollapsed = skipGesturePlayerCollapse,
                                     )
-                                    return Offset(0f, inlinePlayerCollapseState.consumeScroll(scrollUpdate))
+                                    val collapseConsumed = inlinePlayerCollapseState.consumeScroll(scrollUpdate)
+                                    val leftoverY = available.y - collapseConsumed
+                                    if (topOverscrollZoomAllowed &&
+                                        !skipGesturePlayerCollapse &&
+                                        inlinePlayerCollapseState.offsetPx >= -0.5f &&
+                                        leftoverY > 0f
+                                    ) {
+                                        topOverscrollZoomState.accumulateTopOverscroll(leftoverY, source)
+                                    }
+                                    return Offset(0f, collapseConsumed)
+                                }
+
+                                override suspend fun onPreFling(
+                                    available: androidx.compose.ui.unit.Velocity,
+                                ): androidx.compose.ui.unit.Velocity {
+                                    if (topOverscrollZoomAllowed) {
+                                        topOverscrollZoomState.releaseDragIfActive()
+                                    }
+                                    return androidx.compose.ui.unit.Velocity.Zero
+                                }
+
+                                override suspend fun onPostFling(
+                                    consumed: androidx.compose.ui.unit.Velocity,
+                                    available: androidx.compose.ui.unit.Velocity,
+                                ): androidx.compose.ui.unit.Velocity {
+                                    if (topOverscrollZoomAllowed) {
+                                        val playerExpanded = !skipGesturePlayerCollapse &&
+                                            inlinePlayerCollapseState.offsetPx >= -0.5f
+                                        topOverscrollZoomState.onFlingAtTop(
+                                            remainingVelocityY = available.y,
+                                            allowFlingImpulse = playerExpanded,
+                                        )
+                                    }
+                                    return androidx.compose.ui.unit.Velocity.Zero
                                 }
                             }
                         }
@@ -4718,6 +4779,10 @@ internal fun VideoDetailScreenStateHolder(
                         val miuixReturnState =
                             com.android.purebilibili.core.ui.transition
                                 .LocalMiuixVideoCardTransitionState.current
+                        val sharedNavTransition =
+                            com.android.purebilibili.core.ui.LocalVideoDetailNavigationTransitionScope.current
+                        val sharedNavSurfaceVisible =
+                            com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
                         val expandPlayerForSharedReturn by remember(
                             isExitTransitionInProgress,
                             isCommittedCardReturn,
@@ -4729,12 +4794,18 @@ internal fun VideoDetailScreenStateHolder(
                             entryOwnsMiuixCardTransition,
                             miuixReturnState,
                             videoCardDepthBackgroundState,
+                            sharedNavTransition,
+                            sharedNavSurfaceVisible,
                         ) {
                             derivedStateOf {
                                 val miuixGesture =
                                     entryOwnsMiuixCardTransition &&
                                         miuixReturnState.enabled &&
                                         miuixReturnState.isGestureInProgressProvider()
+                                val sharedContainerReturning = !sharedNavSurfaceVisible &&
+                                    sharedNavTransition != null &&
+                                    (sharedNavTransition.isRemoving ||
+                                        (sharedNavTransition.isRunning && sharedNavTransition.relativeDepth <= 0f))
                                 val phase = if (entryOwnsMiuixCardTransition) {
                                     videoCardDepthBackgroundState.phaseProvider()
                                 } else {
@@ -4745,13 +4816,14 @@ internal fun VideoDetailScreenStateHolder(
                                     keepLoadedContentForBackPreview = keepLoadedContentForBackPreview,
                                     isExitTransitionInProgress = isExitTransitionInProgress ||
                                         miuixGesture ||
+                                        sharedContainerReturning ||
                                         phase == VideoCardTransitionBackgroundPhase.RETURNING,
                                     isReturnGestureInProgress =
                                         (
                                             entryOwnsMiuixCardTransition &&
                                                 videoCardDepthBackgroundState
                                                     .isReturnGestureInProgressProvider()
-                                        ) || miuixGesture,
+                                        ) || miuixGesture || sharedContainerReturning,
                                     isGestureRestoreInProgress =
                                         entryOwnsMiuixCardTransition &&
                                             videoCardDepthBackgroundState
@@ -4759,6 +4831,7 @@ internal fun VideoDetailScreenStateHolder(
                                     sharedReturnLikely = detailShellSharedBoundsEnabled ||
                                         sharedBoundsActive ||
                                         liveReturnMorph ||
+                                        sharedContainerReturning ||
                                         (entryOwnsMiuixCardTransition &&
                                             miuixReturnState.enabled),
                                 )
@@ -5345,7 +5418,10 @@ internal fun VideoDetailScreenStateHolder(
                                         frameAlpha * mediaAlpha
                                     },
                                     backingColor = Color.Black,
-                                    modifier = Modifier.fillMaxSize().zIndex(1f),
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .zIndex(1f)
+                                        .videoDetailTopOverscrollZoom(topOverscrollZoomState),
                                     contentScale = if (isVerticalVideo) {
                                         ContentScale.Crop
                                     } else {
@@ -5371,6 +5447,7 @@ internal fun VideoDetailScreenStateHolder(
                                     )
                                     .videoDetailRemoveFloatingTopInset(removedPlayerTopInsetProvider)
                                     .zIndex(0f)
+                                    .videoDetailTopOverscrollZoom(topOverscrollZoomState)
                                     .graphicsLayer {
                                         alpha = returnMediaFrameProvider().playerAlpha * nowPlayingMediaAlphaProvider()
                                     }

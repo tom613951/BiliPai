@@ -123,7 +123,10 @@ fun TopicDetailScreen(
     // 骨架与真实卡片共用同一个 LazyColumn、同一个 contentType，色块因此用固定色：
     // 呼吸中的灰块叠在卡片淡入之下，观感上就是「闪」。
     val skeletonBlockColor = rememberStaticSkeletonBlockColor()
-    val topicBackdrop = if (liquidGlassEnabled && !showInitialSkeleton) rememberLayerBackdrop() else null
+    val topicBackdropSource = if (liquidGlassEnabled && !showInitialSkeleton) {
+        com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource()
+    } else null
+    val topicBackdrop = topicBackdropSource?.backdrop
     var showPublishComposer by remember { mutableStateOf(false) }
     var composerAccountId by remember { mutableStateOf(0L) }
     var clearingDraft by remember { mutableStateOf(false) }
@@ -163,7 +166,7 @@ fun TopicDetailScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .then(if (topicBackdrop != null) Modifier.layerBackdrop(topicBackdrop) else Modifier)
+                .then(topicBackdropSource?.modifier ?: Modifier)
                 .globalWallpaperAwareBackground()
         ) {
             // 骨架与真实内容共用同一个 LazyColumn 与同一个 contentType：数据到达时
@@ -226,8 +229,11 @@ fun TopicDetailScreen(
                         }
                         if (state.sortOptions.isNotEmpty()) {
                             item(key = "topic_sort") {
+                                val sortLabels = remember(state.sortOptions) {
+                                    state.sortOptions.map { it.sortName.ifBlank { "动态" } }
+                                }
                                 TopicSortControl(
-                                    options = state.sortOptions.map { it.sortName.ifBlank { "动态" } },
+                                    options = sortLabels,
                                     selectedIndex = state.sortOptions
                                         .indexOfFirst { it.sortBy == state.selectedSortBy }
                                         .coerceAtLeast(0),
@@ -241,6 +247,25 @@ fun TopicDetailScreen(
                                 )
                             }
                         }
+                        val cardActions = DynamicCardActions(
+                            navigation = DynamicCardNavigationActions(
+                                onVideoClick = onVideoClick,
+                                onBangumiClick = onBangumiClick,
+                                onUserClick = onUserClick,
+                                onTopicClick = onTopicClick,
+                                onTopicKeywordClick = onTopicKeywordClick,
+                                onLiveClick = onLiveClick,
+                                onMusicClick = onMusicClick,
+                                onCollectionClick = onCollectionClick,
+                                onCourseClick = onCourseClick,
+                                onArticleClick = onArticleClick,
+                                onDynamicDetailClick = onDynamicDetailClick,
+                                onMatchClick = onMatchClick,
+                            ),
+                            interaction = DynamicCardInteractionActions(
+                                onCommentClick = onDynamicDetailClick,
+                            ),
+                        )
                         itemsIndexed(
                             state.items,
                             key = { _, item -> item.id_str },
@@ -250,25 +275,7 @@ fun TopicDetailScreen(
                                 DynamicCardV2(
                                     item = item,
                                     gifImageLoader = context.imageLoader,
-                                    actions = DynamicCardActions(
-                                        navigation = DynamicCardNavigationActions(
-                                            onVideoClick = onVideoClick,
-                                            onBangumiClick = onBangumiClick,
-                                            onUserClick = onUserClick,
-                                            onTopicClick = onTopicClick,
-                                            onTopicKeywordClick = onTopicKeywordClick,
-                                            onLiveClick = onLiveClick,
-                                            onMusicClick = onMusicClick,
-                                            onCollectionClick = onCollectionClick,
-                                            onCourseClick = onCourseClick,
-                                            onArticleClick = onArticleClick,
-                                            onDynamicDetailClick = onDynamicDetailClick,
-                                            onMatchClick = onMatchClick,
-                                        ),
-                                        interaction = DynamicCardInteractionActions(
-                                            onCommentClick = onDynamicDetailClick,
-                                        ),
-                                    ),
+                                    actions = cardActions,
                                 )
                             }
                             if (index == state.items.size - 3 && state.hasMore && !state.isLoadingMore) {

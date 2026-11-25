@@ -592,6 +592,19 @@ internal fun HomeScreen(
 
     //  [新增] JSON 插件过滤提示
     val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(viewModel) {
+        viewModel.watchLaterAddedEvents.collect {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = "已添加到稍后再看",
+                actionLabel = "去查看",
+                duration = SnackbarDuration.Short,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                onWatchLaterClick()
+            }
+        }
+    }
     //  [埋点] 页面浏览追踪
     LaunchedEffect(Unit) {
         com.android.purebilibili.core.util.AnalyticsHelper.logScreenView("HomeScreen")
@@ -1040,13 +1053,27 @@ internal fun HomeScreen(
     // 当使用滑动动画时，Theme.kt 的 SideEffect 可能不会重新执行
     val backgroundColor = AppSurfaceTokens.chromeBackground()
     val isLightBackground = remember(backgroundColor) { backgroundColor.luminance() > 0.5f }
-    val useDarkStatusBarIcons = remember(homeUiSkinDecoration, isLightBackground) {
+    val sampledTopSkinLuminance by com.android.purebilibili.core.plugin.skin.rememberSkinRegionLuminance(
+        filePath = homeUiSkinDecoration?.topAtmosphereImagePath,
+        topFraction = 0f,
+        bottomFraction = 0.28f,
+    )
+    val useDarkStatusBarIcons = remember(
+        homeUiSkinDecoration,
+        isLightBackground,
+        sampledTopSkinLuminance,
+        uiSkinState.tonePolicy,
+    ) {
+        val fgTint = homeUiSkinDecoration?.topForegroundTint ?: Color.Unspecified
         resolveHomeStatusBarDarkIcons(
             hasTopSkinArtwork = !homeUiSkinDecoration?.topAtmosphereImagePath.isNullOrBlank(),
             skinColorMode = homeUiSkinDecoration?.colorMode,
             topSkinTintIsLight = homeUiSkinDecoration?.topAtmosphereTint?.luminance()?.let { it > 0.5f }
                 ?: isLightBackground,
             defaultBackgroundIsLight = isLightBackground,
+            sampledTopArtworkLuminance = sampledTopSkinLuminance,
+            skinForegroundLuminance = if (fgTint != Color.Unspecified) fgTint.luminance() else null,
+            tonePolicy = uiSkinState.tonePolicy,
         )
     }
     val homeWallpaperBackdropAppearance = remember(
@@ -2361,9 +2388,20 @@ internal fun HomeScreen(
                                          showHeroCarousel = pageShowsHeroCarousel
                                      ).dp
                                  )
+                                 var guestLoginBannerDismissed by rememberSaveable { mutableStateOf(false) }
                                  HomeTodayWatchContentHost(viewModel, category, pageWork.collectUpdates) { todayWatch ->
                                      HomeCategoryPageContent(
                                          category = category,
+                                         showGuestLoginBanner = category == HomeCategory.RECOMMEND &&
+                                             !user.isLogin &&
+                                             !guestLoginBannerDismissed,
+                                         onGuestLoginClick = {
+                                             onHeaderNavigate(
+                                                 com.android.purebilibili.navigation3.BiliPaiNavKey.Login,
+                                                 HomeHeaderControl.AVATAR,
+                                             ) { false }
+                                         },
+                                         onGuestLoginDismiss = { guestLoginBannerDismissed = true },
                                          categoryState = pageCategoryState,
                                          memoryRecovery = pendingMemoryRecovery,
                                          onMemoryRecoveryConsumed = { id, located ->

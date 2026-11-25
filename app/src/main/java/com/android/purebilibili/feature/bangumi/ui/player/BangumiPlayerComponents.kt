@@ -196,6 +196,7 @@ fun BangumiPlayerView(
     onShowMessage: (String) -> Unit = {}
 ) {
     val keepPlaybackAwake = com.android.purebilibili.feature.video.screen.rememberVideoPlaybackKeepAwake(exoPlayer)
+    val sharedSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
     val context = LocalContext.current
     val playerInteractionSettings by SettingsManager.getPlayerInteractionSettings(context)
         .collectAsStateWithLifecycle(
@@ -291,7 +292,6 @@ fun BangumiPlayerView(
         currentQualityId = currentQuality, colorTransfer = videoInputFormat?.colorInfo?.colorTransfer ?: 0,
     )
     val shouldUseAnime4kPipeline = anime4kOutputDecision.shouldUsePipeline
-    val playerPageBackdrop = com.android.purebilibili.feature.video.ui.section.rememberPlayerPageBackdrop()
     val pageGlassSupported = com.android.purebilibili.feature.video.ui.section.supportsPlayerPageGlass(
         liquidGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
         fullscreen = isFullscreen,
@@ -455,6 +455,10 @@ fun BangumiPlayerView(
         derivedStateOf { glassCaptureVisibility.value > 0f }
     }
     val capturePlayerPage = pageGlassSupported && glassCaptureVisible
+    val playerPageBackdrop = com.android.purebilibili.feature.video.ui.section.rememberPlayerPageBackdrop(
+        recordingEnabled = capturePlayerPage &&
+            com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current,
+    )
 
     BoxWithConstraints(
         modifier = modifier
@@ -703,7 +707,9 @@ fun BangumiPlayerView(
                         playerViewRef = view
                         view.keepScreenOn = keepPlaybackAwake
                         view.resizeMode = currentAspectRatio.playerResizeMode
-                        view.visibility = if (anime4kFrameVisible) View.INVISIBLE else View.VISIBLE
+                        view.visibility = if (anime4kFrameVisible || !sharedSurfaceVisible) View.INVISIBLE else View.VISIBLE
+                        view.alpha = if (sharedSurfaceVisible) 1f else 0f
+                        view.videoSurfaceView?.alpha = if (sharedSurfaceVisible) 1f else 0f
                         // MediaSource/Player 变化后确保直出绑定仍与播放器同步；
                         // Anime4K 接管期间不抢回绑定，避免与路由争抢 Surface。
                         if (view.player !== exoPlayer && !shouldRenderAnime4kPipeline) {
@@ -764,7 +770,8 @@ fun BangumiPlayerView(
                         surfaceView.updateInputSize(videoSizeState.first, videoSizeState.second)
                         surfaceView.updateFlip(features.isFlippedHorizontal, features.isFlippedVertical)
                         surfaceView.updateDisplayScaleMode(currentAspectRatio.toAnime4KDisplayScaleMode())
-                        surfaceView.visibility = View.VISIBLE
+                        surfaceView.visibility = if (sharedSurfaceVisible) View.VISIBLE else View.INVISIBLE
+                        surfaceView.alpha = if (sharedSurfaceVisible) 1f else 0f
                     },
                     modifier = with(density) {
                         Modifier.requiredSize(
@@ -777,15 +784,20 @@ fun BangumiPlayerView(
         }
 
         // 弹幕层 - 使用 DanmakuRenderEngine
-        if (features.isAudioOnly) {
+        // 封面常驻底层就绪，避免返回或预测手势隐藏 PlayerView 的首帧才异步挂载导致闪黑。
+        val showBangumiCoverOverlay = features.isAudioOnly || !sharedSurfaceVisible
+        if (showBangumiCoverOverlay || coverUrl.isNotBlank()) {
             coil3.compose.AsyncImage(
                 model = com.android.purebilibili.core.util.FormatUtils.fixImageUrl(coverUrl),
-                contentDescription = "番剧封面",
+                contentDescription = if (showBangumiCoverOverlay) "番剧封面" else null,
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().background(Color.Black),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = if (showBangumiCoverOverlay) 1f else 0f }
+                    .background(Color.Black),
             )
         }
-        if (danmakuEnabled && !features.isAudioOnly && !features.isInPipMode) {
+        if (danmakuEnabled && !features.isAudioOnly && !features.isInPipMode && sharedSurfaceVisible) {
             key(danmakuManager) {
                 AndroidView(
                     factory = { ctx ->

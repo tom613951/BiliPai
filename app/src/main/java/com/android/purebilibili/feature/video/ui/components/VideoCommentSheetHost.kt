@@ -661,18 +661,16 @@ fun VideoCommentSheetHost(
     val menuCallbacks = remember(commentViewModel) { commentViewModel.replyMenuCallbacks() }
     val useBuiltInComposer = onRootCommentClick == null || onReplyClick == null
     var showBuiltInComposer by rememberSaveable(aid, commentType) { mutableStateOf(false) }
-    var submittedSessionId by remember(aid, commentType) { mutableStateOf<Long?>(null) }
     var builtInEmotePackages by remember { mutableStateOf<List<EmotePackage>>(emptyList()) }
     LaunchedEffect(useBuiltInComposer, showBuiltInComposer) {
         if (useBuiltInComposer && showBuiltInComposer && builtInEmotePackages.isEmpty()) {
             builtInEmotePackages = CommentRepository.getEmotePackages().getOrDefault(emptyList())
         }
     }
-    LaunchedEffect(useBuiltInComposer, commentState.isSending, commentState.sendError, commentState.composerDrafts.completedSessionId) {
+    LaunchedEffect(useBuiltInComposer, commentViewModel, context) {
         if (!useBuiltInComposer) return@LaunchedEffect
-        if (submittedSessionId != null && !commentState.isSending) {
-            submittedSessionId = null
-            commentState.sendError?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+        commentViewModel.sendErrorEvents.collect { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
     LaunchedEffect(useBuiltInComposer, commentState.composerDrafts.sessionId, commentState.composerDrafts.completedSessionId) {
@@ -988,7 +986,6 @@ fun VideoCommentSheetHost(
                     latest.replyTarget?.rpid == composerReplyRpid &&
                     !latest.isSending
                 ) {
-                    submittedSessionId = composerSessionId
                     commentViewModel.updateCommentDraft(composerSessionId, composerReplyRpid, text, images, sync)
                     commentViewModel.sendComment(text, images, sync)
                 }
@@ -1036,7 +1033,10 @@ internal fun VideoCommentMainList(
     val scope = rememberCoroutineScope()
     val appearance = rememberVideoCommentAppearance()
     val commentGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
-    val commentChromeBackdrop = if (commentGlassEnabled) rememberLayerBackdrop() else null
+    val commentChromeBackdropSource = if (commentGlassEnabled) {
+        com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource()
+    } else null
+    val commentChromeBackdrop = commentChromeBackdropSource?.backdrop
     // 首屏骨架按视口高度铺够槽位：少铺会让列表在数据到达时被撑长、整体跳一下。
     val commentSkeletonSlotCount = resolveVideoCommentSkeletonSlotCount(
         LocalConfiguration.current.screenHeightDp
@@ -1095,10 +1095,7 @@ internal fun VideoCommentMainList(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(
-                                if (commentChromeBackdrop != null) Modifier.layerBackdrop(commentChromeBackdrop)
-                                else Modifier
-                            ),
+                            .then(commentChromeBackdropSource?.modifier ?: Modifier),
                         contentPadding = WindowInsets.navigationBars.asPaddingValues()
                     ) {
                     commentSectionNotice(state.pageControl)

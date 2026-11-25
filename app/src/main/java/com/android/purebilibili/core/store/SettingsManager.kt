@@ -680,6 +680,7 @@ enum class CardTransitionMethod(val storageValue: String) {
     OPLUS_LEGACY("oplus_legacy"),
     VIVO_ONESHOT("vivo_oneshot"),
     XIAOMI_ROUNDED("xiaomi_rounded"),
+    ANDROID_SHARED("android_shared"),
     STANDARD("standard");
 
     companion object {
@@ -745,7 +746,7 @@ data class HomeSettings(
     val refreshLocatorDurationSeconds: Int = 3, // 0 表示不自动收起
     val refreshLocatorPositionX: Float = 1f,
     val refreshLocatorPositionY: Float = 1f,
-    val homeRefreshUndoVisible: Boolean = false, // 刷新后的撤销按钮默认隐藏
+    val homeRefreshUndoVisible: Boolean = true, // 刷新后的撤销按钮默认开启，防止手滑丢失想看的视频
     val cardAnimationEnabled: Boolean = false,    //  卡片进场动画（默认关闭）
     val cardTransitionEnabled: Boolean = false,   // 卡片展开过渡按需开启
     val cardTransitionMethod: CardTransitionMethod = CardTransitionMethod.AUTO,
@@ -856,6 +857,8 @@ data class AppThemeSettings(
     val singleChoicePresentation: AppSingleChoicePresentation =
         AppSingleChoicePresentation.WINDOW_POPUP,
     val settingsIconGlyphs: SettingsIconGlyphs = SettingsIconGlyphs.PHOSPHOR,
+    val themeSwitchTransitionStyle: com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle =
+        com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle.RADIAL_REVEAL,
 )
 
 data class ThemeModeRoleOverrides(
@@ -1224,6 +1227,25 @@ internal fun resolveAutoExitFullscreenMode(
     return AutoExitFullscreenMode.fromLegacyEnabled(legacyEnabled ?: true)
 }
 
+enum class LongPressSpeedSlideMode(
+    val storageValue: String,
+    val label: String,
+) {
+    OFF("off", "关闭"),
+    PRESETS("presets", "档位换挡"),
+    CONTINUOUS("continuous", "无极调速");
+
+    companion object {
+        fun fromStorageValue(
+            raw: String?,
+            legacyEnabled: Boolean = true,
+        ): LongPressSpeedSlideMode {
+            entries.firstOrNull { it.storageValue == raw }?.let { return it }
+            return if (legacyEnabled) PRESETS else OFF
+        }
+    }
+}
+
 data class PlayerInteractionSettings(
     val gestureSensitivity: Float = 1.0f,
     val doubleTapLikeEnabled: Boolean = true,
@@ -1272,7 +1294,17 @@ data class PlayerInteractionSettings(
     val twoFingerHorizontalSpeedEnabled: Boolean = false,
     val hiResLongPressCompatHintShown: Boolean = false,
     val directPortraitStoryEntry: Boolean = false,
-    val launchToPortraitFeedOnStartup: Boolean = false
+    val launchToPortraitFeedOnStartup: Boolean = false,
+    val longPressSpeedSlideAdjustEnabled: Boolean = true,
+    val longPressSpeedSlideMode: LongPressSpeedSlideMode = LongPressSpeedSlideMode.PRESETS,
+    val doubleTapJumpAheadEnabled: Boolean = true,
+    val progressFineScrubbingEnabled: Boolean = true,
+    val progressSnapAndOriginCancelEnabled: Boolean = true,
+    val fullscreenSwipeUpMoreEnabled: Boolean = true,
+    val endScreenNextCountdownEnabled: Boolean = true,
+    val pinchZoomSnapAndBadgeEnabled: Boolean = true,
+    val twoFingerChapterSkipEnabled: Boolean = true,
+    val portraitSwipeDownMinimizeEnabled: Boolean = true
 )
 
 private sealed interface ShareablePreferenceDefinition {
@@ -1444,6 +1476,58 @@ internal fun setCollectionSubscription(
     }
 }
 
+internal fun buildAccountScopedCollectionSubscriptionKey(
+    accountMid: Long?,
+    collectionId: Long,
+): String? {
+    val validMid = accountMid?.takeIf { it > 0L } ?: return null
+    val validCollectionId = collectionId.takeIf { it > 0L } ?: return null
+    return "${validMid}_$validCollectionId"
+}
+
+internal fun resolveAccountCollectionSubscriptionState(
+    subscribedIds: Set<String>,
+    knownIds: Set<String>,
+    accountMid: Long?,
+    collectionId: Long,
+): Boolean? {
+    val key = buildAccountScopedCollectionSubscriptionKey(accountMid, collectionId) ?: return null
+    return when {
+        key in subscribedIds -> true
+        key in knownIds -> false
+        else -> null
+    }
+}
+
+internal fun toggleAccountCollectionSubscription(
+    subscribedCollectionIds: Set<String>,
+    accountMid: Long?,
+    collectionId: Long,
+): Set<String> {
+    val key = buildAccountScopedCollectionSubscriptionKey(accountMid, collectionId)
+        ?: return subscribedCollectionIds
+    return if (key in subscribedCollectionIds) {
+        subscribedCollectionIds - key
+    } else {
+        subscribedCollectionIds + key
+    }
+}
+
+internal fun setAccountCollectionSubscription(
+    subscribedCollectionIds: Set<String>,
+    accountMid: Long?,
+    collectionId: Long,
+    subscribed: Boolean,
+): Set<String> {
+    val key = buildAccountScopedCollectionSubscriptionKey(accountMid, collectionId)
+        ?: return subscribedCollectionIds
+    return if (subscribed) {
+        subscribedCollectionIds + key
+    } else {
+        subscribedCollectionIds - key
+    }
+}
+
 internal fun decodeCollectionSortPreferences(rawValue: String?): Map<Long, CollectionSortMode> {
     if (rawValue.isNullOrBlank()) return emptyMap()
     return runCatching {
@@ -1480,6 +1564,7 @@ object SettingsManager {
         MONTHLY(30, "每月")
     }
     // 键定义
+    private val KEY_SHOW_DETAIL_RELATED_VIDEOS = booleanPreferencesKey("show_detail_related_videos")
     private val KEY_NEXT_WATCH_HINT_ENABLED = booleanPreferencesKey("next_watch_hint_enabled")
     private val KEY_AUTO_PLAY = booleanPreferencesKey("auto_play")
     private val KEY_PLAYBACK_COMPLETION_BEHAVIOR = intPreferencesKey("playback_completion_behavior")
@@ -1511,6 +1596,8 @@ object SettingsManager {
     private val KEY_THEME_COLOR_CONTRAST = stringPreferencesKey("theme_color_contrast")
     private val KEY_SINGLE_CHOICE_PRESENTATION =
         stringPreferencesKey("single_choice_presentation")
+    private val KEY_THEME_SWITCH_TRANSITION_STYLE =
+        stringPreferencesKey("theme_switch_transition_style_v1")
     private val KEY_BG_PLAY = booleanPreferencesKey("bg_play")
     //  [新增] 触感反馈 (默认开启)
     private val KEY_LIQUID_GLASS_SCENES_DISABLED = intPreferencesKey("liquid_glass_scenes_disabled")
@@ -2026,7 +2113,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             refreshLocatorDurationSeconds = preferences[KEY_REFRESH_LOCATOR_DURATION] ?: 3,
             refreshLocatorPositionX = preferences[KEY_REFRESH_LOCATOR_POSITION_X] ?: 1f,
             refreshLocatorPositionY = preferences[KEY_REFRESH_LOCATOR_POSITION_Y] ?: 1f,
-            homeRefreshUndoVisible = preferences[KEY_HOME_REFRESH_UNDO_VISIBLE] ?: false,
+            homeRefreshUndoVisible = preferences[KEY_HOME_REFRESH_UNDO_VISIBLE] ?: true,
             cardAnimationEnabled = preferences[KEY_CARD_ANIMATION_ENABLED] ?: false,
             cardTransitionEnabled = preferences[KEY_CARD_TRANSITION_ENABLED] ?: false,
             cardTransitionMethod = CardTransitionMethod.fromStorageValue(preferences[KEY_CARD_TRANSITION_METHOD]),
@@ -2173,7 +2260,23 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             twoFingerHorizontalSpeedEnabled = preferences[KEY_TWO_FINGER_HORIZONTAL_SPEED_ENABLED] ?: false,
             hiResLongPressCompatHintShown = preferences[KEY_HI_RES_LONG_PRESS_COMPAT_HINT_SHOWN] ?: false,
             directPortraitStoryEntry = preferences[KEY_AUTO_PORTRAIT_FULLSCREEN] ?: false,
-            launchToPortraitFeedOnStartup = preferences[KEY_LAUNCH_TO_PORTRAIT_FEED_ON_STARTUP] ?: false
+            launchToPortraitFeedOnStartup = preferences[KEY_LAUNCH_TO_PORTRAIT_FEED_ON_STARTUP] ?: false,
+            longPressSpeedSlideAdjustEnabled = LongPressSpeedSlideMode.fromStorageValue(
+                raw = preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE],
+                legacyEnabled = preferences[KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED] ?: true,
+            ) != LongPressSpeedSlideMode.OFF,
+            longPressSpeedSlideMode = LongPressSpeedSlideMode.fromStorageValue(
+                raw = preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE],
+                legacyEnabled = preferences[KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED] ?: true,
+            ),
+            doubleTapJumpAheadEnabled = preferences[KEY_DOUBLE_TAP_JUMP_AHEAD_ENABLED] ?: true,
+            progressFineScrubbingEnabled = preferences[KEY_PROGRESS_FINE_SCRUBBING_ENABLED] ?: true,
+            progressSnapAndOriginCancelEnabled = preferences[KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED] ?: true,
+            fullscreenSwipeUpMoreEnabled = preferences[KEY_FULLSCREEN_SWIPE_UP_MORE_ENABLED] ?: true,
+            endScreenNextCountdownEnabled = preferences[KEY_END_SCREEN_NEXT_COUNTDOWN_ENABLED] ?: true,
+            pinchZoomSnapAndBadgeEnabled = preferences[KEY_PINCH_ZOOM_SNAP_AND_BADGE_ENABLED] ?: true,
+            twoFingerChapterSkipEnabled = preferences[KEY_TWO_FINGER_CHAPTER_SKIP_ENABLED] ?: true,
+            portraitSwipeDownMinimizeEnabled = preferences[KEY_PORTRAIT_SWIPE_DOWN_MINIMIZE_ENABLED] ?: true
         )
     }
 
@@ -2338,6 +2441,13 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     @Volatile
     private var playbackCompletionBehaviorMemoryCache: Int? = null
+
+    fun getShowDetailRelatedVideos(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_SHOW_DETAIL_RELATED_VIDEOS] ?: true }
+
+    suspend fun setShowDetailRelatedVideos(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences -> preferences[KEY_SHOW_DETAIL_RELATED_VIDEOS] = enabled }
+    }
 
     fun getNextWatchHintEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_NEXT_WATCH_HINT_ENABLED] ?: true }
@@ -2563,7 +2673,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             appIconStyle = resolveAppIconStylePreference(preferences[KEY_APP_ICON_STYLE]),
             settingsIconGlyphs = SettingsIconGlyphs.fromStorageValue(preferences[KEY_SETTINGS_ICON_GLYPHS]),
             appLineIconColor = preferences[KEY_APP_LINE_ICON_COLOR],
-            appListItemStyle = resolveAppListItemStylePreference(preferences[KEY_APP_LIST_ITEM_STYLE])
+            appListItemStyle = resolveAppListItemStylePreference(preferences[KEY_APP_LIST_ITEM_STYLE]),
+            themeSwitchTransitionStyle = com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle.fromStorageValue(
+                preferences[KEY_THEME_SWITCH_TRANSITION_STYLE]
+            )
         )
     }
 
@@ -2776,6 +2889,45 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             preferences[KEY_THEME_SELECTION] = uiStyle.name
             preferences.remove(KEY_UI_PRESET)
             preferences.remove(KEY_ANDROID_NATIVE_VARIANT)
+        }
+    }
+
+    /** 单事务原子切换主题底座与液态玻璃状态，避免两次写入导致中间态闪烁。 */
+    suspend fun setThemePresentation(
+        context: Context,
+        uiStyle: AppUiStyle,
+        liquidGlassEnabled: Boolean,
+    ) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_THEME_SELECTION] = uiStyle.name
+            preferences.remove(KEY_UI_PRESET)
+            preferences.remove(KEY_ANDROID_NATIVE_VARIANT)
+            preferences[KEY_ANDROID_NATIVE_LIQUID_GLASS_ENABLED] = liquidGlassEnabled
+            if (liquidGlassEnabled) {
+                preferences[KEY_BOTTOM_BAR_BLUR_ENABLED] = false
+                preferences[KEY_HEADER_BLUR_ENABLED] = false
+                preferences[KEY_HOME_HEADER_BLUR_MODE] = HomeHeaderBlurMode.ALWAYS_OFF.value
+            }
+        }
+    }
+
+    fun getThemeSwitchTransitionStyle(
+        context: Context,
+    ): Flow<com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle> =
+        context.settingsDataStore.data
+            .map { preferences ->
+                com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle.fromStorageValue(
+                    preferences[KEY_THEME_SWITCH_TRANSITION_STYLE]
+                )
+            }
+            .distinctUntilChanged()
+
+    suspend fun setThemeSwitchTransitionStyle(
+        context: Context,
+        style: com.android.purebilibili.core.theme.ThemeSwitchTransitionStyle,
+    ) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_THEME_SWITCH_TRANSITION_STYLE] = style.storageValue
         }
     }
 
@@ -3677,12 +3829,21 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    @Volatile
+    private var lastLiveSurfaceCardTransitionEnabled: Boolean = false
+
+    fun getInitialLiveSurfaceCardTransitionEnabled(): Boolean = lastLiveSurfaceCardTransitionEnabled
+
     /** 默认关闭：稳妥封面过渡；开启后 SDR 可用实时画面双向 morph，HDR 仍不强制 TextureView。 */
     fun getLiveSurfaceCardTransitionEnabled(context: Context): Flow<Boolean> =
         context.settingsDataStore.data
-            .map { preferences -> preferences[KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED] ?: false }
+            .map { preferences ->
+                (preferences[KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED] ?: false)
+                    .also { lastLiveSurfaceCardTransitionEnabled = it }
+            }
 
     suspend fun setLiveSurfaceCardTransitionEnabled(context: Context, value: Boolean) {
+        lastLiveSurfaceCardTransitionEnabled = value
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_LIVE_SURFACE_CARD_TRANSITION_ENABLED] = value
         }
@@ -4062,7 +4223,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     }
 
     fun getHomeRefreshUndoVisible(context: Context): Flow<Boolean> = context.settingsDataStore.data
-        .map { preferences -> preferences[KEY_HOME_REFRESH_UNDO_VISIBLE] ?: false }
+        .map { preferences -> preferences[KEY_HOME_REFRESH_UNDO_VISIBLE] ?: true }
 
     suspend fun setHomeRefreshUndoVisible(context: Context, value: Boolean) {
         context.settingsDataStore.edit { preferences ->
@@ -4112,15 +4273,33 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    @Volatile
+    private var lastHomeCardDynamicTintEnabled: Boolean = false
+
+    @Volatile
+    private var lastHomeCardBackgroundMode: HomeCardBackgroundMode = HomeCardBackgroundMode.OFF
+
+    @Volatile
+    private var lastHomeCardFrostedGlassEnabled: Boolean = false
+
+    fun getInitialHomeCardDynamicTintEnabled(): Boolean = lastHomeCardDynamicTintEnabled
+
+    fun getInitialHomeCardBackgroundMode(): HomeCardBackgroundMode = lastHomeCardBackgroundMode
+
+    fun getInitialHomeCardFrostedGlassEnabled(): Boolean = lastHomeCardFrostedGlassEnabled
+
     fun getHomeCardDynamicTintEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
-        .map { preferences -> preferences[KEY_HOME_CARD_DYNAMIC_TINT_ENABLED] ?: false }
+        .map { preferences ->
+            (preferences[KEY_HOME_CARD_DYNAMIC_TINT_ENABLED] ?: false)
+                .also { lastHomeCardDynamicTintEnabled = it }
+        }
 
     fun getHomeCardBackgroundMode(context: Context): Flow<HomeCardBackgroundMode> = context.settingsDataStore.data
         .map { preferences ->
             HomeCardBackgroundMode.fromSettings(
                 dynamicTint = preferences[KEY_HOME_CARD_DYNAMIC_TINT_ENABLED] ?: false,
                 fixedBlur = preferences[KEY_HOME_CARD_FIXED_BLUR_ENABLED] ?: false,
-            )
+            ).also { lastHomeCardBackgroundMode = it }
         }.distinctUntilChanged()
 
     suspend fun setHomeCardBackgroundMode(context: Context, mode: HomeCardBackgroundMode) {
@@ -4139,7 +4318,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             resolveHomeCardFrostedGlassEnabled(
                 storedValue = preferences[KEY_HOME_CARD_FROSTED_GLASS_ENABLED],
                 legacyCombinedValue = preferences[KEY_HOME_CARD_DYNAMIC_TINT_ENABLED],
-            )
+            ).also { lastHomeCardFrostedGlassEnabled = it }
         }
 
     suspend fun setHomeCardFrostedGlassEnabled(context: Context, value: Boolean) {
@@ -6543,9 +6722,13 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_LAUNCH_TO_PORTRAIT_FEED_ON_STARTUP = booleanPreferencesKey("launch_to_portrait_feed_on_startup")
     private val KEY_PORTRAIT_ONLY_VERTICAL_RECOMMENDATIONS =
         booleanPreferencesKey("portrait_only_vertical_recommendations")
+    @Volatile
+    private var cachedPortraitOnlyVerticalRecommendations: Boolean? = null
     private const val PORTRAIT_STARTUP_CACHE_PREFS = "portrait_startup_cache"
     private const val CACHE_KEY_LAUNCH_TO_PORTRAIT_FEED = "enabled"
     private val KEY_VERTICAL_VIDEO_RATIO = floatPreferencesKey("vertical_video_ratio")
+    @Volatile
+    private var cachedVerticalVideoRatio: Float = 1.0f
     
     // --- 竖屏全屏功能开关 (默认开启) ---
     // [New] Easter Egg: Enable Auto Jump after Triple Action
@@ -6623,13 +6806,20 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         context.settingsDataStore.edit { preferences -> preferences[KEY_AUTO_PORTRAIT_FULLSCREEN] = value }
     }
 
+    /** Last observed value in this process; null before DataStore emits so callers wait instead of assuming false. */
+    fun peekPortraitOnlyVerticalRecommendations(): Boolean? =
+        cachedPortraitOnlyVerticalRecommendations
+
     /** Whether the portrait pager should exclude landscape recommendations (default disabled). */
     fun getPortraitOnlyVerticalRecommendations(context: Context): Flow<Boolean> =
         context.settingsDataStore.data.map { preferences ->
-            preferences[KEY_PORTRAIT_ONLY_VERTICAL_RECOMMENDATIONS] ?: false
+            (preferences[KEY_PORTRAIT_ONLY_VERTICAL_RECOMMENDATIONS] ?: false).also {
+                cachedPortraitOnlyVerticalRecommendations = it
+            }
         }
 
     suspend fun setPortraitOnlyVerticalRecommendations(context: Context, value: Boolean) {
+        cachedPortraitOnlyVerticalRecommendations = value
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_PORTRAIT_ONLY_VERTICAL_RECOMMENDATIONS] = value
         }
@@ -6668,13 +6858,21 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
     
+    fun getCurrentVerticalVideoRatio(): Float = cachedVerticalVideoRatio
+
     // --- 竖屏视频判断比例 (高度/宽度 > ratio 视为竖屏，默认 1.0) ---
     fun getVerticalVideoRatio(context: Context): Flow<Float> = context.settingsDataStore.data
-        .map { preferences -> preferences[KEY_VERTICAL_VIDEO_RATIO] ?: 1.0f }
+        .map { preferences ->
+            (preferences[KEY_VERTICAL_VIDEO_RATIO] ?: 1.0f).coerceIn(0.8f, 1.5f).also {
+                cachedVerticalVideoRatio = it
+            }
+        }
 
     suspend fun setVerticalVideoRatio(context: Context, value: Float) {
+        val clamped = value.coerceIn(0.8f, 1.5f)
+        cachedVerticalVideoRatio = clamped
         context.settingsDataStore.edit { preferences -> 
-            preferences[KEY_VERTICAL_VIDEO_RATIO] = value.coerceIn(0.8f, 1.5f)  // 合理范围
+            preferences[KEY_VERTICAL_VIDEO_RATIO] = clamped  // 合理范围
         }
     }
     
@@ -6765,48 +6963,75 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             .getInt("mobile_quality", 64)
     }
 
-    fun getSubscribedCollectionIds(context: Context): Flow<Set<String>> = context.settingsDataStore.data
-        .map { preferences -> decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS]) }
-        .distinctUntilChanged()
+    private fun activeCollectionSubscriptionMid(identity: AccountSessionIdentity = TokenManager.accountIdentity.value): Long? =
+        (identity.mid ?: TokenManager.midCache)?.takeIf { it > 0L }
 
-    fun isCollectionSubscribed(context: Context, collectionId: Long): Flow<Boolean> {
-        val normalizedId = collectionId.takeIf { it > 0L }?.toString()
-            ?: return kotlinx.coroutines.flow.flowOf(false)
-        return getSubscribedCollectionIds(context)
-            .map { subscribedIds -> normalizedId in subscribedIds }
-            .distinctUntilChanged()
-    }
-
-    /** 缓存缺失为未知；已订阅集合也可作为旧版本的肯定记录。 */
-    fun getCollectionSubscriptionState(context: Context, collectionId: Long): Flow<Boolean?> =
-        context.settingsDataStore.data.map { preferences ->
-            val id = collectionId.toString()
-            when {
-                id in decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS]) -> true
-                id in decodeCollectionSubscriptionIds(preferences[KEY_KNOWN_COLLECTION_SUBSCRIPTION_IDS]) -> false
-                else -> null
-            }
+    fun getSubscribedCollectionIds(context: Context): Flow<Set<String>> =
+        kotlinx.coroutines.flow.combine(
+            context.settingsDataStore.data,
+            TokenManager.accountIdentity,
+        ) { preferences, identity ->
+            val mid = activeCollectionSubscriptionMid(identity) ?: return@combine emptySet()
+            val prefix = "${mid}_"
+            decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS])
+                .mapNotNull { entry ->
+                    entry.removePrefix(prefix).takeIf { entry.startsWith(prefix) && it.isNotBlank() }
+                }
+                .toSet()
         }.distinctUntilChanged()
 
+    fun isCollectionSubscribed(context: Context, collectionId: Long): Flow<Boolean> {
+        if (collectionId <= 0L) return kotlinx.coroutines.flow.flowOf(false)
+        return kotlinx.coroutines.flow.combine(
+            context.settingsDataStore.data,
+            TokenManager.accountIdentity,
+        ) { preferences, identity ->
+            val key = buildAccountScopedCollectionSubscriptionKey(
+                accountMid = activeCollectionSubscriptionMid(identity),
+                collectionId = collectionId,
+            ) ?: return@combine false
+            key in decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS])
+        }.distinctUntilChanged()
+    }
+
+    /** 缓存按当前主账号 mid 隔离，未登录返回未知，旧版无前缀条目不跨账号泄漏。 */
+    fun getCollectionSubscriptionState(context: Context, collectionId: Long): Flow<Boolean?> {
+        if (collectionId <= 0L) return kotlinx.coroutines.flow.flowOf(null)
+        return kotlinx.coroutines.flow.combine(
+            context.settingsDataStore.data,
+            TokenManager.accountIdentity,
+        ) { preferences, identity ->
+            val mid = activeCollectionSubscriptionMid(identity) ?: return@combine null
+            resolveAccountCollectionSubscriptionState(
+                subscribedIds = decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS]),
+                knownIds = decodeCollectionSubscriptionIds(preferences[KEY_KNOWN_COLLECTION_SUBSCRIPTION_IDS]),
+                accountMid = mid,
+                collectionId = collectionId,
+            )
+        }.distinctUntilChanged()
+    }
+
     suspend fun toggleCollectionSubscription(context: Context, collectionId: Long) {
+        val mid = activeCollectionSubscriptionMid() ?: return
         if (collectionId <= 0L) return
         context.settingsDataStore.edit { preferences ->
             val current = decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS])
             preferences[KEY_SUBSCRIBED_COLLECTION_IDS] = encodeCollectionSubscriptionIds(
-                toggleCollectionSubscription(current, collectionId)
+                toggleAccountCollectionSubscription(current, mid, collectionId)
             )
         }
     }
 
     suspend fun setCollectionSubscription(context: Context, collectionId: Long, subscribed: Boolean) {
-        if (collectionId <= 0L) return
+        val mid = activeCollectionSubscriptionMid() ?: return
+        val key = buildAccountScopedCollectionSubscriptionKey(mid, collectionId) ?: return
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_KNOWN_COLLECTION_SUBSCRIPTION_IDS] = encodeCollectionSubscriptionIds(
-                decodeCollectionSubscriptionIds(preferences[KEY_KNOWN_COLLECTION_SUBSCRIPTION_IDS]) + collectionId.toString()
+                decodeCollectionSubscriptionIds(preferences[KEY_KNOWN_COLLECTION_SUBSCRIPTION_IDS]) + key
             )
             val current = decodeCollectionSubscriptionIds(preferences[KEY_SUBSCRIBED_COLLECTION_IDS])
             preferences[KEY_SUBSCRIBED_COLLECTION_IDS] = encodeCollectionSubscriptionIds(
-                setCollectionSubscription(current, collectionId, subscribed)
+                setAccountCollectionSubscription(current, mid, collectionId, subscribed)
             )
         }
     }
@@ -7051,6 +7276,12 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         liquidSwitchThumbMode = com.android.purebilibili.core.ui.LiquidSwitchThumbMode.THEME,
     )
 
+    @Volatile
+    private var lastAppThemeConfig: com.android.purebilibili.core.ui.AppThemeConfig = DEFAULT_INITIAL_APP_THEME_CONFIG
+
+    /** 供新启动的独立窗口（如 VideoActivity）在首帧复用主进程已有主题快照，零磁盘 I/O 且避免首帧样式闪跳。 */
+    fun getInitialAppThemeConfig(): com.android.purebilibili.core.ui.AppThemeConfig = lastAppThemeConfig
+
     /** 单次映射主宿主全部视觉/交互运行时配置，避免 Activity 根部挂载十余个独立 DataStore 订阅。 */
     fun getAppThemeConfig(context: Context): Flow<com.android.purebilibili.core.ui.AppThemeConfig> =
         context.settingsDataStore.data
@@ -7085,9 +7316,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     uiEntranceAnimationEnabled = preferences[KEY_UI_ENTRANCE_ANIMATION_ENABLED] ?: true,
                     globalDragFeedbackEnabled = preferences[KEY_GLOBAL_DRAG_FEEDBACK_ENABLED] ?: true,
                     runtimeVisualGuardEnabled = preferences[KEY_RUNTIME_VISUAL_GUARD_ENABLED] ?: true,
-                    nativeMiuixPopupsEnabled = preferences[
-                        com.android.purebilibili.core.store.player.PlayerSettingsStore.keyNativeMiuixPlayerPopups
-                    ] ?: true,
+                    nativeMiuixPopupsEnabled = true,
                     liquidGlassEnabled = liquidGlassMasterEnabled && liquidGlassScenes.isEnabled(
                         com.android.purebilibili.core.ui.AppLiquidGlassScene.OTHER_COMPONENTS
                     ),
@@ -7102,7 +7331,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     ),
                     liquidControlsUseThemeColor = preferences[KEY_LIQUID_CONTROLS_USE_THEME_COLOR] ?: false,
                     liquidSwitchThumbMode = thumbMode,
-                )
+                ).also { lastAppThemeConfig = it }
             }
             .distinctUntilChanged()
 
@@ -7119,6 +7348,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         val progressPlacement: PlayerProgressPlacement = PlayerProgressPlacement.ABOVE_CONTROLS,
         val playbackCompletionBehavior: PlaybackCompletionBehavior = PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC,
         val immersiveVideoPageStatusBar: Boolean = false,
+        val progressFineScrubbingEnabled: Boolean = true,
+        val progressSnapAndOriginCancelEnabled: Boolean = true,
     )
 
     /** 单次映射横屏/全屏播放控制层全部 UI 开关，避免 VideoPlayerOverlay 挂载十余个独立 DataStore 订阅。 */
@@ -7151,6 +7382,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                             ?: PlaybackCompletionBehavior.CONTINUE_CURRENT_LOGIC.value
                     ),
                     immersiveVideoPageStatusBar = preferences[KEY_HIDE_VIDEO_PAGE_STATUS_BAR] ?: false,
+                    progressFineScrubbingEnabled = preferences[KEY_PROGRESS_FINE_SCRUBBING_ENABLED] ?: true,
+                    progressSnapAndOriginCancelEnabled = preferences[KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED] ?: true,
                 )
             }
             .distinctUntilChanged()
@@ -7992,6 +8225,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     
     private val KEY_DOWNLOAD_PATH = stringPreferencesKey("download_path")
     private val KEY_DOWNLOAD_EXPORT_TREE_URI = stringPreferencesKey("download_export_tree_uri")
+    private val KEY_DOWNLOAD_LIST_SORT_ORDER = stringPreferencesKey("download_list_sort_order")
     private val KEY_IMAGE_SAVE_TREE_URI = stringPreferencesKey("image_save_tree_uri")
     
     /**
@@ -8021,6 +8255,17 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         .map { preferences ->
             preferences[KEY_DOWNLOAD_EXPORT_TREE_URI]
         }
+
+    fun getDownloadListSortOrder(context: Context): Flow<String?> = context.settingsDataStore.data
+        .map { preferences ->
+            preferences[KEY_DOWNLOAD_LIST_SORT_ORDER]
+        }
+
+    suspend fun setDownloadListSortOrder(context: Context, sortOrderKey: String) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_DOWNLOAD_LIST_SORT_ORDER] = sortOrderKey
+        }
+    }
 
     suspend fun setDownloadExportTreeUri(context: Context, uri: String?) {
         editSettingsAndCommitPrefs(
@@ -8252,6 +8497,26 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_SHOW_FULLSCREEN_BATTERY_LEVEL = booleanPreferencesKey("show_fullscreen_battery_level")
     private val KEY_SHOW_FULLSCREEN_TIME = booleanPreferencesKey("show_fullscreen_time")
     private val KEY_SHOW_FULLSCREEN_ACTION_ITEMS = booleanPreferencesKey("show_fullscreen_action_items")
+    private val KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED =
+        booleanPreferencesKey("long_press_speed_slide_adjust_enabled")
+    private val KEY_LONG_PRESS_SPEED_SLIDE_MODE =
+        stringPreferencesKey("long_press_speed_slide_mode")
+    private val KEY_DOUBLE_TAP_JUMP_AHEAD_ENABLED =
+        booleanPreferencesKey("double_tap_jump_ahead_enabled")
+    private val KEY_PROGRESS_FINE_SCRUBBING_ENABLED =
+        booleanPreferencesKey("progress_fine_scrubbing_enabled")
+    private val KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED =
+        booleanPreferencesKey("progress_snap_and_origin_cancel_enabled")
+    private val KEY_FULLSCREEN_SWIPE_UP_MORE_ENABLED =
+        booleanPreferencesKey("fullscreen_swipe_up_more_enabled")
+    private val KEY_END_SCREEN_NEXT_COUNTDOWN_ENABLED =
+        booleanPreferencesKey("end_screen_next_countdown_enabled")
+    private val KEY_PINCH_ZOOM_SNAP_AND_BADGE_ENABLED =
+        booleanPreferencesKey("pinch_zoom_snap_and_badge_enabled")
+    private val KEY_TWO_FINGER_CHAPTER_SKIP_ENABLED =
+        booleanPreferencesKey("two_finger_chapter_skip_enabled")
+    private val KEY_PORTRAIT_SWIPE_DOWN_MINIMIZE_ENABLED =
+        booleanPreferencesKey("portrait_swipe_down_minimize_enabled")
     private val KEY_SHOW_CARD_ONLINE_COUNT = booleanPreferencesKey("show_card_online_count")
     private val KEY_SHOW_ONLINE_COUNT = booleanPreferencesKey("show_online_count")
     private val KEY_SHOW_VIDEO_DETAIL_COMMENT_COUNT =
@@ -8656,6 +8921,114 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setShowFullscreenActionItems(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_SHOW_FULLSCREEN_ACTION_ITEMS] = enabled
+        }
+    }
+
+    fun getLongPressSpeedSlideMode(context: Context): Flow<LongPressSpeedSlideMode> = context.settingsDataStore.data
+        .map { preferences ->
+            LongPressSpeedSlideMode.fromStorageValue(
+                raw = preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE],
+                legacyEnabled = preferences[KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED] ?: true,
+            )
+        }
+        .distinctUntilChanged()
+
+    suspend fun setLongPressSpeedSlideMode(context: Context, mode: LongPressSpeedSlideMode) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE] = mode.storageValue
+            preferences[KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED] = mode != LongPressSpeedSlideMode.OFF
+        }
+    }
+
+    fun getLongPressSpeedSlideAdjustEnabled(context: Context): Flow<Boolean> =
+        getLongPressSpeedSlideMode(context).map { it != LongPressSpeedSlideMode.OFF }.distinctUntilChanged()
+
+    suspend fun setLongPressSpeedSlideAdjustEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED] = enabled
+            if (!enabled) {
+                preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE] = LongPressSpeedSlideMode.OFF.storageValue
+            } else {
+                val current = LongPressSpeedSlideMode.fromStorageValue(
+                    raw = preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE],
+                    legacyEnabled = false,
+                )
+                if (current == LongPressSpeedSlideMode.OFF) {
+                    preferences[KEY_LONG_PRESS_SPEED_SLIDE_MODE] = LongPressSpeedSlideMode.PRESETS.storageValue
+                }
+            }
+        }
+    }
+
+    fun getDoubleTapJumpAheadEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_DOUBLE_TAP_JUMP_AHEAD_ENABLED] ?: true }
+
+    suspend fun setDoubleTapJumpAheadEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_DOUBLE_TAP_JUMP_AHEAD_ENABLED] = enabled
+        }
+    }
+
+    fun getProgressFineScrubbingEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_PROGRESS_FINE_SCRUBBING_ENABLED] ?: true }
+
+    suspend fun setProgressFineScrubbingEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_PROGRESS_FINE_SCRUBBING_ENABLED] = enabled
+        }
+    }
+
+    fun getProgressSnapAndOriginCancelEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED] ?: true }
+
+    suspend fun setProgressSnapAndOriginCancelEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED] = enabled
+        }
+    }
+
+    fun getFullscreenSwipeUpMoreEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_FULLSCREEN_SWIPE_UP_MORE_ENABLED] ?: true }
+
+    suspend fun setFullscreenSwipeUpMoreEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_FULLSCREEN_SWIPE_UP_MORE_ENABLED] = enabled
+        }
+    }
+
+    fun getEndScreenNextCountdownEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_END_SCREEN_NEXT_COUNTDOWN_ENABLED] ?: true }
+
+    suspend fun setEndScreenNextCountdownEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_END_SCREEN_NEXT_COUNTDOWN_ENABLED] = enabled
+        }
+    }
+
+    fun getPinchZoomSnapAndBadgeEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_PINCH_ZOOM_SNAP_AND_BADGE_ENABLED] ?: true }
+
+    suspend fun setPinchZoomSnapAndBadgeEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_PINCH_ZOOM_SNAP_AND_BADGE_ENABLED] = enabled
+        }
+    }
+
+    fun getTwoFingerChapterSkipEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_TWO_FINGER_CHAPTER_SKIP_ENABLED] ?: true }
+
+    suspend fun setTwoFingerChapterSkipEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_TWO_FINGER_CHAPTER_SKIP_ENABLED] = enabled
+        }
+    }
+
+    fun getPortraitSwipeDownMinimizeEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_PORTRAIT_SWIPE_DOWN_MINIMIZE_ENABLED] ?: true }
+
+    suspend fun setPortraitSwipeDownMinimizeEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_PORTRAIT_SWIPE_DOWN_MINIMIZE_ENABLED] = enabled
         }
     }
 
@@ -9313,6 +9686,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 KEY_SINGLE_CHOICE_PRESENTATION,
                 SettingsShareSection.APPEARANCE,
             ),
+            StringShareablePreferenceDefinition(
+                KEY_THEME_SWITCH_TRANSITION_STYLE,
+                SettingsShareSection.APPEARANCE,
+            ),
             IntShareablePreferenceDefinition(KEY_THEME_COLOR_INDEX, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_APP_ICON, SettingsShareSection.APPEARANCE),
             IntShareablePreferenceDefinition(KEY_APP_ICON_APPEARANCE, SettingsShareSection.APPEARANCE),
@@ -9481,6 +9858,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             StringShareablePreferenceDefinition(KEY_LIVE_CDN_HOST, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_LIVE_SUPER_CHAT_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_LIVE_AUTO_MINI_PLAYER_ENABLED, SettingsShareSection.PLAYBACK),
+            BooleanShareablePreferenceDefinition(KEY_SHOW_DETAIL_RELATED_VIDEOS, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_NEXT_WATCH_HINT_ENABLED, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_AUTO_PLAY, SettingsShareSection.PLAYBACK),
             BooleanShareablePreferenceDefinition(KEY_RESILIENT_VIDEO_BUFFER, SettingsShareSection.PLAYBACK),
@@ -9604,6 +9982,15 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             BooleanShareablePreferenceDefinition(KEY_SHOW_FULLSCREEN_BATTERY_LEVEL, SettingsShareSection.GESTURE),
             BooleanShareablePreferenceDefinition(KEY_SHOW_FULLSCREEN_TIME, SettingsShareSection.GESTURE),
             BooleanShareablePreferenceDefinition(KEY_SHOW_FULLSCREEN_ACTION_ITEMS, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_LONG_PRESS_SPEED_SLIDE_ADJUST_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_DOUBLE_TAP_JUMP_AHEAD_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_PROGRESS_FINE_SCRUBBING_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_PROGRESS_SNAP_AND_ORIGIN_CANCEL_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_FULLSCREEN_SWIPE_UP_MORE_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_END_SCREEN_NEXT_COUNTDOWN_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_PINCH_ZOOM_SNAP_AND_BADGE_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_TWO_FINGER_CHAPTER_SKIP_ENABLED, SettingsShareSection.GESTURE),
+            BooleanShareablePreferenceDefinition(KEY_PORTRAIT_SWIPE_DOWN_MINIMIZE_ENABLED, SettingsShareSection.GESTURE),
 
             BooleanShareablePreferenceDefinition(KEY_DANMAKU_ENABLED, SettingsShareSection.DANMAKU),
             FloatShareablePreferenceDefinition(KEY_DANMAKU_OPACITY, SettingsShareSection.DANMAKU),

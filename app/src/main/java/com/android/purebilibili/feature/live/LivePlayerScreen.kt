@@ -264,6 +264,7 @@ private fun LiveRoomScreen(
     settingsIconStyle: AppIconStyle,
     onOpenWeb: ((String) -> Unit)?,
 ) {
+    val sharedSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
     val bilibiliRoomId = roomId.toLongOrNull() ?: 0L
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -704,7 +705,6 @@ private fun LiveRoomScreen(
         player = exoPlayer,
     )
     val liveHdrSurfaceRequired = com.android.purebilibili.feature.video.ui.components.rememberVideoSurfaceHdrRequired(exoPlayer)
-    val livePlayerBackdrop = com.android.purebilibili.feature.video.ui.section.rememberPlayerPageBackdrop()
     // 横竖屏播放器共用玻璃采样与纹理请求；关闭玻璃后不改变原生控件布局。
     val livePageGlassSupported =
         com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled &&
@@ -763,6 +763,10 @@ private fun LiveRoomScreen(
         visualWorkActive = liveVisualWorkActive,
         miniMode = miniPlayerManager.isMiniMode,
         overlaysSuppressed = liveCapturePaused,
+    )
+    val livePlayerBackdrop = com.android.purebilibili.feature.video.ui.section.rememberPlayerPageBackdrop(
+        recordingEnabled = captureLivePlayerPage &&
+            com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current,
     )
     val useTextureSurfaceForLivePlayer = com.android.purebilibili.feature.video.ui.section.shouldUsePlayerPageTexture(
         glassSupported = livePageGlassSupported,
@@ -1222,6 +1226,9 @@ private fun LiveRoomScreen(
                         if (playerView.resizeMode != viewportAspectRatio.playerResizeMode) {
                             playerView.resizeMode = viewportAspectRatio.playerResizeMode
                         }
+                        playerView.visibility = if (sharedSurfaceVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
+                        playerView.alpha = if (sharedSurfaceVisible) 1f else 0f
+                        playerView.videoSurfaceView?.alpha = if (sharedSurfaceVisible) 1f else 0f
                         playerViewRef = playerView
                     },
                     onRelease = { view ->
@@ -1230,6 +1237,18 @@ private fun LiveRoomScreen(
                     },
                     modifier = viewportModifier
                 )
+                }
+                // 封面常驻就绪，避免侧滑或点击返回隐藏 PlayerView 首帧才异步挂载封面造成闪黑。
+                if (liveCover.isNotBlank()) {
+                    AsyncImage(
+                        model = com.android.purebilibili.core.util.FormatUtils.fixImageUrl(liveCover),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer { alpha = if (!sharedSurfaceVisible) 1f else 0f }
+                            .background(Color.Black),
+                    )
                 }
             }
 
@@ -1243,7 +1262,7 @@ private fun LiveRoomScreen(
             val showLiveDanmakuOverlay =
                 liveLayoutMode != LiveRoomLayoutMode.PortraitVerticalOverlay || isFullscreen || pipPresentation
             val liveDanmakuInPip = pipPresentation
-            if (liveDanmakuLayerEnabled) {
+            if (liveDanmakuLayerEnabled && sharedSurfaceVisible) {
                 // 隐藏时保留渲染器并暂停，恢复后跟随直播时间；画中画沿用弹幕显示偏好。
                 LiveDanmakuOverlay(
                     danmakuFlow = viewModel.danmakuFlow,
@@ -1358,16 +1377,20 @@ private fun LiveRoomScreen(
                     interactionWindowSource = liveInteractionWindowSource,
                     onToggleInteractionWindow = { showLandscapeInteraction = !showLandscapeInteraction },
                     videoFitDesc = videoAspectRatio.displayName,
-                    videoFitOptions = listOf(VideoAspectRatio.STRETCH, VideoAspectRatio.FIT, VideoAspectRatio.FILL,
-                        VideoAspectRatio.FIT_WIDTH, VideoAspectRatio.FIT_HEIGHT, VideoAspectRatio.ORIGINAL,
-                        VideoAspectRatio.SCALE_DOWN, VideoAspectRatio.RATIO_4_3, VideoAspectRatio.RATIO_16_9).map { mode ->
-                        AppWindowAction(mode.displayName, selected = mode == videoAspectRatio,
-                            onClick = { videoAspectRatio = mode })
+                    videoFitOptions = remember(videoAspectRatio) {
+                        listOf(VideoAspectRatio.STRETCH, VideoAspectRatio.FIT, VideoAspectRatio.FILL,
+                            VideoAspectRatio.FIT_WIDTH, VideoAspectRatio.FIT_HEIGHT, VideoAspectRatio.ORIGINAL,
+                            VideoAspectRatio.SCALE_DOWN, VideoAspectRatio.RATIO_4_3, VideoAspectRatio.RATIO_16_9).map { mode ->
+                            AppWindowAction(mode.displayName, selected = mode == videoAspectRatio,
+                                onClick = { videoAspectRatio = mode })
+                        }
                     },
                     currentQualityDesc = currentQualityDesc,
-                    qualityOptions = successState?.qualityList.orEmpty().map { quality ->
-                        AppWindowAction(quality.desc, selected = quality.qn == successState?.currentQuality,
-                            onClick = { viewModel.changeQuality(quality.qn) })
+                    qualityOptions = remember(successState?.qualityList, successState?.currentQuality) {
+                        successState?.qualityList.orEmpty().map { quality ->
+                            AppWindowAction(quality.desc, selected = quality.qn == successState?.currentQuality,
+                                onClick = { viewModel.changeQuality(quality.qn) })
+                        }
                     },
                     onSourceClick = { showStreamSourceSheet = true },
                     videoScale = videoScale,

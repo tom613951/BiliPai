@@ -58,6 +58,7 @@ import com.android.purebilibili.core.ui.rememberCompatibleStaggeredGridState
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.update
 import com.android.purebilibili.core.store.CardRemovalDissolveMode
 import com.android.purebilibili.core.ui.animation.animationPreset
 import com.android.purebilibili.core.ui.animation.MaybeDissolvableVideoCard
@@ -149,6 +150,7 @@ import com.android.purebilibili.core.util.CardPositionManager
 import com.android.purebilibili.core.ui.transition.videoCardSourceBoundsInRoot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -222,6 +224,7 @@ internal fun resolveWatchLaterTitle(itemCount: Int): String {
 /**
  * 稍后再看 UI 状态
  */
+@androidx.compose.runtime.Immutable
 data class WatchLaterUiState(
     val items: List<VideoItem> = emptyList(),
     val totalCount: Int = 0,
@@ -252,6 +255,9 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _uiState = MutableStateFlow(WatchLaterUiState(isLoading = true))
     val uiState = _uiState.asStateFlow()
+
+    private val _undoRemovedItem = kotlinx.coroutines.flow.MutableSharedFlow<VideoItem>(extraBufferCapacity = 4)
+    val undoRemovedItem: kotlinx.coroutines.flow.SharedFlow<VideoItem> = _undoRemovedItem.asSharedFlow()
 
     private data class WatchLaterManagementSnapshot(
         val state: WatchLaterUiState,
@@ -295,7 +301,7 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
         val request = _uiState.value
         val generation = ++loadGeneration
         val identity = accountRequests.identity
-        _uiState.value = request.copy(isLoadingMore = true, error = null)
+        _uiState.update { it.copy(isLoadingMore = true, error = null) }
         accountRequests.launch {
             val items = mutableListOf<VideoItem>()
             var lastPage: com.android.purebilibili.data.repository.WatchLaterPage? = null
@@ -311,10 +317,13 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
                     _uiState.value.filter != request.filter
                 ) return@launch
                 val page = result.getOrElse { error ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoadingMore = false,
-                        error = error.message ?: "加载失败",
-                    )
+                    if (error is CancellationException) throw error
+                    _uiState.update {
+                        it.copy(
+                            isLoadingMore = false,
+                            error = error.message ?: "加载失败",
+                        )
+                    }
                     return@launch
                 }
                 items.addAll(page.items)
@@ -323,23 +332,28 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
                 if (!page.hasMore) break
             }
             val page = lastPage ?: return@launch
-            // 管理操作可能在刷新期间修改列表，不能用较早的请求结果覆盖它。
-            if (_uiState.value.items != request.items) {
-                _uiState.value = _uiState.value.copy(isLoadingMore = false)
-                return@launch
+            val distinctItems = items.distinctBy { it.aid }
+            var cachedNext: WatchLaterUiState? = null
+            _uiState.update { current ->
+                // 管理操作可能在刷新期间修改列表，不能用较早的请求结果覆盖它。
+                if (current.items != request.items) {
+                    current.copy(isLoadingMore = false)
+                } else {
+                    current.copy(
+                        items = distinctItems,
+                        totalCount = page.totalCount,
+                        isLoading = false,
+                        isLoadingMore = false,
+                        page = loadedPage,
+                        hasMore = page.hasMore,
+                        error = null,
+                    ).also { cachedNext = it }
+                }
             }
-            val next = _uiState.value.copy(
-                items = items.distinctBy { it.aid },
-                totalCount = page.totalCount,
-                isLoading = false,
-                isLoadingMore = false,
-                page = loadedPage,
-                hasMore = page.hasMore,
-                error = null,
-            )
-            _uiState.value = next
-            tabCache.clear()
-            tabCache[next.filter] = next
+            cachedNext?.let { next ->
+                tabCache.clear()
+                tabCache[next.filter] = next
+            }
         }
     }
 
@@ -395,16 +409,31 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun updateQuery(query: String) {
-        if (query == _uiState.value.query) return
-        _uiState.value = _uiState.value.copy(query = query)
+        var changed = false
+        _uiState.update { current ->
+            if (query == current.query) current
+            else {
+                changed = true
+                current.copy(query = query)
+            }
+        }
+        if (!changed) return
         tabCache.clear()
         loadPage(reset = true, showLoading = true)
     }
 
     fun updateSortOrder(order: WatchLaterSortOrder) {
-        val previous = _uiState.value.sortOrder
-        if (order == previous) return
-        _uiState.value = _uiState.value.copy(sortOrder = order)
+        var previous = order
+        var changed = false
+        _uiState.update { current ->
+            previous = current.sortOrder
+            if (order == current.sortOrder) current
+            else {
+                changed = true
+                current.copy(sortOrder = order)
+            }
+        }
+        if (!changed) return
         if (order.requiresServerAscending != previous.requiresServerAscending) {
             tabCache.clear()
             loadPage(reset = true, showLoading = true)
@@ -415,16 +444,18 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
         val request = _uiState.value
         val requestPage = if (reset) 1 else request.page + 1
         val generation = ++loadGeneration
-        _uiState.value = if (reset) {
-            request.copy(
-                isLoading = showLoading || request.items.isEmpty(),
-                isLoadingMore = false,
-                error = null,
-                page = 1,
-                hasMore = false,
-            )
-        } else {
-            request.copy(isLoadingMore = true, error = null)
+        _uiState.update { current ->
+            if (reset) {
+                current.copy(
+                    isLoading = showLoading || current.items.isEmpty(),
+                    isLoadingMore = false,
+                    error = null,
+                    page = 1,
+                    hasMore = false,
+                )
+            } else {
+                current.copy(isLoadingMore = true, error = null)
+            }
         }
         val identity = accountRequests.identity
         accountRequests.launch {
@@ -439,25 +470,30 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
             ) return@launch
             result.fold(
                 onSuccess = { page ->
-                    val current = _uiState.value
-                    val next = current.copy(
-                        items = if (reset) page.items else (current.items + page.items).distinctBy { it.aid },
-                        totalCount = page.totalCount,
-                        isLoading = false,
-                        isLoadingMore = false,
-                        page = requestPage,
-                        hasMore = page.hasMore,
-                        error = null,
-                    )
-                    _uiState.value = next
-                    tabCache[next.filter] = next
+                    var cachedNext: WatchLaterUiState? = null
+                    _uiState.update { current ->
+                        if (current.filter != request.filter) current
+                        else current.copy(
+                            items = if (reset) page.items else (current.items + page.items).distinctBy { it.aid },
+                            totalCount = page.totalCount,
+                            isLoading = false,
+                            isLoadingMore = false,
+                            page = requestPage,
+                            hasMore = page.hasMore,
+                            error = null,
+                        ).also { cachedNext = it }
+                    }
+                    cachedNext?.let { next -> tabCache[next.filter] = next }
                 },
                 onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        isLoadingMore = false,
-                        error = error.message ?: "加载失败",
-                    )
+                    if (error is CancellationException) throw error
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            isLoadingMore = false,
+                            error = error.message ?: "加载失败",
+                        )
+                    }
                 },
             )
         }
@@ -465,9 +501,9 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
 
     // [新增] 开始消散动画
     fun startVideoDissolve(bvid: String) {
-        _uiState.value = _uiState.value.copy(
-            dissolvingIds = _uiState.value.dissolvingIds + bvid
-        )
+        _uiState.update { current ->
+            current.copy(dissolvingIds = current.dissolvingIds + bvid)
+        }
     }
 
     // [新增] 动画完成，执行删除
@@ -483,38 +519,51 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
      * 从稍后再看删除视频
      */
     fun deleteItem(aid: Long) {
-        val snapshotState = _uiState.value
-        val removedIndex = snapshotState.items.indexOfFirst { it.id == aid }
-        if (removedIndex == -1) return
-        val removedItem = snapshotState.items[removedIndex]
-        val remainingItems = snapshotState.items.filterNot { it.id == aid }
-        _uiState.value = snapshotState.copy(
-            items = remainingItems,
-            totalCount = (snapshotState.totalCount - 1).coerceAtLeast(remainingItems.size),
-            dissolvingIds = snapshotState.dissolvingIds - removedItem.bvid,
-        )
+        var snapshotState: WatchLaterUiState? = null
+        var removedIndex = -1
+        var removedItem: VideoItem? = null
+        _uiState.update { current ->
+            val idx = current.items.indexOfFirst { it.id == aid }
+            if (idx == -1) current
+            else {
+                snapshotState = current
+                removedIndex = idx
+                val item = current.items[idx]
+                removedItem = item
+                val remainingItems = current.items.filterNot { it.id == aid }
+                current.copy(
+                    items = remainingItems,
+                    totalCount = (current.totalCount - 1).coerceAtLeast(remainingItems.size),
+                    dissolvingIds = current.dissolvingIds - item.bvid,
+                )
+            }
+        }
+        val capturedSnapshot = snapshotState ?: return
+        val capturedItem = removedItem ?: return
 
         fun restoreRemovedItem() {
-            tabCache.remove(snapshotState.filter)
-            val current = _uiState.value
-            if (current.filter != snapshotState.filter || current.query != snapshotState.query ||
-                current.sortOrder != snapshotState.sortOrder || current.items.any { it.id == aid }
-            ) return
-
-            val followingIds = snapshotState.items.subList(removedIndex + 1, snapshotState.items.size)
+            tabCache.remove(capturedSnapshot.filter)
+            val followingIds = capturedSnapshot.items.subList(removedIndex + 1, capturedSnapshot.items.size)
                 .mapTo(mutableSetOf()) { it.id }
-            val nextIndex = current.items.indexOfFirst { it.id in followingIds }
-            // Other removals may shift the original index while the request is pending.
-            val insertionIndex = if (nextIndex >= 0) {
-                nextIndex
-            } else {
-                val precedingIds = snapshotState.items.subList(0, removedIndex).mapTo(mutableSetOf()) { it.id }
-                current.items.indexOfLast { it.id in precedingIds } + 1
+            val precedingIds = capturedSnapshot.items.subList(0, removedIndex)
+                .mapTo(mutableSetOf()) { it.id }
+            _uiState.update { current ->
+                if (current.filter != capturedSnapshot.filter || current.query != capturedSnapshot.query ||
+                    current.sortOrder != capturedSnapshot.sortOrder || current.items.any { it.id == aid }
+                ) return@update current
+
+                val nextIndex = current.items.indexOfFirst { it.id in followingIds }
+                // Other removals may shift the original index while the request is pending.
+                val insertionIndex = if (nextIndex >= 0) {
+                    nextIndex
+                } else {
+                    current.items.indexOfLast { it.id in precedingIds } + 1
+                }.coerceIn(0, current.items.size)
+                current.copy(
+                    items = current.items.toMutableList().apply { add(insertionIndex, capturedItem) },
+                    totalCount = current.totalCount + 1,
+                )
             }
-            _uiState.value = current.copy(
-                items = current.items.toMutableList().apply { add(insertionIndex, removedItem) },
-                totalCount = current.totalCount + 1,
-            )
         }
 
         val identity = accountRequests.identity
@@ -531,8 +580,9 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
                 if (!accountRequests.isCurrent(identity)) return@launch
                 if (result.isSuccess) {
                     tabCache.clear()
-                    android.widget.Toast.makeText(getApplication(), "已从稍后再看移除", android.widget.Toast.LENGTH_SHORT).show()
+                    _undoRemovedItem.tryEmit(capturedItem)
                 } else {
+                    result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                     restoreRemovedItem()
                     android.widget.Toast.makeText(
                         getApplication(),
@@ -550,6 +600,46 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /**
+     * 撤销移除：将刚移出的视频重新加回稍后再看
+     */
+    fun restoreItem(item: VideoItem) {
+        _uiState.update { current ->
+            if (current.items.none { it.id == item.id }) {
+                current.copy(
+                    items = listOf(item) + current.items,
+                    totalCount = current.totalCount + 1,
+                )
+            } else {
+                current
+            }
+        }
+        val identity = accountRequests.identity
+        accountRequests.launch {
+            val result = com.android.purebilibili.data.repository.ActionRepository.toggleWatchLater(
+                aid = item.id,
+                add = true,
+            )
+            result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+            if (!accountRequests.isCurrent(identity)) return@launch
+            if (result.isSuccess) {
+                tabCache.clear()
+            } else {
+                _uiState.update { latest ->
+                    latest.copy(
+                        items = latest.items.filterNot { it.id == item.id },
+                        totalCount = (latest.totalCount - 1).coerceAtLeast(0),
+                    )
+                }
+                android.widget.Toast.makeText(
+                    getApplication(),
+                    "撤销失败: ${result.exceptionOrNull()?.message ?: "请稍后重试"}",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
     fun deleteItems(aids: List<Long>) {
         if (aids.isEmpty()) return
         val aidSet = aids.toSet()
@@ -557,47 +647,62 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
         val csrf = TokenManager.csrfCache.orEmpty()
         val session = TokenManager.sessDataCache
         val snapshotState = _uiState.value
+        val requestFilter = snapshotState.filter
         val snapshot = snapshotState.items
-        val removeCount = snapshot.count { it.id in aidSet }
-        val optimisticItems = snapshot.filterNot { it.id in aidSet }
-        _uiState.value = _uiState.value.copy(
-            items = optimisticItems,
-            totalCount = (snapshotState.totalCount - removeCount).coerceAtLeast(optimisticItems.size),
-            dissolvingIds = _uiState.value.dissolvingIds - snapshot.filter { it.id in aidSet }.map { it.bvid }.toSet()
-        )
+        val removedItems = snapshot.filter { it.id in aidSet }
+        val removedBvids = removedItems.map { it.bvid }.toSet()
+        _uiState.update { latest ->
+            val optimisticItems = latest.items.filterNot { it.id in aidSet }
+            latest.copy(
+                items = optimisticItems,
+                totalCount = (latest.totalCount - removedItems.size).coerceAtLeast(optimisticItems.size),
+                dissolvingIds = latest.dissolvingIds - removedBvids,
+            )
+        }
 
-        AppScope.ioScope.launch {
+        val app = getApplication<android.app.Application>()
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (!isCurrentSession(identity, csrf, session)) return@launch
                 if (csrf.isEmpty()) {
                     withContext(Dispatchers.Main.immediate) {
                         if (!isCurrentSession(identity, csrf, session)) return@withContext
-                        _uiState.value = snapshotState
-                        android.widget.Toast.makeText(getApplication(), "请先登录", android.widget.Toast.LENGTH_SHORT).show()
+                        _uiState.update { latest ->
+                            if (latest.filter != requestFilter) latest else snapshotState
+                        }
+                        android.widget.Toast.makeText(app, "请先登录", android.widget.Toast.LENGTH_SHORT).show()
                     }
                     return@launch
                 }
 
                 val successIds = deleteWatchLaterItemsInBackground(aids, csrf, identity, session)
+                val failedItems = removedItems.filterNot { it.id in successIds }
 
                 withContext(Dispatchers.Main.immediate) {
                     if (!isCurrentSession(identity, csrf, session)) return@withContext
                     val successCount = successIds.size
                     if (successCount > 0) tabCache.clear()
-                    _uiState.value = _uiState.value.copy(
-                        items = snapshot.filterNot { it.id in successIds },
-                        totalCount = (snapshotState.totalCount - successCount).coerceAtLeast(
-                            snapshot.count { it.id !in successIds }
-                        ),
-                        dissolvingIds = _uiState.value.dissolvingIds -
-                            snapshot.filter { it.id in successIds }.map { it.bvid }.toSet()
-                    )
+                    _uiState.update { latest ->
+                        if (latest.filter != requestFilter) {
+                            latest
+                        } else {
+                            val existingIds = latest.items.map { it.id }.toSet()
+                            val restoredItems = failedItems.filterNot { it.id in existingIds } +
+                                latest.items.filterNot { it.id in successIds }
+                            latest.copy(
+                                items = restoredItems,
+                                totalCount = (latest.totalCount + failedItems.size).coerceAtLeast(restoredItems.size),
+                                dissolvingIds = latest.dissolvingIds -
+                                    removedItems.filter { it.id in successIds }.map { it.bvid }.toSet()
+                            )
+                        }
+                    }
 
                     if (successCount == aids.size) {
-                        android.widget.Toast.makeText(getApplication(), "已删除 ${aids.size} 个视频", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(app, "已删除 ${aids.size} 个视频", android.widget.Toast.LENGTH_SHORT).show()
                     } else {
                         android.widget.Toast.makeText(
-                            getApplication(),
+                            app,
                             "批量删除完成：成功 $successCount / ${aids.size}",
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
@@ -608,7 +713,9 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
                 e.printStackTrace()
                 withContext(Dispatchers.Main.immediate) {
                     if (!isCurrentSession(identity, csrf, session)) return@withContext
-                    _uiState.value = snapshotState
+                    _uiState.update { latest ->
+                        if (latest.filter != requestFilter) latest else snapshotState
+                    }
                     android.widget.Toast.makeText(getApplication(), "批量删除失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
@@ -637,48 +744,56 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     internal fun runManagementAction(action: WatchLaterManagementAction) {
-        val snapshotState = _uiState.value
-        if (snapshotState.isManaging) return
-        val snapshot = applyWatchLaterManagementOptimisticState(snapshotState, action)
+        val snapshot = applyWatchLaterManagementOptimisticState(action) ?: return
 
         val identity = accountRequests.identity
         val csrf = TokenManager.csrfCache.orEmpty()
         accountRequests.launch {
             if (csrf.isBlank()) {
-                _uiState.value = snapshot.state
+                _uiState.update { latest ->
+                    if (latest.filter != snapshot.state.filter) latest.copy(isManaging = false)
+                    else snapshot.state
+                }
                 android.widget.Toast.makeText(getApplication(), "请先登录", android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
             }
 
             val result = executeWatchLaterManagementAction(action = action, csrf = csrf)
+            result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
             if (!accountRequests.isCurrent(identity)) return@launch
             handleWatchLaterManagementResult(action, snapshot, result)
         }
     }
 
     private fun applyWatchLaterManagementOptimisticState(
-        snapshotState: WatchLaterUiState,
         action: WatchLaterManagementAction
-    ): WatchLaterManagementSnapshot {
-        val optimisticItems = resolveWatchLaterItemsAfterManagementAction(
-            items = snapshotState.items,
-            action = action
-        )
-        val affectedCount = (snapshotState.items.size - optimisticItems.size).coerceAtLeast(0)
-        val optimisticBvids = optimisticItems.map { it.bvid }.toSet()
-        val removedBvids = snapshotState.items.map { it.bvid }.filterNot { it in optimisticBvids }.toSet()
-        _uiState.value = snapshotState.copy(
-            items = optimisticItems,
-            totalCount = when (action) {
-                WatchLaterManagementAction.CLEAR_INVALID -> snapshotState.totalCount
-                WatchLaterManagementAction.CLEAR_VIEWED ->
-                    (snapshotState.totalCount - affectedCount).coerceAtLeast(optimisticItems.size)
-                WatchLaterManagementAction.CLEAR_ALL -> 0
-            },
-            isManaging = true,
-            dissolvingIds = snapshotState.dissolvingIds - removedBvids
-        )
-        return WatchLaterManagementSnapshot(snapshotState, affectedCount)
+    ): WatchLaterManagementSnapshot? {
+        var captured: WatchLaterManagementSnapshot? = null
+        _uiState.update { snapshotState ->
+            if (snapshotState.isManaging) snapshotState
+            else {
+                val optimisticItems = resolveWatchLaterItemsAfterManagementAction(
+                    items = snapshotState.items,
+                    action = action
+                )
+                val affectedCount = (snapshotState.items.size - optimisticItems.size).coerceAtLeast(0)
+                val optimisticBvids = optimisticItems.map { it.bvid }.toSet()
+                val removedBvids = snapshotState.items.map { it.bvid }.filterNot { it in optimisticBvids }.toSet()
+                captured = WatchLaterManagementSnapshot(snapshotState, affectedCount)
+                snapshotState.copy(
+                    items = optimisticItems,
+                    totalCount = when (action) {
+                        WatchLaterManagementAction.CLEAR_INVALID -> snapshotState.totalCount
+                        WatchLaterManagementAction.CLEAR_VIEWED ->
+                            (snapshotState.totalCount - affectedCount).coerceAtLeast(optimisticItems.size)
+                        WatchLaterManagementAction.CLEAR_ALL -> 0
+                    },
+                    isManaging = true,
+                    dissolvingIds = snapshotState.dissolvingIds - removedBvids
+                )
+            }
+        }
+        return captured
     }
 
     private fun handleWatchLaterManagementResult(
@@ -688,7 +803,7 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
     ) {
         if (result.isSuccess) {
             tabCache.clear()
-            _uiState.value = _uiState.value.copy(isManaging = false)
+            _uiState.update { it.copy(isManaging = false) }
             android.widget.Toast.makeText(
                 getApplication(),
                 resolveWatchLaterManagementSuccessMessage(action, snapshot.affectedCount),
@@ -696,7 +811,10 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
             ).show()
             loadData()
         } else {
-            _uiState.value = snapshot.state
+            _uiState.update { latest ->
+                if (latest.filter != snapshot.state.filter) latest.copy(isManaging = false)
+                else snapshot.state
+            }
             android.widget.Toast.makeText(
                 getApplication(),
                 "操作失败: ${result.exceptionOrNull()?.message ?: "请稍后重试"}",
@@ -728,64 +846,99 @@ class WatchLaterViewModel(application: Application) : AndroidViewModel(applicati
                 android.widget.Toast.makeText(getApplication(), "请先登录", android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            _uiState.value = _uiState.value.copy(isTransferLoading = true)
-            val result = FavoriteRepository.getFavFolders(mid)
-            if (!accountRequests.isCurrent(identity)) return@launch
-            result.fold(
-                onSuccess = { folders ->
-                    _uiState.value = _uiState.value.copy(
-                        favoriteFolders = folders,
-                        isTransferLoading = false,
-                    )
-                },
-                onFailure = { error ->
-                    _uiState.value = _uiState.value.copy(isTransferLoading = false)
-                    android.widget.Toast.makeText(
-                        getApplication(),
-                        error.message ?: "加载收藏夹失败",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                },
-            )
+            _uiState.update { it.copy(isTransferLoading = true) }
+            try {
+                val result = FavoriteRepository.getFavFolders(mid)
+                if (!accountRequests.isCurrent(identity)) return@launch
+                result.fold(
+                    onSuccess = { folders ->
+                        _uiState.update {
+                            it.copy(
+                                favoriteFolders = folders,
+                                isTransferLoading = false,
+                            )
+                        }
+                    },
+                    onFailure = { error ->
+                        if (error is CancellationException) throw error
+                        _uiState.update { it.copy(isTransferLoading = false) }
+                        android.widget.Toast.makeText(
+                            getApplication(),
+                            error.message ?: "加载收藏夹失败",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                )
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isTransferLoading = false) }
+                throw e
+            }
         }
     }
 
     fun copyOrMoveToFavorite(aids: Set<Long>, targetMediaId: Long, copy: Boolean) {
-        if (aids.isEmpty() || _uiState.value.isTransferLoading) return
-        val snapshot = _uiState.value
-        if (!copy) {
-            _uiState.value = snapshot.copy(
-                items = snapshot.items.filterNot { it.aid in aids },
-                totalCount = (snapshot.totalCount - aids.size).coerceAtLeast(0),
-                isTransferLoading = true,
-            )
-        } else {
-            _uiState.value = snapshot.copy(isTransferLoading = true)
+        if (aids.isEmpty()) return
+        var snapshot: WatchLaterUiState? = null
+        _uiState.update { current ->
+            if (current.isTransferLoading) current
+            else {
+                snapshot = current
+                if (!copy) {
+                    val remaining = current.items.filterNot { it.aid in aids }
+                    current.copy(
+                        items = remaining,
+                        totalCount = (current.totalCount - (current.items.size - remaining.size)).coerceAtLeast(remaining.size),
+                        isTransferLoading = true,
+                    )
+                } else {
+                    current.copy(isTransferLoading = true)
+                }
+            }
         }
+        val capturedSnapshot = snapshot ?: return
+        val removedItems = if (!copy) capturedSnapshot.items.filter { it.aid in aids } else emptyList()
         val identity = accountRequests.identity
         accountRequests.launch {
-            val result = WatchLaterRepository.copyOrMoveToFavorite(targetMediaId, aids, copy)
-            if (!accountRequests.isCurrent(identity)) return@launch
-            result.fold(
-                onSuccess = {
-                    tabCache.clear()
-                    _uiState.value = _uiState.value.copy(isTransferLoading = false)
-                    android.widget.Toast.makeText(
-                        getApplication(),
-                        if (copy) "复制成功" else "移动成功",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                    if (!copy) loadData(showLoading = false)
-                },
-                onFailure = { error ->
-                    _uiState.value = snapshot.copy(isTransferLoading = false)
-                    android.widget.Toast.makeText(
-                        getApplication(),
-                        error.message ?: if (copy) "复制失败" else "移动失败",
-                        android.widget.Toast.LENGTH_SHORT,
-                    ).show()
-                },
-            )
+            try {
+                val result = WatchLaterRepository.copyOrMoveToFavorite(targetMediaId, aids, copy)
+                if (!accountRequests.isCurrent(identity)) return@launch
+                result.fold(
+                    onSuccess = {
+                        tabCache.clear()
+                        _uiState.update { it.copy(isTransferLoading = false) }
+                        android.widget.Toast.makeText(
+                            getApplication(),
+                            if (copy) "复制成功" else "移动成功",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        if (!copy) loadData(showLoading = false)
+                    },
+                    onFailure = { error ->
+                        if (error is CancellationException) throw error
+                        _uiState.update { latest ->
+                            if (copy || latest.filter != capturedSnapshot.filter) {
+                                latest.copy(isTransferLoading = false)
+                            } else {
+                                val existingAids = latest.items.mapTo(mutableSetOf()) { it.aid }
+                                val missing = removedItems.filterNot { it.aid in existingAids }
+                                latest.copy(
+                                    items = missing + latest.items,
+                                    totalCount = latest.totalCount + missing.size,
+                                    isTransferLoading = false,
+                                )
+                            }
+                        }
+                        android.widget.Toast.makeText(
+                            getApplication(),
+                            error.message ?: if (copy) "复制失败" else "移动失败",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                )
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isTransferLoading = false) }
+                throw e
+            }
         }
     }
 
@@ -1127,7 +1280,7 @@ fun WatchLaterScreen(
     }
 
     // PiliPlus：多选模式下返回键先退出多选
-    androidx.activity.compose.BackHandler(enabled = isBatchMode) {
+    com.android.purebilibili.core.ui.LocalNavigationBackHandler(enabled = isBatchMode) {
         isBatchMode = false
         selectedBvids = emptySet()
     }
@@ -1173,10 +1326,28 @@ fun WatchLaterScreen(
         }
     }
 
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+    LaunchedEffect(viewModel) {
+        viewModel.undoRemovedItem.collect { removedItem ->
+            snackbarHostState.currentSnackbarData?.dismiss()
+            val result = snackbarHostState.showSnackbar(
+                message = "已从稍后再看移除",
+                actionLabel = "撤销",
+                duration = androidx.compose.material3.SnackbarDuration.Short,
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
+                viewModel.restoreItem(removedItem)
+            }
+        }
+    }
+
     AppScaffold(
         modifier = Modifier
             .nestedScroll(bottomBarScrollHideConnection)
             .nestedScroll(scrollBehavior.nestedScrollConnection),
+        snackbarHost = {
+            com.android.purebilibili.core.ui.components.AppSnackbarHost(hostState = snackbarHostState)
+        },
         topBar = {
             // 使用 Box 包裹实现毛玻璃背景
             BiliPaiImmersiveTopBar(

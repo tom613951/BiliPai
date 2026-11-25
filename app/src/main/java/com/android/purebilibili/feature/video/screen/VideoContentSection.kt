@@ -148,6 +148,22 @@ import com.android.purebilibili.core.theme.LocalAppUiStyle
 internal fun shouldShowDanmakuSendInput(isPlayerCollapsed: Boolean): Boolean = !isPlayerCollapsed
 
 /** Trailing send/toggle chrome stays on both 简介 and 评论. */
+internal const val VIDEO_CONTENT_TAB_DOUBLE_TAP_WINDOW_MS = 350L
+
+internal fun isVideoContentTabDoubleTap(
+    selectedTabIndex: Int,
+    tappedTabIndex: Int,
+    lastTappedTabIndex: Int,
+    lastTapAtMs: Long,
+    nowMs: Long,
+    windowMs: Long = VIDEO_CONTENT_TAB_DOUBLE_TAP_WINDOW_MS,
+): Boolean {
+    if (selectedTabIndex != tappedTabIndex) return false
+    if (lastTappedTabIndex != tappedTabIndex || lastTapAtMs <= 0L) return false
+    val delta = nowMs - lastTapAtMs
+    return delta in 0L..windowMs
+}
+
 internal fun shouldShowVideoContentTabBarDanmakuActions(
     selectedTabIndex: Int,
 ): Boolean = selectedTabIndex == 0 || selectedTabIndex == 1
@@ -524,6 +540,7 @@ internal class VideoContentPresentationState(
     val bottomContentPadding: Dp,
     val commentPullToRefreshEnabled: Boolean = true,
     val relatedContentReady: Boolean = true,
+    val detailRelatedVisibility: DetailRelatedVisibility = DetailRelatedVisibility.VISIBLE,
 )
 
 internal class VideoContentPrimaryActions(
@@ -786,18 +803,59 @@ internal fun VideoContentSection(
     }
     val tabSelectionAnimationSpec = rememberVideoContentTabSelectionAnimationSpec()
     val latestOnSelectedTabChange by rememberUpdatedState(onSelectedTabChange)
+    var lastTabTapIndex by remember { mutableIntStateOf(-1) }
+    var lastTabTapAtMs by remember { mutableLongStateOf(0L) }
+
+    // 评论 Tab：「简介|评论」分段 nestedScroll 跟手折叠/展开，反向滑动立即打断。
+    // 「最热评论」标题文字不设开关、下滑必隐回顶出现，排序/搜索行由设置开关控制。
+    val commentHeaderCollapseState = remember(commentListState) { mutableFloatStateOf(0f) }
+    var commentHeaderCollapsePx by commentHeaderCollapseState
 
     val onTabSelected: (Int) -> Unit = { index ->
-        scope.launch {
-            // Continue from the live page offset when a tap interrupts a swipe or another
-            // tap. The helper takes over the scroll mutation without resetting the offset.
-            // Native and glass retain their own timing and fling behavior above.
-            animatePagerSelection(
-                pagerState = pagerState,
-                targetPage = index,
-                animationSpec = tabSelectionAnimationSpec,
-            )
+        val nowMs = android.os.SystemClock.uptimeMillis()
+        val isDoubleTap = isVideoContentTabDoubleTap(
+            selectedTabIndex = pagerState.currentPage,
+            tappedTabIndex = index,
+            lastTappedTabIndex = lastTabTapIndex,
+            lastTapAtMs = lastTabTapAtMs,
+            nowMs = nowMs,
+        )
+        if (isDoubleTap) {
+            lastTabTapIndex = -1
+            lastTabTapAtMs = 0L
+            scope.launch {
+                if (index == 0) {
+                    introListState.animateScrollToTop()
+                } else {
+                    commentListState.animateScrollToTop()
+                }
+                commentHeaderCollapsePx = 0f
+            }
+        } else {
+            lastTabTapIndex = index
+            lastTabTapAtMs = nowMs
+            if (index != pagerState.currentPage) {
+                scope.launch {
+                    // Continue from the live page offset when a tap interrupts a swipe or another
+                    // tap. The helper takes over the scroll mutation without resetting the offset.
+                    // Native and glass retain their own timing and fling behavior above.
+                    animatePagerSelection(
+                        pagerState = pagerState,
+                        targetPage = index,
+                        animationSpec = tabSelectionAnimationSpec,
+                    )
+                }
+            }
         }
+    }
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.layoutInfo.pageSize }
+            .distinctUntilChanged()
+            .collect { pageSize ->
+                if (pageSize > 0 && !pagerState.isScrollInProgress) {
+                    snapPagerToSettledPageIfMisaligned(pagerState)
+                }
+            }
     }
     LaunchedEffect(pagerState, tabs.size) {
         snapshotFlow {
@@ -827,10 +885,6 @@ internal fun VideoContentSection(
     val commentHeaderHeightProvider = remember(chromeMeasurements) {
         { chromeMeasurements.commentHeightPx.toFloat() }
     }
-    // 标签栏不再随滚动收起；滚动折叠机制整体转移到浮动评论栏：
-    // 「最热评论」标题文字不设开关、下滑必隐回顶出现，排序/搜索行由设置开关控制。
-    val commentHeaderCollapseState = remember(commentListState) { mutableFloatStateOf(0f) }
-    var commentHeaderCollapsePx by commentHeaderCollapseState
     val commentListAtTop by remember(commentListState) {
         derivedStateOf {
             isVideoContentCommentListAtTop(
@@ -905,7 +959,14 @@ internal fun VideoContentSection(
     // Match the home bottom dock: one full-size content source, with liquid docks rendered as
     // overlay siblings outside that source. A source attached only to the LazyColumns starts
     // below the tab row, so sampling at the dock's coordinates resolves outside its bounds.
-    val videoContentMiuixBackdrop = rememberMiuixLayerBackdrop()
+    val hasVideoContentBackdropConsumer = liquidGlassEnabled ||
+        (progressiveCommentHeaderEnabled && (!isPlayerCollapsed || liquidGlassEnabled))
+    val videoContentBackdropSource = com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource(
+        recordingEnabled = hasVideoContentBackdropConsumer &&
+            com.android.purebilibili.core.ui.blur.LocalChromeBackdropRecordingAllowed.current &&
+            !com.android.purebilibili.core.ui.performance.isLowBlurBudgetForced(),
+    )
+    val videoContentMiuixBackdrop = videoContentBackdropSource.backdrop
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -918,7 +979,7 @@ internal fun VideoContentSection(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .miuixLayerBackdrop(videoContentMiuixBackdrop)
+                    .then(videoContentBackdropSource.modifier)
             ) {
                 Box(
                     modifier = Modifier
@@ -954,6 +1015,7 @@ internal fun VideoContentSection(
                             relatedVideos = relatedVideos,
                             relatedLoadState = data.relatedLoadState,
                             relatedContentReady = presentationState.relatedContentReady,
+                            detailRelatedVisibility = presentationState.detailRelatedVisibility,
                             currentPageIndex = currentPageIndex,
                             followingMids = followingMids,
                             videoTags = videoTags,
@@ -1009,6 +1071,7 @@ internal fun VideoContentSection(
                             VideoCommentTab(
                                 listState = commentListState,
                                 modifier = Modifier,
+                                bvid = info.bvid,
                                 upMid = info.owner.mid,
                                 maxTimestampMs = info.pages.firstOrNull { it.cid == info.cid }?.duration?.times(1000L)
                                     ?: info.pages.firstOrNull()?.duration?.times(1000L),
@@ -1364,6 +1427,7 @@ private fun VideoIntroTab(
     relatedVideos: List<RelatedVideo>,
     relatedLoadState: VideoPlaybackUiState.RelatedLoadState,
     relatedContentReady: Boolean = true,
+    detailRelatedVisibility: DetailRelatedVisibility,
     currentPageIndex: Int,
     followingMids: Set<Long>,
     videoTags: List<VideoTag>,
@@ -1415,7 +1479,11 @@ private fun VideoIntroTab(
     showInteractionActions: Boolean = true,
     animateVideoDetailLayout: Boolean = true,
 ) {
-    val visibleRelatedVideos = relatedVideos
+    val visibleRelatedVideos = if (detailRelatedVisibility == DetailRelatedVisibility.VISIBLE) {
+        relatedVideos
+    } else {
+        emptyList()
+    }
     val relatedRows = remember(visibleRelatedVideos) {
         chunkRelatedVideosForHomeStyleGrid(visibleRelatedVideos)
     }
@@ -1485,6 +1553,11 @@ private fun VideoIntroTab(
 
         // Keep loaded rows and their keys even while expensive images/shared bounds wait
         // for the entry handoff. Network loading uses the same card geometry per lazy row.
+        // 设置未读到时先不画骨架，避免已关闭的用户看到一闪而过的推荐区；
+        // 关闭时整块不渲染，也不再显示「暂无相关推荐」这类占位文案。
+        if (detailRelatedVisibility != DetailRelatedVisibility.VISIBLE) {
+            return@RelatedVideoList
+        }
         if (visibleRelatedVideos.isEmpty() &&
             (!relatedContentReady || relatedLoadState == VideoPlaybackUiState.RelatedLoadState.LOADING)
         ) {
@@ -1553,6 +1626,7 @@ private fun VideoIntroTab(
 internal fun VideoCommentTab(
     listState: LazyListState,
     modifier: Modifier,
+    bvid: String = "",
     upMid: Long,
     maxTimestampMs: Long?,
     replies: List<ReplyItem>,
@@ -1669,6 +1743,18 @@ internal fun VideoCommentTab(
                 videoContentAdditionalTopPadding(contentPadding, floatingHeaderContentPadding)
             }
         }
+        val bpxCraftResult by com.android.purebilibili.feature.plugin.bpx.rememberBpxCommunityCraftResult(
+            bvid = bvid,
+            replies = replies,
+        )
+        var bpxShowFoldedReplies by remember(bvid) { mutableStateOf(false) }
+        val foldedReplyIds = remember(bpxCraftResult) {
+            bpxCraftResult?.foldRpids?.toSet().orEmpty()
+        }
+        val effectiveReplies = remember(replies, foldedReplyIds, bpxShowFoldedReplies) {
+            if (foldedReplyIds.isEmpty() || bpxShowFoldedReplies) replies
+            else replies.filterNot { it.rpid in foldedReplyIds }
+        }
         VideoCommentRefreshContainer(
             isRefreshing = isRepliesRefreshing,
             onRefresh = onRefreshReplies,
@@ -1729,8 +1815,34 @@ internal fun VideoCommentTab(
                     }
                 }
             } else {
+                bpxCraftResult?.pinnedCard?.let { pinned ->
+                    item(key = "bpx_community_pinned_card", contentType = "bpx_community_pinned") {
+                        com.android.purebilibili.feature.plugin.bpx.BpxCommentPinnedCard(
+                            card = pinned,
+                            onTimestampClick = onTimestampClick,
+                        )
+                    }
+                }
+                if (foldedReplyIds.isNotEmpty() && !bpxShowFoldedReplies && effectiveReplies.size < replies.size) {
+                    val foldedCount = replies.size - effectiveReplies.size
+                    item(key = "bpx_community_folded_bar", contentType = "bpx_community_folded") {
+                        com.android.purebilibili.core.ui.components.AppSurface(
+                            onClick = { bpxShowFoldedReplies = true },
+                            shape = com.android.purebilibili.core.ui.AppShapes.container(com.android.purebilibili.core.ui.ContainerLevel.Chip),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        ) {
+                            AppText(
+                                text = "已由扩展温和折叠 $foldedCount 条刷屏评论 · 点击展开",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = commentAppearance.secondaryTextColor,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
                 items(
-                    items = replies,
+                    items = effectiveReplies,
                     key = { it.rpid },
                     contentType = { resolveReplyItemContentType(it) }
                 ) { reply ->
@@ -1872,6 +1984,10 @@ internal fun LandscapeCommentPanel(
     var previewTextContent by remember { mutableStateOf<ImagePreviewTextContent?>(null) }
     var showImagePreview by remember { mutableStateOf(false) }
     var showCommentSearchSheet by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val showVideoDetailCommentCount by remember(context) {
+        SettingsManager.getShowVideoDetailCommentCount(context)
+    }.collectAsStateWithLifecycle(initialValue = true)
     val density = LocalDensity.current
     val panelHeaderHeightPx = remember(density) { mutableFloatStateOf(with(density) { 48.dp.toPx() }) }
     val panelHeaderHeightProvider = remember(panelHeaderHeightPx) { { panelHeaderHeightPx.floatValue } }
@@ -1908,7 +2024,11 @@ internal fun LandscapeCommentPanel(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         AppText(
-                            "评论 $replyCount",
+                            if (showVideoDetailCommentCount && replyCount > 0) {
+                                "评论 ${FormatUtils.formatStat(replyCount.toLong())}"
+                            } else {
+                                "评论"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                             maxLines = 1,
@@ -1959,6 +2079,7 @@ internal fun LandscapeCommentPanel(
                                 VideoCommentTab(
                                     listState = listState,
                                     modifier = Modifier.fillMaxSize(),
+                                    bvid = info.bvid,
                                     upMid = info.owner.mid,
                                     maxTimestampMs = info.pages.firstOrNull { it.cid == info.cid }?.duration?.times(1000L)
                                         ?: info.pages.firstOrNull()?.duration?.times(1000L),
@@ -2219,6 +2340,10 @@ private fun VideoHeaderContent(
                 onShareClick = onShareClick,
                 showCommentAction = false,
             )
+            com.android.purebilibili.feature.plugin.bpx.BpxDetailCompanionStrip(
+                info = info,
+                onTimestampClick = onTimestampClick,
+            )
         }
 
         info.ugc_season?.let { season ->
@@ -2325,12 +2450,15 @@ internal fun VideoContentTabBar(
                 Arrangement.Start
             }
         ) {
+            val tabOptions = remember(tabs, measurementLabels) {
+                tabs.mapIndexed { index, label ->
+                    AppSegmentOption(index, label, measurementLabel = measurementLabels?.getOrNull(index))
+                }
+            }
             AppThemeAdaptiveTabRow(
                 role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
                 centerContent = false,
-                options = tabs.mapIndexed { index, label ->
-                    AppSegmentOption(index, label, measurementLabel = measurementLabels?.getOrNull(index))
-                },
+                options = tabOptions,
                 // Counts have a metadata reservation before comment loading starts. Data arrival
                 // updates text only, rather than starting a second width spring during entry.
                 liquidGlassAnimateLabelWidthChanges = false,

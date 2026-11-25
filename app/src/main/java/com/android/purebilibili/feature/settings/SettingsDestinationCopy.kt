@@ -113,8 +113,8 @@ internal fun settingsDestinationCopy(target: SettingsSearchTarget): SettingsDest
         summary = "清理应用缓存并设置自动清理周期与容量上限",
     )
     SettingsSearchTarget.PLUGINS -> SettingsDestinationCopy(
-        title = "插件中心",
-        summary = "安装、启用和管理扩展功能",
+        title = "插件中心 (Beta)",
+        summary = "Beta 测试 · 安装、启用和管理装扮与 .bpx 扩展功能",
     )
     SettingsSearchTarget.EXPORT_LOGS -> SettingsDestinationCopy(
         title = "导出日志",
@@ -147,6 +147,10 @@ internal fun settingsDestinationCopy(target: SettingsSearchTarget): SettingsDest
     SettingsSearchTarget.KEYBOARD_SHORTCUTS -> SettingsDestinationCopy(
         title = "键盘快捷键",
         summary = "外接键盘时快速打开搜索、切换底栏项",
+    )
+    SettingsSearchTarget.GAMEPAD_CONTROL -> SettingsDestinationCopy(
+        title = "手柄控制",
+        summary = "Xbox / PlayStation / Switch 手柄适配、提示栏与自定义键位",
     )
     SettingsSearchTarget.OPEN_LINKS -> SettingsDestinationCopy(
         title = "默认打开链接",

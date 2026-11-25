@@ -112,6 +112,7 @@ import com.android.purebilibili.feature.home.components.resolveBiliPaiBottomBarC
 import com.android.purebilibili.core.ui.components.AppLinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import com.android.purebilibili.core.ui.AppModalBottomSheet
+import com.android.purebilibili.core.ui.rememberAppBackIcon
 import com.android.purebilibili.core.ui.components.AppOutlinedTextField
 import com.android.purebilibili.core.ui.components.AppSurface
 import com.android.purebilibili.core.ui.components.AppText
@@ -515,6 +516,7 @@ internal fun MusicPlayerContent(
         mutableStateOf(MusicPlayerLayoutPreference.AUTO.name)
     }
     var showAudioQuality by remember { mutableStateOf(false) }
+    var showThemeColorPicker by remember { mutableStateOf(false) }
     var showLyricsSearch by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showPlayHistory by remember { mutableStateOf(false) }
@@ -597,6 +599,16 @@ internal fun MusicPlayerContent(
     val storedLyricsUiStyle by remember(context) { SettingsManager.getMusicLyricsUiStyle(context) }
         .collectAsStateWithLifecycle<SettingsManager.MusicLyricsUiStyle?>(initialValue = null)
     val lyricsUiStyle = storedLyricsUiStyle ?: SettingsManager.MusicLyricsUiStyle.ARC
+    val themeColorMode by remember(context) {
+        com.android.purebilibili.core.store.AudioLyricsSettingsStore.observeThemeColorMode(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER
+    )
+    val customThemeColorHex by remember(context) {
+        com.android.purebilibili.core.store.AudioLyricsSettingsStore.observeCustomThemeColorHex(context)
+    }.collectAsStateWithLifecycle(
+        initialValue = com.android.purebilibili.core.store.AudioLyricsSettingsStore.DEFAULT_CUSTOM_THEME_COLOR_HEX
+    )
     val liquidGlassTuning = remember(
         homeSettings.liquidGlassProgress,
         homeSettings.liquidGlassAdvancedSettings,
@@ -622,8 +634,39 @@ internal fun MusicPlayerContent(
             ?: com.android.purebilibili.feature.audio.lyrics.halcyon.PlayerPalette.Default
     }
 
+    val appThemePrimary = MaterialTheme.colorScheme.primary
+    val customSeedColor = remember(customThemeColorHex) {
+        Color(
+            com.android.purebilibili.core.store.AudioLyricsSettingsStore
+                .parseHexColorArgb(customThemeColorHex) ?: 0xFF2F7DFF
+        )
+    }
+    val effectivePlayerPalette = remember(themeColorMode, appThemePrimary, customSeedColor, playerPalette) {
+        when (themeColorMode) {
+            com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER -> playerPalette
+            com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_APP_THEME ->
+                com.android.purebilibili.feature.audio.lyrics.halcyon.PlayerPalette.fromSeedColor(appThemePrimary)
+            com.android.purebilibili.core.store.MusicThemeColorMode.OBSIDIAN_PURE ->
+                com.android.purebilibili.feature.audio.lyrics.halcyon.PlayerPalette.Default
+            com.android.purebilibili.core.store.MusicThemeColorMode.CUSTOM ->
+                com.android.purebilibili.feature.audio.lyrics.halcyon.PlayerPalette.fromSeedColor(customSeedColor)
+            else -> com.android.purebilibili.feature.audio.lyrics.halcyon.PlayerPalette.fromSeedColor(
+                Color(themeColorMode.seedArgb ?: 0xFF2F7DFF)
+            )
+        }
+    }
+    val effectiveBaseColor = if (themeColorMode == com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER) {
+        paletteColor
+    } else {
+        effectivePlayerPalette.middle
+    }
+    val effectiveAccentColor = if (themeColorMode == com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER) {
+        paletteAccent
+    } else {
+        effectivePlayerPalette.accent
+    }
     val backgroundColor by animateColorAsState(
-        targetValue = paletteColor,
+        targetValue = effectiveBaseColor,
         animationSpec = if (effectiveReduceMotion) snap() else AppMotionTokens.emphasizedSpec(),
         label = "music_palette"
     )
@@ -744,9 +787,11 @@ internal fun MusicPlayerContent(
                     .background(pageBackground)
             ) {
                 MusicArtworkBackground(
-                    bitmap = artworkBitmap,
-                    palette = playerPalette,
-                    glowColor = paletteAccent,
+                    bitmap = artworkBitmap.takeIf {
+                        themeColorMode == com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER
+                    },
+                    palette = effectivePlayerPalette,
+                    glowColor = effectiveAccentColor,
                     fallbackColor = backgroundColor,
                     isPlaying = state.isPlaying,
                     atmosphereEnabled = audioSpectrumEnabled,
@@ -1512,6 +1557,9 @@ internal fun MusicPlayerContent(
                                     SettingsManager.setMusicLyricsUiStyle(context, nextStyle)
                                 }
                             }
+                            add(MusicMoreMenuEntry.THEME_COLOR, currentValue = themeColorMode.label) {
+                                showThemeColorPicker = true
+                            }
                             add(MusicMoreMenuEntry.TITLE_COLLAPSE, currentValue = if (musicTitleCollapsed) "已折叠" else "已展开") {
                                 musicTitleCollapsed = !musicTitleCollapsed
                             }
@@ -1701,6 +1749,118 @@ internal fun MusicPlayerContent(
         }
     }
 
+
+    if (showThemeColorPicker) {
+        AppModalBottomSheet(onDismissRequest = { showThemeColorPicker = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                AppText(
+                    text = "听视频背景主题色",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                AppText(
+                    text = "可跟随封面自动取色，或选择固定氛围主题色。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppContentColors.secondaryText(),
+                )
+                com.android.purebilibili.core.store.MusicThemeColorMode.entries.forEach { mode ->
+                    val selected = mode == themeColorMode
+                    val swatchColor = when (mode) {
+                        com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_COVER -> paletteAccent
+                        com.android.purebilibili.core.store.MusicThemeColorMode.FOLLOW_APP_THEME -> appThemePrimary
+                        com.android.purebilibili.core.store.MusicThemeColorMode.CUSTOM -> customSeedColor
+                        else -> Color(mode.seedArgb ?: 0xFF2F7DFF)
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
+                                else Color.Transparent
+                            )
+                            .clickable {
+                                settingsScope.launch {
+                                    com.android.purebilibili.core.store.AudioLyricsSettingsStore
+                                        .setThemeColorMode(context, mode)
+                                }
+                                if (mode != com.android.purebilibili.core.store.MusicThemeColorMode.CUSTOM) {
+                                    showThemeColorPicker = false
+                                }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .clip(CircleShape)
+                                .background(swatchColor)
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = CircleShape,
+                                )
+                        )
+                        AppText(
+                            text = if (mode == com.android.purebilibili.core.store.MusicThemeColorMode.CUSTOM) {
+                                "${mode.label}（$customThemeColorHex）"
+                            } else {
+                                mode.label
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (selected) {
+                            AppText(
+                                text = "已选",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = AppContentColors.accent(),
+                            )
+                        }
+                    }
+                }
+                if (themeColorMode == com.android.purebilibili.core.store.MusicThemeColorMode.CUSTOM) {
+                    var hexInput by remember(customThemeColorHex) { mutableStateOf(customThemeColorHex) }
+                    val parsedValid = com.android.purebilibili.core.store.AudioLyricsSettingsStore
+                        .normalizeHexColor(hexInput) != null
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        com.android.purebilibili.core.ui.components.AppOutlinedTextField(
+                            value = hexInput,
+                            onValueChange = { hexInput = it.take(7) },
+                            label = { AppText("自定义色值 (#RRGGBB)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        com.android.purebilibili.core.ui.components.AppButton(
+                            onClick = {
+                                settingsScope.launch {
+                                    com.android.purebilibili.core.store.AudioLyricsSettingsStore
+                                        .setCustomThemeColorHex(context, hexInput)
+                                }
+                                showThemeColorPicker = false
+                            },
+                            enabled = parsedValid,
+                        ) {
+                            AppText("应用")
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if (showAudioQuality && onAudioQualitySelected != null) {
         AudioQualitySelectionMenu(
@@ -3063,7 +3223,7 @@ private fun MusicArtwork(
         val cardAspectRatio = if (isCard) (16f / 10f) else 1f
         val cornerRadius = if (isCard) APPLE_MUSIC_CARD_CORNER_RADIUS_DP.dp else APPLE_MUSIC_COVER_CORNER_RADIUS_DP.dp
         val cornerShape = RoundedCornerShape(cornerRadius)
-        val playbackProgress by animateFloatAsState(
+        val playbackProgressState = animateFloatAsState(
             targetValue = if (isPlaying) 1f else 0f,
             animationSpec = if (reduceMotion) {
                 snap()
@@ -3077,25 +3237,25 @@ private fun MusicArtwork(
         )
         val playingScale = resolveAppleMusicCoverScale(isPlaying = true)
         val pausedScale = resolveAppleMusicCoverScale(isPlaying = false)
-        val artworkScale = pausedScale + (playingScale - pausedScale) * playbackProgress
-        val shadowElevation = resolveAppleMusicCoverShadowElevation(playbackProgress).dp
+        val ambientShadowColor = artworkShadowColor.copy(alpha = if (isDarkEnvironment) 0.45f else 0.15f)
+        val spotShadowColor = artworkShadowColor.copy(alpha = if (isDarkEnvironment) 0.55f else 0.20f)
         Box(
             modifier = modifier
                 // Put the transform before the visual chrome so the artwork, rounded clip,
                 // border and shadow settle as one card. A later graphicsLayer only scales the
                 // image subtree and leaves the old-size frame behind while pausing.
+                .aspectRatio(cardAspectRatio)
                 .graphicsLayer {
+                    val playbackProgress = playbackProgressState.value
+                    val artworkScale = pausedScale + (playingScale - pausedScale) * playbackProgress
                     scaleX = artworkScale
                     scaleY = artworkScale
+                    shadowElevation = resolveAppleMusicCoverShadowElevation(playbackProgress).dp.toPx()
+                    this.shape = cornerShape
+                    clip = true
+                    this.ambientShadowColor = ambientShadowColor
+                    this.spotShadowColor = spotShadowColor
                 }
-                .aspectRatio(cardAspectRatio)
-                .shadow(
-                    elevation = shadowElevation,
-                    shape = cornerShape,
-                    ambientColor = artworkShadowColor.copy(alpha = if (isDarkEnvironment) 0.45f else 0.15f),
-                    spotColor = artworkShadowColor.copy(alpha = if (isDarkEnvironment) 0.55f else 0.20f)
-                )
-                .clip(cornerShape)
                 .border(
                     width = 1.dp,
                     color = artworkBorderColor.copy(alpha = if (isDarkEnvironment) 0.20f else 0.14f),
@@ -4585,15 +4745,13 @@ private fun MusicTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlassIconButton(
-            icon = Icons.Outlined.KeyboardArrowDown,
-            description = "返回",
+        MusicBackButton(
+            onClick = onBack,
             glassEnabled = glassEnabled,
             miuixBackdrop = miuixBackdrop,
             liquidGlassTuning = liquidGlassTuning,
             glassTintColor = glassTintColor,
             isDarkEnvironment = isDarkEnvironment,
-            onClick = onBack
         )
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -4635,6 +4793,31 @@ private fun MusicTopBar(
 }
 
 @Composable
+internal fun MusicBackButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    glassEnabled: Boolean = false,
+    miuixBackdrop: MiuixBackdrop? = null,
+    liquidGlassTuning: LiquidGlassTuning = resolveLiquidGlassTuning(progress = 0.5f),
+    glassTintColor: Color = Color.Unspecified,
+    isDarkEnvironment: Boolean = true,
+    iconTint: Color = Color.Unspecified,
+) {
+    GlassIconButton(
+        icon = rememberAppBackIcon(),
+        description = "返回",
+        glassEnabled = glassEnabled,
+        miuixBackdrop = miuixBackdrop,
+        liquidGlassTuning = liquidGlassTuning,
+        glassTintColor = glassTintColor,
+        isDarkEnvironment = isDarkEnvironment,
+        iconTint = iconTint,
+        modifier = modifier,
+        onClick = onClick,
+    )
+}
+
+@Composable
 private fun GlassIconButton(
     icon: ImageVector,
     description: String,
@@ -4643,10 +4826,13 @@ private fun GlassIconButton(
     liquidGlassTuning: LiquidGlassTuning,
     glassTintColor: Color = Color.Unspecified,
     isDarkEnvironment: Boolean = true,
+    iconTint: Color = Color.Unspecified,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     val elasticState = rememberAppElasticPressState(visualSize = 48.dp)
     val useLiquidGlass = glassEnabled && miuixBackdrop != null
+    val resolvedIconTint = if (iconTint != Color.Unspecified) iconTint else MusicContentColor
     // This control owns its backdrop and press transform; native chrome must stay transparent.
     CompositionLocalProvider(
         LocalAppTopBarIconDecorationEnabled provides false,
@@ -4657,7 +4843,7 @@ private fun GlassIconButton(
                 containerColor = Color.Transparent,
                 disabledContainerColor = Color.Transparent,
             ),
-            modifier = Modifier
+            modifier = modifier
                 .size(48.dp)
                 .appElasticPress(state = elasticState, transformInBackdrop = useLiquidGlass)
                 .biliPaiFloatingDockShell(
@@ -4685,7 +4871,7 @@ private fun GlassIconButton(
             AppIcon(
                 icon,
                 contentDescription = description,
-                tint = MusicContentColor,
+                tint = resolvedIconTint,
             )
         }
     }

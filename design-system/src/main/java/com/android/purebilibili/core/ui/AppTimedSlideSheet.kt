@@ -105,47 +105,79 @@ internal fun AppTimedSlideSheet(
             }
         }
     }
-    val nestedScroll = object : NestedScrollConnection {
-        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
-            if (source == NestedScrollSource.UserInput && available.y < 0 && dragOffset > 0) {
-                Offset(0f, consumeDrag(available.y))
-            } else Offset.Zero
+    val latestConsumeDrag by rememberUpdatedState(consumeDrag)
+    val latestFinishDrag by rememberUpdatedState(finishDrag)
+    val nestedScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
+                if (source == NestedScrollSource.UserInput && available.y < 0 && dragOffset > 0) {
+                    Offset(0f, latestConsumeDrag(available.y))
+                } else Offset.Zero
 
-        override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
-            if (source == NestedScrollSource.UserInput && available.y > 0) {
-                Offset(0f, consumeDrag(available.y))
-            } else Offset.Zero
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+                if (source == NestedScrollSource.UserInput && available.y > 0) {
+                    Offset(0f, latestConsumeDrag(available.y))
+                } else Offset.Zero
 
-        override suspend fun onPreFling(available: Velocity): Velocity {
-            if (dragOffset <= 0f) return Velocity.Zero
-            finishDrag(available.y)
-            return available
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (dragOffset <= 0f) return Velocity.Zero
+                latestFinishDrag(available.y)
+                return available
+            }
         }
     }
+    val predictiveBackEnabled = dismissOnBackPress && LocalPredictiveBackGestureEnabled.current
     Dialog(
         onDismissRequest = { if (dismissOnBackPress) requestDismiss() },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
-            dismissOnBackPress = dismissOnBackPress,
+            dismissOnBackPress = dismissOnBackPress && !predictiveBackEnabled,
         ),
     ) {
+        val back = remember { AppDialogBackState() }
+        if (predictiveBackEnabled) {
+            AppDialogPredictiveBackHandler(
+                state = back,
+                enabled = !closing,
+                onBackCompleted = requestDismiss,
+            )
+        }
+        ModalWindowBlurBehindEffect(progress = { (progress.value * (1f - back.progress)).coerceIn(0f, 1f) })
         AppPopupWindowHost(enableWindowMaterial = false) {
-            Box(Modifier.fillMaxSize().windowInsetsPadding(windowInsets)) {
+            Box(Modifier.fillMaxSize()) {
                 Box(
                     Modifier
                         .matchParentSize()
-                        .graphicsLayer { alpha = progress.value * (1f - dragOffset / height[0]).coerceIn(0f, 1f) }
+                        .graphicsLayer {
+                            alpha = (progress.value * (1f - dragOffset / height[0]).coerceIn(0f, 1f) * (1f - back.progress))
+                                .coerceIn(0f, 1f)
+                        }
                         .background(scrimColor)
-                        .clickable(onClick = requestDismiss),
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = requestDismiss,
+                        ),
                 )
                 Surface(
                     modifier = modifier
                         .align(Alignment.BottomCenter)
+                        .windowInsetsPadding(windowInsets)
                         .fillMaxWidth()
                         .onSizeChanged { height[0] = it.height.coerceAtLeast(1) }
                         .graphicsLayer {
-                            translationY = if (reduced) dragOffset else (size.height - dragOffset) * (1f - progress.value) + dragOffset
+                            val backProgress = back.progress.coerceIn(0f, 1f)
+                            val baseTranslation = if (reduced) {
+                                dragOffset
+                            } else {
+                                (size.height - dragOffset) * (1f - progress.value) + dragOffset
+                            }
+                            translationY = baseTranslation + size.height * 0.14f * backProgress
+                            val backScale = 1f - 0.04f * backProgress
+                            scaleX = backScale
+                            scaleY = backScale
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 1f)
                             alpha = if (reduced) progress.value else 1f
                         }
                         .nestedScroll(nestedScroll),

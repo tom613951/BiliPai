@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -1167,6 +1168,7 @@ fun OfflineVideoPlayerScreen(
                         )
                     }
                 }
+                val sharedSurfaceVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
                 AndroidView(
                     factory = { ctx ->
                         PlayerView(ctx).apply {
@@ -1175,6 +1177,7 @@ fun OfflineVideoPlayerScreen(
                             useController = false
                             this.resizeMode = resizeMode
                             keepScreenOn = true
+                            visibility = if (sharedSurfaceVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
                             playerView = this
                         }
                     },
@@ -1182,6 +1185,7 @@ fun OfflineVideoPlayerScreen(
                         view.player = player
                         view.resizeMode = resizeMode
                         view.keepScreenOn = playbackFailure == null && isPlaying
+                        view.visibility = if (sharedSurfaceVisible) android.view.View.VISIBLE else android.view.View.INVISIBLE
                     },
                     onRelease = { view ->
                         cancelPlayerViewViewportRefresh(view)
@@ -1192,9 +1196,25 @@ fun OfflineVideoPlayerScreen(
                         Modifier.requiredSize(viewport.width.toDp(), viewport.height.toDp())
                     },
                 )
+                // 封面常驻就绪，避免返回隐藏 PlayerView 首帧才异步挂载封面造成闪黑。
+                if (task.cover.isNotBlank()) {
+                    AsyncImage(
+                        model = task.cover,
+                        contentDescription = if (!sharedSurfaceVisible) task.title else null,
+                        contentScale = ContentScale.Crop,
+                        modifier = with(density) {
+                            Modifier
+                                .requiredSize(viewport.width.toDp(), viewport.height.toDp())
+                                .graphicsLayer {
+                                    alpha = if (!sharedSurfaceVisible) 1f else 0f
+                                }
+                        },
+                    )
+                }
             }
 
             if (danmakuAvailable) {
+                val sharedDanmakuVisible = com.android.purebilibili.navigation3.LocalNavigationSharedSurfaceVisible.current
                 key(danmakuManager) {
                     AndroidView(
                         factory = { ctx ->
@@ -1207,7 +1227,7 @@ fun OfflineVideoPlayerScreen(
                         },
                         update = { view ->
                             danmakuManager.useFullscreenTextSize = isFullscreen
-                            view.visibility = if (showDanmakuLayer) {
+                            view.visibility = if (showDanmakuLayer && sharedDanmakuVisible) {
                                 android.view.View.VISIBLE
                             } else {
                                 android.view.View.GONE

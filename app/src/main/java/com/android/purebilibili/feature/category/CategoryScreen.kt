@@ -49,11 +49,13 @@ import com.android.purebilibili.core.util.shouldShowScrollToTop
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
+@androidx.compose.runtime.Immutable
 data class CategoryUiState(
     val tid: Int = 0,
     val videos: List<VideoItem> = emptyList(),
@@ -133,18 +135,20 @@ class CategoryViewModel : ViewModel() {
                     hasMore = newVideos.isNotEmpty()
                     currentPage = if (newVideos.isNotEmpty()) pageToFetch + 1
                         else if (isRefresh) 1 else currentPage
-                    val nextState = _uiState.value.copy(
-                        tid = requestedTid,
-                        videos = if (replace || isRefresh) newVideos else _uiState.value.videos + newVideos,
-                        isLoading = false,
-                        isRefreshing = false,
-                        error = null,
-                        generation = requestGeneration
-                    )
-                    _uiState.value = nextState
+                    val nextState = _uiState.updateAndGet { current ->
+                        current.copy(
+                            tid = requestedTid,
+                            videos = if (replace || isRefresh) newVideos else current.videos + newVideos,
+                            isLoading = false,
+                            isRefreshing = false,
+                            error = null,
+                            generation = requestGeneration
+                        )
+                    }
                     categoryCache[requestedTid] = CachedCategory(nextState, currentPage, hasMore)
                 },
                 onFailure = { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
                     _uiState.update {
                         it.copy(isLoading = false, isRefreshing = false, error = error.message ?: "加载失败")
                     }
@@ -255,7 +259,10 @@ fun CategoryScreen(
     }
 
     val categoryGlassEnabled = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled
-    val categoryBackdrop = if (categoryGlassEnabled) rememberLayerBackdrop() else null
+    val categoryBackdropSource = if (categoryGlassEnabled) {
+        com.android.purebilibili.core.ui.blur.rememberChromeBackdropSource()
+    } else null
+    val categoryBackdrop = categoryBackdropSource?.backdrop
 
     AppScaffold(
         topBar = {
@@ -300,7 +307,7 @@ fun CategoryScreen(
                     indicatorTopInset = 0.dp,
                     modifier = Modifier
                         .fillMaxSize()
-                        .then(if (categoryBackdrop != null) Modifier.layerBackdrop(categoryBackdrop) else Modifier)
+                        .then(categoryBackdropSource?.modifier ?: Modifier)
                 ) {
                     // 视频网格
                     val alignRows = gridColumns > 1 && !homeSettings.showFullVideoCardContent

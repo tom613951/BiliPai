@@ -48,6 +48,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PhotoCamera
 import com.android.purebilibili.core.ui.AppModalBottomSheet
@@ -676,8 +678,14 @@ internal fun VideoSettingsPanel(
                             }
                         }
                     }
+                    item(key = "gesture_guide_entry") {
+                        PlayerSettingsRow("手势说明与开关", "查看手势操作并快捷开关") { page = "gestureGuide" }
+                    }
                 } else {
-                    item { mainRows.values.forEach { row -> row() } }
+                    item {
+                        mainRows.values.forEach { row -> row() }
+                        PlayerSettingsRow("手势说明与开关", "查看手势操作并快捷开关") { page = "gestureGuide" }
+                    }
                 }
             } else if (page == "playbackSettings") {
                 item {
@@ -689,6 +697,9 @@ internal fun VideoSettingsPanel(
                     )
                 }
                 items(playbackSettingsEntries, key = { it.id }) { entry -> mainRows.getValue(entry)() }
+                item(key = "playback_gesture_guide_entry") {
+                    PlayerSettingsRow("手势说明与开关", "查看手势操作并快捷开关") { page = "gestureGuide" }
+                }
             } else if (page != "advanced") {
                 item {
                     PlayerSettingsRow("返回") {
@@ -699,11 +710,83 @@ internal fun VideoSettingsPanel(
                             else -> "main"
                         }
                     }
-                    val submenuTitle = when (page) { "quality" -> "选择画质"; "audio" -> "选择音质"; "codec" -> "首选编码格式"; "cdn", "cdnAdvanced" -> "CDN 设置"; "transform" -> "画面变换"; "abLoop" -> "A-B 区间循环"; "enhancement" -> "画质增强"; "actionCounts" -> FullscreenActionCountSettings.TITLE; "topBarItems" -> com.android.purebilibili.core.store.FullscreenTopBarSettings.TITLE; else -> null }
+                    val submenuTitle = when (page) { "quality" -> "选择画质"; "audio" -> "选择音质"; "codec" -> "首选编码格式"; "cdn", "cdnAdvanced" -> "CDN 设置"; "transform" -> "画面变换"; "abLoop" -> "A-B 区间循环"; "enhancement" -> "画质增强"; "gestureGuide" -> "手势说明与开关"; "actionCounts" -> FullscreenActionCountSettings.TITLE; "topBarItems" -> com.android.purebilibili.core.store.FullscreenTopBarSettings.TITLE; else -> null }
                     submenuTitle?.let { title ->
                         Box(Modifier.fillMaxWidth().height(45.dp), contentAlignment = Alignment.Center) { Text(title, fontSize = 14.sp) }
                     }
                     when (page) {
+                        "gestureGuide" -> {
+                            val doubleTapLikeEnabled by remember(context) {
+                                com.android.purebilibili.core.store.SettingsManager.getDoubleTapLike(context)
+                            }.collectAsStateWithLifecycle(initialValue = true)
+                            val longPressSlideMode by remember(context) {
+                                com.android.purebilibili.core.store.SettingsManager.getLongPressSpeedSlideMode(context)
+                            }.collectAsStateWithLifecycle(
+                                initialValue = com.android.purebilibili.core.store.LongPressSpeedSlideMode.PRESETS,
+                            )
+                            AppText(
+                                text = "快捷开关",
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AppContentColors.secondaryText(),
+                            )
+                            VideoSettingsSwitchRow(
+                                icon = Icons.Outlined.ThumbUp,
+                                title = "双击屏幕点赞",
+                                subtitle = "容易误触时可在此直接关闭",
+                                checked = doubleTapLikeEnabled,
+                                onCheckedChange = { enabled ->
+                                    scope.launch {
+                                        com.android.purebilibili.core.store.SettingsManager
+                                            .setDoubleTapLike(context, enabled)
+                                    }
+                                },
+                            )
+                            PlayerSettingsRow(
+                                title = "长按倍速滑动调节（${longPressSlideMode.label}）",
+                                subtitle = when (longPressSlideMode) {
+                                    com.android.purebilibili.core.store.LongPressSpeedSlideMode.OFF ->
+                                        "长按保持固定倍速 · 点按切至档位换挡"
+                                    com.android.purebilibili.core.store.LongPressSpeedSlideMode.PRESETS ->
+                                        "左右滑切换 0.5x–5.0x 档位 · 点按切至无极调速"
+                                    com.android.purebilibili.core.store.LongPressSpeedSlideMode.CONTINUOUS ->
+                                        "左右滑 0.5x–5.0x 无极微调（±0.1x）· 点按关闭"
+                                },
+                                onClick = {
+                                    val nextMode = when (longPressSlideMode) {
+                                        com.android.purebilibili.core.store.LongPressSpeedSlideMode.OFF ->
+                                            com.android.purebilibili.core.store.LongPressSpeedSlideMode.PRESETS
+                                        com.android.purebilibili.core.store.LongPressSpeedSlideMode.PRESETS ->
+                                            com.android.purebilibili.core.store.LongPressSpeedSlideMode.CONTINUOUS
+                                        com.android.purebilibili.core.store.LongPressSpeedSlideMode.CONTINUOUS ->
+                                            com.android.purebilibili.core.store.LongPressSpeedSlideMode.OFF
+                                    }
+                                    scope.launch {
+                                        com.android.purebilibili.core.store.SettingsManager
+                                            .setLongPressSpeedSlideMode(context, nextMode)
+                                    }
+                                },
+                            )
+                            AppText(
+                                text = "手势速查",
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AppContentColors.secondaryText(),
+                            )
+                            val gestureCheatSheet = remember {
+                                listOf(
+                                    "左右滑动" to "快进 / 快退进度；拖动进度条时上滑进入精准时间轴",
+                                    "左侧上下滑动" to "调节当前画面亮度",
+                                    "右侧上下滑动" to "调节媒体播放音量",
+                                    "长按画面" to "触发临时倍速，松手即恢复原速",
+                                    "双指缩放 / 调速" to "全屏缩放画面，或双指调节倍速",
+                                    "底边上滑" to "全屏下展开更多推荐与待播队列",
+                                )
+                            }
+                            gestureCheatSheet.forEach { (gestureTitle, gestureDesc) ->
+                                PlayerSettingsRow(title = gestureTitle, subtitle = gestureDesc, onClick = null)
+                            }
+                        }
                         "topBarItems" -> {
                             com.android.purebilibili.core.store.FullscreenTopBarItemGroup.entries.forEach { group ->
                                 AppText(

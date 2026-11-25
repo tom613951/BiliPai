@@ -121,6 +121,7 @@ fun TopControlBar(
     moreMenuSource: com.android.purebilibili.core.ui.components.AppGlassMenuSource? = null,
     danmakuMenuSource: com.android.purebilibili.core.ui.components.AppGlassMenuSource? = null,
     onAudioClick: (() -> Unit)? = null,
+    isAudioOnly: Boolean = false,
     onSendDanmakuClick: (() -> Unit)? = null,
     danmakuEnabled: Boolean = true,
     onDanmakuToggle: (() -> Unit)? = null,
@@ -263,10 +264,18 @@ fun TopControlBar(
                             }
                             if (clockVisible) HeaderStatusText(currentTime)
                         }
-                        if (!simplifiedPortrait && policy.showAudio && onAudioClick != null &&
-                            showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.AUDIO)
-                        ) {
-                            HeaderIcon(Icons.Outlined.Headphones, "听音频", onAudioClick)
+                        val showAudioButton = onAudioClick != null && (
+                            simplifiedPortrait ||
+                                (policy.showAudio &&
+                                    showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.AUDIO))
+                        )
+                        if (showAudioButton) {
+                            HeaderIcon(
+                                icon = Icons.Outlined.Headphones,
+                                description = if (isAudioOnly) "退出听视频" else "听视频",
+                                onClick = onAudioClick!!,
+                                active = isAudioOnly,
+                            )
                         }
                         if (!simplifiedPortrait && policy.showCast && showCastButton && onCastClick != null &&
                             showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.CAST)
@@ -421,7 +430,13 @@ fun TopControlBar(
                         .then(if (glass) Modifier.padding(top = 6.dp) else Modifier)
                         .horizontalScroll(rememberScrollState())
                         // 角标伸出按钮的部分也必须位于滚动视口内；两种材质共用此边界。
-                        .padding(top = PlayerActionCountTopOverflow, end = PlayerActionCountEndOverflow),
+                        // 弹性按压会向四周撑开玻璃外壳，滚动视口需同时预留起点与底部空间。
+                        .padding(
+                            start = PlayerActionCountStartOverflow,
+                            top = PlayerActionCountTopOverflow,
+                            end = PlayerActionCountEndOverflow,
+                            bottom = PlayerActionCountBottomOverflow,
+                        ),
                     horizontalArrangement = if (glass) Arrangement.spacedBy(buttonSpacing, Alignment.End) else Arrangement.End,
                 ) {
                     if (showCommentBtn) {

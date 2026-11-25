@@ -379,10 +379,9 @@ fun SpaceScreen(
         }
     }
     LaunchedEffect(fanModel) { fanModel.load() }
-    LaunchedEffect(fanState.message) {
-        fanState.message?.let { message ->
+    LaunchedEffect(fanModel) {
+        fanModel.events.collect { message ->
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
-            fanModel.clearMessage()
         }
     }
     val queryAicu = com.android.purebilibili.feature.aicu.LocalAicuNavigation.current
@@ -536,11 +535,9 @@ fun SpaceScreen(
         promptEnabled = playedVideoLocatePromptEnabled,
         promptHandled = playedVideoLocatePromptHandled
     )
-    val locateMessage = currentSuccessState?.locateMessage
-    LaunchedEffect(locateMessage) {
-        locateMessage?.let { message ->
+    LaunchedEffect(viewModel) {
+        viewModel.locateEvents.collect { message ->
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
-            viewModel.consumeLocateMessage(message)
         }
     }
     val currentSearchScope = currentSuccessState?.let { success ->
@@ -551,6 +548,9 @@ fun SpaceScreen(
     } ?: SpaceSearchScope.NONE
     val canSearch = currentSearchScope != SpaceSearchScope.NONE
     val isSearchMode = currentSuccessState?.isSearchMode == true
+    com.android.purebilibili.core.ui.LocalNavigationBackHandler(enabled = isSearchMode) {
+        viewModel.setSearchMode(false)
+    }
     val hasContributionToolbarForSearch = currentSuccessState?.let { success ->
         currentSearchScope == SpaceSearchScope.VIDEO &&
             resolveDisplayedSpaceContributionTabs(
@@ -655,7 +655,15 @@ fun SpaceScreen(
                     } else Color.Unspecified,
                     navigationIcon = {
                         CompositionLocalProvider(LocalAppTopBarIconBackdrop provides spaceTopBarIconBackdrop) {
-                            AppIconButton(onClick = onBack) {
+                            AppIconButton(
+                                onClick = {
+                                    if (isSearchMode) {
+                                        viewModel.setSearchMode(false)
+                                    } else {
+                                        onBack()
+                                    }
+                                }
+                            ) {
                                 AppIcon(
                                     imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
                                     contentDescription = backLabel
@@ -1554,11 +1562,14 @@ private fun SpaceContent(
             value = com.android.purebilibili.data.repository.SpaceShopRepository.load(state.userInfo.mid)
         }
     }
-    val displayedMainTabs = resolveSpaceDisplayedMainTabs(
-        tabs = state.mainTabs.filter { showMemberShop || it.tab != SpaceMainTab.SHOP },
-        selectedTab = selectedMainTab,
-        hasCheese = state.hasCheeseTab || state.cheeseItems.isNotEmpty(),
-    )
+    val hasCheeseContent = state.hasCheeseTab || state.cheeseItems.isNotEmpty()
+    val displayedMainTabs = remember(state.mainTabs, showMemberShop, selectedMainTab, hasCheeseContent) {
+        resolveSpaceDisplayedMainTabs(
+            tabs = state.mainTabs.filter { showMemberShop || it.tab != SpaceMainTab.SHOP },
+            selectedTab = selectedMainTab,
+            hasCheese = hasCheeseContent,
+        )
+    }
     val selectedPage = displayedMainTabs.indexOfFirst {
         it.tab == resolveSpacePrimaryTab(selectedMainTab)
     }.coerceAtLeast(0)
@@ -1788,7 +1799,9 @@ private fun SpaceContent(
         ) { mainTabsSlot ->
         // 仅换 PagerState 会保留骨架的主页槽位。它收到正式数据后，会与默认标签一起
         // 挂载正式网格。隔离骨架槽位，滚动状态仍由外层 pageGridStates 管理。
-        key(isInitialLoading) {
+        // 页数必须一起进入 key：会员购开关与番剧数据会异步增删标签，旧页面的 key 索引
+        // 仍可能持有缩短后的标签列表，须与 PagerState 同步重建，避免按页取标签越界。
+        key(isInitialLoading, displayedMainTabs.size) {
         val skeletonGridState = if (isInitialLoading) {
             rememberCompatibleStaggeredGridState()
         } else null
@@ -2319,6 +2332,11 @@ private fun SpaceContent(
                             title = "最近投币的视频",
                             count = state.homeCoinVideoCount.takeIf { it > 0 } ?: state.homeCoinVideos.size,
                             actionLabel = "查看全部",
+                            actionTarget = com.android.purebilibili.navigation3.BiliPaiNavKey.LikedVideos(
+                                mid = state.userInfo.mid,
+                                ownerName = state.userInfo.name,
+                                isCoinArchive = true,
+                            ),
                             onActionClick = {
                                 onViewAllClick(
                                     "coin",
@@ -2379,6 +2397,20 @@ private fun SpaceContent(
                             title = "最近点赞的视频",
                             count = state.homeLikeVideoCount.takeIf { it > 0 } ?: state.homeLikeVideos.size,
                             actionLabel = "查看全部",
+                            actionTarget = if (onLikedVideosClick != null) {
+                                com.android.purebilibili.navigation3.BiliPaiNavKey.LikedVideos(
+                                    mid = state.userInfo.mid,
+                                    ownerName = state.userInfo.name,
+                                )
+                            } else {
+                                com.android.purebilibili.navigation3.BiliPaiNavKey.SeasonSeriesDetail(
+                                    type = "like",
+                                    id = 0L,
+                                    mid = state.userInfo.mid,
+                                    title = "最近点赞的视频",
+                                    ownerName = state.userInfo.name,
+                                )
+                            },
                             onActionClick = {
                                 if (onLikedVideosClick != null) {
                                     onLikedVideosClick(state.userInfo.mid, state.userInfo.name)
@@ -2966,8 +2998,9 @@ private fun SpaceContent(
                             gridColumns > 1 && !homeSettings.showFullVideoCardContent
                         val renderArchive: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
                             val archive = archives[index]
+                            val spaceVideo = remember(archive) { archive.toSpaceVideoItem() }
                             SpaceContributionArchiveVideoItem(
-                                video = archive.toSpaceVideoItem(),
+                                video = spaceVideo,
                                 modifier = cardModifier,
                                 layoutMode = contributionVideoLayoutMode,
                                 coverAspectRatio = spaceFeedCoverAspectRatio,
@@ -3036,8 +3069,9 @@ private fun SpaceContent(
                             gridColumns > 1 && !homeSettings.showFullVideoCardContent
                         val renderArchive: @Composable (Int, Modifier) -> Unit = { index, cardModifier ->
                             val archive = archives[index]
+                            val spaceVideo = remember(archive) { archive.toSpaceVideoItem() }
                             SpaceContributionArchiveVideoItem(
-                                video = archive.toSpaceVideoItem(),
+                                video = spaceVideo,
                                 modifier = cardModifier,
                                 layoutMode = contributionVideoLayoutMode,
                                 coverAspectRatio = spaceFeedCoverAspectRatio,
@@ -3941,6 +3975,16 @@ private fun SpaceHeader(
         SpaceChargeGuardRow(
             chargeGroup = chargeGroup,
             guardGroup = guardGroup,
+            upowerTarget = com.android.purebilibili.navigation3.BiliPaiNavKey.UpowerRank(
+                mid = userInfo.mid,
+                name = userInfo.name,
+                count = chargeGroup?.count ?: 0L,
+            ),
+            guardTarget = com.android.purebilibili.navigation3.BiliPaiNavKey.MemberGuard(
+                mid = userInfo.mid,
+                name = userInfo.name,
+                count = guardGroup?.count ?: 0L,
+            ),
             onUpowerRankClick = {
                 onUpowerRankClick(userInfo.mid, userInfo.name, chargeGroup?.count ?: 0L)
             },
@@ -4239,8 +4283,9 @@ private fun SpaceSecondarySwitchRow(
                 .fillMaxWidth()
                 .padding(horizontal = spec.horizontalPaddingDp.dp, vertical = 6.dp),
         ) {
+            val tabOptions = remember(items) { items.map { AppSegmentOption(it.id, it.title) } }
             AppNativeTabRow(
-                options = items.map { AppSegmentOption(it.id, it.title) },
+                options = tabOptions,
                 selectedValue = selectedId,
                 onSelectionChange = onSelect,
                 modifier = Modifier.fillMaxWidth(),
@@ -4280,6 +4325,7 @@ private fun SpaceMainTabRow(
         resolveSpaceMainTabChromeSpec(tabs = tabs, selectedTab = selectedTab)
     }
     val selectedIndex = tabs.indexOfFirst { it.tab == selectedTab }.coerceAtLeast(0)
+    val tabOptions = remember(tabs) { tabs.map { AppSegmentOption(it.tab, it.title) } }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -4289,7 +4335,7 @@ private fun SpaceMainTabRow(
             // Glass indicator fills the measured slot; native geometry keeps its defaults.
             liquidGlassAdaptIndicatorToLabel = !com.android.purebilibili.core.ui.LocalAppThemeConfig.current.liquidGlassEnabled,
             role = com.android.purebilibili.core.ui.components.AppTabRowRole.SECONDARY,
-            options = tabs.map { AppSegmentOption(it.tab, it.title) },
+            options = tabOptions,
             selectedValue = tabs[selectedIndex].tab,
             onSelectionChange = onSelect,
             indicatorPositionProvider = indicatorPositionProvider,
@@ -4358,32 +4404,18 @@ private fun SpaceContributionVideoSummaryBar(
                     color = AppContentColors.secondaryText()
                 )
             }
-            val glassSortMenu = com.android.purebilibili.core.ui.components.AppGlassMenu(
+            com.android.purebilibili.core.ui.components.AppDropdownMenu(
                 expanded = sortMenuExpanded,
                 onDismissRequest = { sortMenuExpanded = false },
-                title = "视频排序",
-            ) {
-                Column {
-                    VideoSortOrder.entries.forEach { order ->
-                        com.android.purebilibili.core.ui.components.AppDropdownMenuItem(
-                            text = { AppText(order.displayName) },
-                            selected = order == currentOrder,
-                            onClick = { onSelectSortOrder(order); sortMenuExpanded = false },
-                        )
-                    }
-                }
-            }
-            if (!glassSortMenu) DropdownMenu(
-                expanded = sortMenuExpanded,
-                onDismissRequest = { sortMenuExpanded = false }
             ) {
                 VideoSortOrder.entries.forEach { order ->
-                    DropdownMenuItem(
+                    com.android.purebilibili.core.ui.components.AppDropdownMenuItem(
                         text = { AppText(order.displayName) },
+                        selected = order == currentOrder,
                         onClick = {
                             onSelectSortOrder(order)
                             sortMenuExpanded = false
-                        }
+                        },
                     )
                 }
             }
@@ -4395,6 +4427,8 @@ private fun SpaceContributionVideoSummaryBar(
 private fun SpaceChargeGuardRow(
     chargeGroup: SpaceSupporterGroup?,
     guardGroup: SpaceSupporterGroup?,
+    upowerTarget: com.android.purebilibili.navigation3.BiliPaiNavKey? = null,
+    guardTarget: com.android.purebilibili.navigation3.BiliPaiNavKey? = null,
     onUpowerRankClick: () -> Unit,
     onMemberGuardClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -4406,8 +4440,13 @@ private fun SpaceChargeGuardRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         chargeGroup?.let { group ->
+            val chargeControl = com.android.purebilibili.navigation3.rememberSystemWindowNavigationControl(
+                target = upowerTarget,
+                shape = RoundedCornerShape(50),
+                onClick = onUpowerRankClick,
+            )
             Row(
-                modifier = Modifier.appActionClickable(onClick = onUpowerRankClick),
+                modifier = chargeControl.modifier.appActionClickable(onClick = chargeControl.onClick),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -4426,8 +4465,13 @@ private fun SpaceChargeGuardRow(
             }
         }
         guardGroup?.let { group ->
+            val guardControl = com.android.purebilibili.navigation3.rememberSystemWindowNavigationControl(
+                target = guardTarget,
+                shape = RoundedCornerShape(50),
+                onClick = onMemberGuardClick,
+            )
             Row(
-                modifier = Modifier.appActionClickable(onClick = onMemberGuardClick),
+                modifier = guardControl.modifier.appActionClickable(onClick = guardControl.onClick),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -4474,7 +4518,8 @@ private fun SpaceSectionHeader(
     title: String,
     count: Int,
     onActionClick: (() -> Unit)? = null,
-    actionLabel: String? = "查看更多"
+    actionLabel: String? = "查看更多",
+    actionTarget: com.android.purebilibili.navigation3.BiliPaiNavKey? = null,
 ) {
     Row(
         modifier = Modifier
@@ -4495,7 +4540,15 @@ private fun SpaceSectionHeader(
         )
         Spacer(modifier = Modifier.weight(1f))
         if (onActionClick != null && !actionLabel.isNullOrBlank()) {
-            AppTextButton(onClick = onActionClick) {
+            val actionControl = com.android.purebilibili.navigation3.rememberSystemWindowNavigationControl(
+                target = actionTarget,
+                shape = RoundedCornerShape(50),
+                onClick = onActionClick,
+            )
+            AppTextButton(
+                modifier = actionControl.modifier,
+                onClick = actionControl.onClick,
+            ) {
                 AppText(actionLabel)
             }
         }

@@ -68,6 +68,7 @@ internal enum class SettingsIconRole(
     REPLAY_ONBOARDING(R.drawable.ms_replay_24, R.drawable.ph_arrow_counter_clockwise_24),
     TIPS(R.drawable.ms_lightbulb_24, R.drawable.ph_lightbulb_24),
     KEYBOARD_SHORTCUTS(R.drawable.ms_keyboard_24, R.drawable.ph_keyboard_24),
+    GAMEPAD_CONTROL(R.drawable.ms_sports_esports_24),
     VIDEO_COMPANION(R.drawable.ic_settings_video_split_24),
     OPEN_LINKS(R.drawable.ms_link_24, R.drawable.ph_link_24),
     DONATE(R.drawable.ms_card_giftcard_24, R.drawable.ph_gift_24),
@@ -300,6 +301,15 @@ internal enum class SettingsIconRole(
     TABLET_COMMENT_PANEL_WIDTH(R.drawable.ms_width_normal_24, R.drawable.ph_arrows_out_line_horizontal_24),
     TABLET_SECONDARY_TAB(R.drawable.ms_view_column_2_24, R.drawable.ph_columns_24),
     LANDSCAPE_HOLD(R.drawable.ms_screen_rotation_alt_24),
+    PROGRESS_FINE_SCRUBBING(R.drawable.ms_movie_24, R.drawable.ph_film_strip_24),
+    PROGRESS_SNAP_CANCEL(R.drawable.ms_compare_arrows_24, R.drawable.ph_sliders_24),
+    LONG_PRESS_SPEED_SLIDE(R.drawable.ms_swap_horiz_24, R.drawable.ph_sliders_24),
+    DOUBLE_TAP_JUMP_AHEAD(R.drawable.ms_skip_next_24, R.drawable.ph_skip_forward_24),
+    FULLSCREEN_SWIPE_UP_MORE(R.drawable.ms_video_library_24, R.drawable.ph_file_video_24),
+    END_SCREEN_NEXT_COUNTDOWN(R.drawable.ms_auto_awesome_motion_24, R.drawable.ph_film_slate_24),
+    PINCH_ZOOM_SNAP_BADGE(R.drawable.ms_zoom_out_map_24, R.drawable.ph_arrows_out_24),
+    TWO_FINGER_CHAPTER_SKIP(R.drawable.ms_auto_awesome_24, R.drawable.ph_film_slate_24),
+    PORTRAIT_SWIPE_DOWN_MINIMIZE(R.drawable.ms_picture_in_picture_24, R.drawable.ph_picture_in_picture_24),
     SWIPE_SEEK(R.drawable.ic_settings_swipe_seek_24),
     SCREENSHOT_GESTURE(R.drawable.ic_settings_screenshot_gesture_24),
     APP_SCREENSHOT(R.drawable.ms_screenshot_region_24, R.drawable.ph_selection_24),
@@ -310,6 +320,7 @@ internal enum class SettingsIconRole(
     AMBIENT_POWER_SAVING(R.drawable.ic_settings_ambient_power_saving_24),
     EXIT_DIRECTION(R.drawable.ic_settings_exit_direction_24),
     UI_STYLE(R.drawable.ms_view_carousel_24, R.drawable.ph_layout_24),
+    THEME_SWITCH_TRANSITION(R.drawable.ic_settings_theme_switch_transition_24),
     LIST_ITEM_STYLE(R.drawable.ms_view_stream_24, R.drawable.ph_list_dashes_24),
     ICON_STYLE(R.drawable.ms_apps_24, R.drawable.ph_squares_four_24),
     LINE_ICON_COLOR(R.drawable.ic_settings_line_icon_color_24),
@@ -438,6 +449,7 @@ internal fun resolveSettingsSearchTargetIconRole(
     SettingsSearchTarget.REPLAY_ONBOARDING -> SettingsIconRole.REPLAY_ONBOARDING
     SettingsSearchTarget.TIPS -> SettingsIconRole.TIPS
     SettingsSearchTarget.KEYBOARD_SHORTCUTS -> SettingsIconRole.KEYBOARD_SHORTCUTS
+    SettingsSearchTarget.GAMEPAD_CONTROL -> SettingsIconRole.GAMEPAD_CONTROL
     SettingsSearchTarget.OPEN_LINKS -> SettingsIconRole.OPEN_LINKS
     SettingsSearchTarget.DONATE -> SettingsIconRole.DONATE
     SettingsSearchTarget.TELEGRAM -> SettingsIconRole.OPEN_LINKS
