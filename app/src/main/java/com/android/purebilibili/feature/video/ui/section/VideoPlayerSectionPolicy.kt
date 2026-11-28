@@ -799,16 +799,17 @@ internal fun resolvePinchZoomReleaseScale(
     fillScale: Float,
     snapEnabled: Boolean,
 ): PinchZoomReleaseResult {
+    val clampedScale = currentScale.coerceIn(1f, 5f)
     if (!snapEnabled) {
-        return PinchZoomReleaseResult(scale = currentScale, resetPan = currentScale <= 1.01f, snappedToFill = false)
+        return PinchZoomReleaseResult(scale = clampedScale, resetPan = clampedScale <= 1.01f, snappedToFill = false)
     }
-    if (currentScale < 1.06f) {
+    if (clampedScale < 1.06f) {
         return PinchZoomReleaseResult(scale = 1f, resetPan = true, snappedToFill = false)
     }
-    if (fillScale > 1.05f && kotlin.math.abs(currentScale - fillScale) <= 0.14f) {
+    if (fillScale > 1.05f && kotlin.math.abs(clampedScale - fillScale) <= 0.14f) {
         return PinchZoomReleaseResult(scale = fillScale, resetPan = true, snappedToFill = true)
     }
-    return PinchZoomReleaseResult(scale = currentScale, resetPan = false, snappedToFill = false)
+    return PinchZoomReleaseResult(scale = clampedScale, resetPan = false, snappedToFill = false)
 }
 
 internal fun formatPinchZoomRestoreLabel(scale: Float, showScaleBadge: Boolean): String {
@@ -1791,6 +1792,13 @@ internal fun shouldLoadDanmakuForForegroundHost(
 ): Boolean {
     return hostLifecycleStarted && shouldLoadImmediately
 }
+
+/** 锁屏仅在横屏全屏生效；退回竖屏半屏、进入画中画或切入竖屏全屏时自动解锁，避免无解锁入口卡死。 */
+internal fun shouldClearPlayerScreenLock(
+    isFullscreen: Boolean,
+    isInPipMode: Boolean,
+    isPortraitFullscreen: Boolean,
+): Boolean = !isFullscreen || isInPipMode || isPortraitFullscreen
 
 internal fun rebindPlayerSurfaceIfNeeded(
     playerView: PlayerView,

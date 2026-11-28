@@ -16,7 +16,11 @@ import coil3.request.crossfade
 import com.android.purebilibili.core.ui.AppIconStyle
 import com.android.purebilibili.core.ui.AppListItemStyle
 import com.android.purebilibili.core.ui.components.AppIcon
+import com.android.purebilibili.core.ui.components.AppSliderDialogPreference
 import com.android.purebilibili.core.ui.components.AppText
+import com.android.purebilibili.core.store.MAX_HOME_REFRESH_COUNT
+import com.android.purebilibili.core.store.MIN_HOME_REFRESH_COUNT
+import kotlin.math.roundToInt
 
 import com.android.purebilibili.core.ui.components.AppSegmentOption
 
@@ -321,6 +325,7 @@ fun AppearanceSettingsContent(
     val isTablet = windowSizeClass.isTablet
     val sectionKeys = when (contentMode) {
         AppearanceSettingsContentMode.APPEARANCE -> listOf(
+            "appearance_scene_recipes",
             "appearance_display_mode_title", "appearance_display_mode",
             "appearance_theme_color_title", "appearance_theme_color", "appearance_theme_home_preview",
             "appearance_text_size_title", "appearance_text_size",
@@ -621,6 +626,11 @@ fun AppearanceSettingsContent(
         contentPadding = PaddingValues(top = LocalSettingsTopContentPadding.current, bottom = contentBottomPadding)
     ) {
         if (contentMode == AppearanceSettingsContentMode.APPEARANCE) {
+        item(key = "appearance_scene_recipes") {
+            Box(modifier = Modifier.entrance()) {
+                AppearanceSceneRecipesSection()
+            }
+        }
         //  显示模式
         item(key = "appearance_display_mode_title") {
             Box(modifier = Modifier.entrance()) {
@@ -1001,9 +1011,9 @@ fun AppearanceSettingsContent(
                                     icon = rememberSettingsSemanticIcon(SettingsIconRole.COLOR_STYLE),
                                     title = "高级色彩调优",
                                     subtitle = if (advancedColorTuningExpanded) {
-                                        "点击收起调色盘、色彩风格、标准与对比度"
+                                        "点击收起配色规则与对比度调节"
                                     } else {
-                                        "展开调整调色盘、色彩风格、标准与对比度"
+                                        "按需调节整体配色方案、色彩鲜艳度与文字对比度"
                                     },
                                     onClick = { advancedColorTuningExpanded = !advancedColorTuningExpanded },
                                     showChevron = true,
@@ -1015,6 +1025,12 @@ fun AppearanceSettingsContent(
                                     exit = shrinkVertically() + fadeOut(),
                                 ) {
                                     Column {
+                                        AppText(
+                                            text = "调色板决定整体配色倾向：选「Standard」时，自定义主题色会直接保持所选原色；切换为其他调色板时，则会按对应算法重新生成整套配色。",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = AppContentColors.secondaryText(),
+                                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                                        )
                                 // 种子已提升到内容顶部计算（themePreviewSeed），此处直接复用。
                                 val seedPreviewColor = themePreviewSeed
                                 val seedPreviewSwatches = rememberSeedStyleSwatches(
@@ -1149,7 +1165,7 @@ fun AppearanceSettingsContent(
                                     seedColors = displayedThemeColors,
                                     isDark = palettePreviewIsDark,
                                     paletteStyle = state.colorStyle,
-                                    colorSpec = state.colorSpec,
+                                    colorSpec = effectiveColorSpec,
                                     colorContrast = state.colorContrast,
                                     seedPaletteStyle = state.seedPaletteStyle,
                                     configuration = palettePreviewConfiguration.copy(
@@ -2074,6 +2090,23 @@ fun AppearanceSettingsContent(
                 AppPreferenceGroup(segment = AppPreferenceGroupSegment.LAST) {
                     com.android.purebilibili.feature.settings.RecommendRetentionPreference()
                     AppPreferenceDivider(modifier = Modifier.padding(start = 16.dp))
+                    SettingsItemAnchor("appearance.home_refresh_count") {
+                        AppSliderDialogPreference(
+                            icon = rememberSettingsSemanticIcon(SettingsIconRole.REFRESH_COUNT),
+                            title = settingItemTitle("appearance.home_refresh_count"),
+                            subtitle = "单次最多请求 ${homeConfiguration.homeRefreshCount} 条推荐内容，实际显示可能更少",
+                            value = homeConfiguration.homeRefreshCount.toFloat(),
+                            onValueChange = { value ->
+                                scope.launch {
+                                    SettingsManager.setHomeRefreshCount(context, value.roundToInt())
+                                }
+                            },
+                            valueRange = MIN_HOME_REFRESH_COUNT.toFloat()..MAX_HOME_REFRESH_COUNT.toFloat(),
+                            steps = (MAX_HOME_REFRESH_COUNT - MIN_HOME_REFRESH_COUNT - 1).coerceAtLeast(0),
+                            valueFormatter = { value -> "${value.roundToInt()} 条" },
+                        )
+                    }
+                    AppPreferenceDivider(modifier = Modifier.padding(start = 16.dp))
                     SettingsItemAnchor("appearance.home_refresh_tip_visible") {
                         AppSwitchPreference(
                             icon = rememberSettingsSemanticIcon(SettingsIconRole.HOME_REFRESH_TIP),
@@ -2442,20 +2475,6 @@ fun AppearanceSettingsContent(
             item(key = "home_browsing") {
                 Box(modifier = Modifier.entrance()) {
                     AppPreferenceGroup {
-                        SettingsItemAnchor("appearance.is_header_collapse_enabled") {
-                            AppSwitchPreference(
-                                icon = rememberSettingsSemanticIcon(SettingsIconRole.HOME_HEADER_COLLAPSE),
-                                title = settingItemTitle("appearance.is_header_collapse_enabled"),
-                                subtitle = context.getString(R.string.appearance_home_header_scroll),
-                                checked = state.isHeaderCollapseEnabled,
-                                onCheckedChange = { value ->
-                                    viewModel.toggleHeaderCollapse(value)
-                                },
-                                iconTint = AppContentColors.secondaryText()
-                            )
-                        }
-
-                        AppPreferenceDivider(modifier = Modifier.padding(start = 16.dp))
                         SettingsItemAnchor("appearance.common_list_header_collapse_mode") {
                             SettingsSingleChoicePreference(
                                 icon = rememberSettingsSemanticIcon(SettingsIconRole.HEADER_COLLAPSE),

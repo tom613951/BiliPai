@@ -34,6 +34,7 @@ baselineProfile {
     automaticGenerationDuringBuild = false
     saveInSrc = true
     mergeIntoMain = true
+    dexLayoutOptimization = true
 }
 
 abstract class PrepareKspGeneratedDirTask : org.gradle.api.DefaultTask() {
@@ -174,8 +175,8 @@ android {
         targetSdk = 37
         // 版本名按发行计划确定；versionCode 每次发布单调 +1
         // 规范：docs/wiki/VERSIONING.md · 更新日志：CHANGELOG.md
-        versionCode = 612
-        versionName = "0.10.2"
+        versionCode = 624
+        versionName = "0.10.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -566,6 +567,9 @@ dependencies {
     implementation("androidx.media3:media3-datasource:$media3Version")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
+    implementation("androidx.media3:media3-cast:$media3Version")
+    implementation("androidx.media3:media3-transformer:$media3Version")
+    implementation("androidx.media3:media3-effect:$media3Version")
     implementation(project(":dolby-ffmpeg-decoder"))
 
     // --- 5. Danmaku (弹幕引擎) ---
@@ -587,6 +591,8 @@ dependencies {
     // --- 8. Utils (工具类) ---
     // 二维码生成
     implementation("com.google.zxing:core:3.5.4")
+    // 端侧暂停画面文字识别（GMS 按需下发中文/拉丁模型，零主包模型体积）
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.2")
     // BiliPai 设备间二维码传输扫码
     implementation("androidx.camera:camera-camera2:1.4.2")
     implementation("androidx.camera:camera-lifecycle:1.4.2")
@@ -611,6 +617,8 @@ dependencies {
     // --- 8.2 Google Cast (CAF) ---
     implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
     implementation("androidx.mediarouter:mediarouter:1.8.1")
+    // --- 8.2.1 Wear OS 腕上伴生遥控通信 ---
+    implementation("com.google.android.gms:play-services-wearable:20.0.1")
 
     // --- 8.3 DLNA Local Proxy (投屏) ---
     // NanoHTTPD (Lightweight local proxy server)
@@ -623,10 +631,11 @@ dependencies {
     // --- 10. ProfileInstaller (启动优化) ---
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     
-    // --- 11. Firebase (崩溃追踪和分析) ---
+    // --- 11. Firebase (崩溃追踪、分析与可选 FCM 自建推送通道) ---
     implementation(platform("com.google.firebase:firebase-bom:34.12.0"))
     implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-messaging")
 
     // --- 11. Debug (调试工具) ---
     debugImplementation("androidx.compose.ui:ui-test-manifest")

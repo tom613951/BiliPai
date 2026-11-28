@@ -109,7 +109,7 @@ internal fun resolveAllBottomBarTabs(
 ): List<BottomBarTabConfig> = listOf(
     BottomBarTabConfig("HOME", "推荐", resolveBottomBarTabIcon("HOME", iconFamily), isDefault = true),
     BottomBarTabConfig("DYNAMIC", "动态", resolveBottomBarTabIcon("DYNAMIC", iconFamily), isDefault = true),
-    BottomBarTabConfig("STORY", "短视频", resolveBottomBarTabIcon("STORY", iconFamily), isDefault = false),
+    BottomBarTabConfig("STORY", "刷视频", resolveBottomBarTabIcon("STORY", iconFamily), isDefault = false),
     BottomBarTabConfig("HISTORY", "历史", resolveBottomBarTabIcon("HISTORY", iconFamily), isDefault = true),
     BottomBarTabConfig("LISTEN_VIDEO", "听视频", resolveBottomBarTabIcon("LISTEN_VIDEO", iconFamily), isDefault = true),
     BottomBarTabConfig("PROFILE", "我的", resolveBottomBarTabIcon("PROFILE", iconFamily), isDefault = true),
@@ -195,7 +195,7 @@ fun BottomBarSettingsContent(
     SettingsSectionFocusEffect(
         listState = listState,
         target = SettingsSearchTarget.BOTTOM_BAR,
-        sectionKeys = listOf("navigation_intro") + listOf("navigation_behavior", "navigation_display", "navigation_top_tabs", "navigation_partition", "navigation_search_tabs", "navigation_tablet", "navigation_current", "navigation_available").flatMap { listOf(it + "_title", it) } + listOf("navigation_restore", "navigation_hint"),
+        sectionKeys = listOf("navigation_intro") + listOf("navigation_behavior", "navigation_display", "navigation_top_tabs", "navigation_partition", "navigation_search_tabs", "navigation_search_display", "navigation_tablet", "navigation_current", "navigation_available").flatMap { listOf(it + "_title", it) } + listOf("navigation_restore", "navigation_hint"),
         legacyKeys = mapOf(
             SettingsSearchFocusIds.BOTTOM_BAR_START to "navigation_intro",
             SettingsSearchFocusIds.BOTTOM_BAR_BEHAVIOR to "navigation_behavior_title",
@@ -234,6 +234,7 @@ fun BottomBarSettingsContent(
     val isBottomBarFloating = homeConfiguration.isBottomBarFloating
     val navigationIconCrossScaleEnabled = homeConfiguration.navigationIconCrossScaleEnabled
     val bottomBarSearchEnabled = homeConfiguration.isBottomBarSearchEnabled
+    val bottomBarSearchInsideDock = homeConfiguration.bottomBarSearchInsideDock
     val keepHomeTopSearch = homeConfiguration.keepHomeTopSearchWithBottomSearch
     val bottomBarScrollCompactEnabled = homeConfiguration.bottomBarScrollCompactEnabled
     val linkedDockMergeOnScrollEnabled = homeConfiguration.linkedDockMergeOnScrollEnabled
@@ -412,6 +413,19 @@ fun BottomBarSettingsContent(
                         }
                         if (bottomBarSearchEnabled) {
                             AppPreferenceDivider()
+                            SettingsItemAnchor("navigation.bottom_bar_search_inside_dock") {
+                                AppSwitchPreference(
+                                    icon = rememberSettingsSemanticIcon(SettingsIconRole.BOTTOM_BAR_SEARCH_INSIDE_DOCK),
+                                    title = settingItemTitle("navigation.bottom_bar_search_inside_dock"),
+                                    subtitle = "将搜索作为固定底栏标签显示，点击或滑动切换至搜索页并保留底栏",
+                                    checked = bottomBarSearchInsideDock,
+                                    onCheckedChange = { enabled ->
+                                        scope.launch { SettingsManager.setBottomBarSearchInsideDock(context, enabled) }
+                                    },
+                                    iconTint = AppContentColors.secondaryText(),
+                                )
+                            }
+                            AppPreferenceDivider()
                             SettingsItemAnchor("navigation.keep_home_top_search") {
                                 AppSwitchPreference(
                                     icon = rememberSettingsSemanticIcon(SettingsIconRole.KEEP_TOP_SEARCH),
@@ -571,6 +585,19 @@ fun BottomBarSettingsContent(
                                 checked = homeConfiguration.homeAvatarDrawerEnabled,
                                 onCheckedChange = { enabled ->
                                     scope.launch { SettingsManager.setHomeAvatarDrawerEnabled(context, enabled) }
+                                },
+                            )
+                        }
+                        AppPreferenceDivider()
+                        SettingsItemAnchor("navigation.home_top_tab_swipe_drawer") {
+                            AppSwitchPreference(
+                                icon = rememberSettingsSemanticIcon(SettingsIconRole.HOME_TOP_TAB_SWIPE_DRAWER),
+                                iconTint = AppContentColors.secondaryText(),
+                                title = settingItemTitle("navigation.home_top_tab_swipe_drawer"),
+                                subtitle = "在首页第一个顶部标签页向右滑动时自然展开个人侧边栏",
+                                checked = homeConfiguration.homeTopTabSwipeDrawerEnabled,
+                                onCheckedChange = { enabled ->
+                                    scope.launch { SettingsManager.setHomeTopTabSwipeDrawerEnabled(context, enabled) }
                                 },
                             )
                         }
@@ -838,6 +865,19 @@ fun BottomBarSettingsContent(
                 }
             }
 
+            // 搜索页展示
+            item(key = "navigation_search_display_title") {
+                Box(modifier = Modifier.entrance()) {
+                    AppPreferenceSectionTitle("搜索页展示")
+                }
+            }
+
+            item(key = "navigation_search_display") {
+                Box(modifier = Modifier.entrance()) {
+                    SearchLandingPreferencesSection()
+                }
+            }
+
             // 平板导航
             item(key = "navigation_tablet_title") {
                 Box(modifier = Modifier.entrance()) {
@@ -912,6 +952,8 @@ fun BottomBarSettingsContent(
                             .mapNotNull { id -> allBottomBarTabs.find { it.id == id } }
                             .map { tab -> tab.copy(label = itemLabels[tab.id] ?: tab.label) },
                         labelMode = bottomBarLabelMode,
+                        searchEnabled = bottomBarSearchEnabled,
+                        searchInsideDock = bottomBarSearchInsideDock,
                         onMove = { from, to -> onOrderChanged(from, to) },
                         onDragEnd = { saveConfig() }
                     )
@@ -1031,19 +1073,30 @@ fun BottomBarSettingsContent(
 private fun BottomBarPreview(
     tabs: List<BottomBarTabConfig>,
     labelMode: Int,
+    searchEnabled: Boolean = false,
+    searchInsideDock: Boolean = false,
     onMove: (Int, Int) -> Unit,
     onDragEnd: () -> Unit
 ) {
     // 触感反馈
     val haptic = rememberHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.ADJUSTMENT)
+    val searchPreviewIcon = rememberSettingsVector(R.drawable.ph_magnifying_glass_24, R.drawable.ms_search_24)
+    val showInlineSearch = searchEnabled && searchInsideDock
+    val showDetachedSearch = searchEnabled && !searchInsideDock
+    val totalSlots = (tabs.size + if (showInlineSearch) 1 else 0).coerceAtLeast(1)
 
     // 拖拽状态
     var draggingItemIndex by remember { mutableStateOf<Int?>(null) }
     var draggingItemCenter by remember { mutableFloatStateOf(0f) }
 
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
     AppSurface(
         modifier = Modifier
-            .fillMaxWidth()
+            .weight(1f)
             .clip(AppShapes.container(ContainerLevel.Dialog)),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         tonalElevation = 2.dp
@@ -1054,7 +1107,8 @@ private fun BottomBarPreview(
                 .padding(vertical = 12.dp, horizontal = 8.dp)
         ) {
             val totalWidth = maxWidth
-            val itemWidth = totalWidth / tabs.size.coerceAtLeast(1)
+            val itemWidth = totalWidth / totalSlots
+            val draggableWidth = itemWidth * tabs.size.coerceAtLeast(1)
             val density = LocalDensity.current
 
             // 全局手势检测区域
@@ -1065,21 +1119,25 @@ private fun BottomBarPreview(
                     .pointerInput(tabs.size, itemWidth) {
                         detectDragGesturesAfterLongPress(
                             onDragStart = { offset ->
+                                if (tabs.isEmpty() || offset.x > draggableWidth.toPx()) return@detectDragGesturesAfterLongPress
                                 val index = (offset.x / itemWidth.toPx()).toInt().coerceIn(0, tabs.lastIndex)
                                 draggingItemIndex = index
-                                draggingItemCenter = offset.x.coerceIn(0f, totalWidth.toPx())
+                                draggingItemCenter = offset.x.coerceIn(0f, draggableWidth.toPx())
                                 haptic.invoke(HapticType.MEDIUM)
                             },
                             onDragEnd = {
-                                draggingItemIndex = null
-                                onDragEnd()
+                                if (draggingItemIndex != null) {
+                                    draggingItemIndex = null
+                                    onDragEnd()
+                                }
                             },
                             onDragCancel = {
                                 draggingItemIndex = null
                             },
                             onDrag = { change, dragAmount ->
+                                if (draggingItemIndex == null) return@detectDragGesturesAfterLongPress
                                 change.consume()
-                                draggingItemCenter = (draggingItemCenter + dragAmount.x).coerceIn(0f, totalWidth.toPx())
+                                draggingItemCenter = (draggingItemCenter + dragAmount.x).coerceIn(0f, draggableWidth.toPx())
 
                                 // 计算新索引
                                 val newIndex = (draggingItemCenter / itemWidth.toPx()).toInt()
@@ -1151,7 +1209,54 @@ private fun BottomBarPreview(
                     }
                 }
             }
+
+            if (showInlineSearch) {
+                val showIcon = labelMode != 2
+                val showText = labelMode != 1
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .width(itemWidth)
+                        .offset { IntOffset(x = (itemWidth * tabs.size).roundToPx(), y = 0) }
+                ) {
+                    if (showIcon) {
+                        AppIcon(
+                            imageVector = searchPreviewIcon,
+                            contentDescription = if (showText) null else "搜索",
+                            tint = AppContentColors.secondaryText(),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    if (showIcon && showText) Spacer(modifier = Modifier.height(2.dp))
+                    if (showText) {
+                        AppText(
+                            text = "搜索",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AppContentColors.secondaryText()
+                        )
+                    }
+                }
+            }
         }
+    }
+    if (showDetachedSearch) {
+        AppSurface(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            tonalElevation = 2.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                AppIcon(
+                    imageVector = searchPreviewIcon,
+                    contentDescription = "搜索",
+                    tint = AppContentColors.secondaryText(),
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
     }
 }
 

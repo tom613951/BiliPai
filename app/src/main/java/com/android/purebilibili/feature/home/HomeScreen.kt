@@ -325,6 +325,7 @@ internal fun HomeScreen(
     val subscriptionListState = rememberHomeStaggeredGridState()
     // [Feature] Video Preview State (Global Scope)
     val downloadAccount by com.android.purebilibili.core.store.TokenManager.accountIdentity.collectAsStateWithLifecycle()
+    val tokenSessionRestored by com.android.purebilibili.core.store.TokenManager.sessionRestored.collectAsStateWithLifecycle()
     val downloadSelection = remember(currentCategory, popularSubCategory, downloadAccount) { HomeDownloadSelection() }
     val targetVideoItemState = remember { mutableStateOf<VideoItem?>(null) }
     var dissolvingNotInterestedVideo by remember { mutableStateOf<VideoItem?>(null) }
@@ -1038,9 +1039,12 @@ internal fun HomeScreen(
         tabletUseSidebar = tabletUseSidebar,
         foldPosture = com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo.current.posture,
     )
-    val isHomeDrawerEnabled = homeSettings.homeAvatarDrawerEnabled && com.android.purebilibili.core.util.shouldEnableHomeDrawer(
+    val canUseHomeDrawerContainer = com.android.purebilibili.core.util.shouldEnableHomeDrawer(
         useSideNavigation = useSideNavigation
     )
+    val isHomeAvatarDrawerEnabled = homeSettings.homeAvatarDrawerEnabled && canUseHomeDrawerContainer
+    val isHomeDrawerEnabled = (homeSettings.homeAvatarDrawerEnabled || homeSettings.homeTopTabSwipeDrawerEnabled) &&
+        canUseHomeDrawerContainer
 
     //  📱 [切换导航模式] 处理函数
     val onToggleNavigationMode: () -> Unit = {
@@ -1285,8 +1289,6 @@ internal fun HomeScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     var bottomBarVisibleBeforeDrawer by remember { mutableStateOf<Boolean?>(null) }
     var drawerOpenRequested by remember { mutableStateOf(false) }
-    var drawerWasOpen by remember { mutableStateOf(false) }
-    var drawerHeaderReturn by remember(headerReturn) { mutableStateOf<HomeHeaderReturn?>(null) }
 
     // 抽屉打开时隐藏全局底栏，避免覆盖侧边栏底部内容
     val isDrawerStateOpenOrOpening = shouldEnableHomeDrawerGestures(
@@ -1295,13 +1297,8 @@ internal fun HomeScreen(
     )
     val shouldKeepDrawerBottomBarHidden = drawerOpenRequested || isDrawerStateOpenOrOpening
     LaunchedEffect(drawerState.currentValue, drawerState.targetValue) {
-        if (drawerState.currentValue == DrawerValue.Open) drawerWasOpen = true
         if (drawerState.currentValue == DrawerValue.Closed && drawerState.targetValue == DrawerValue.Closed) {
             drawerOpenRequested = false
-            if (drawerWasOpen) {
-                drawerWasOpen = false
-                drawerHeaderReturn = HomeHeaderReturn(HomeHeaderControl.AVATAR)
-            }
         }
     }
     LaunchedEffect(shouldKeepDrawerBottomBarHidden, isGlobalBottomBarVisible, useSideNavigation) {
@@ -1937,6 +1934,24 @@ internal fun HomeScreen(
                                     enabled = homeTopPagerSwipeEnabled,
                                     horizontalLockSlopMultiplier = HOME_PAGER_HORIZONTAL_LOCK_SLOP_MULTIPLIER,
                                     shouldYield = shouldYieldHomePagerToHeroCarousel,
+                                    onEdgeBackwardSwipe = if (
+                                        shouldAllowHomeFirstTabSwipeToOpenDrawer(
+                                            isSwipeDrawerEnabled = homeSettings.homeTopTabSwipeDrawerEnabled,
+                                            isHomeDrawerAvailable = isHomeDrawerEnabled,
+                                            hideTopTabs = effectiveHomeSettings.hideTopTabs,
+                                            isTopLevelActive = isTopLevelActive,
+                                            currentPage = pagerState.currentPage,
+                                            isPagerScrollInProgress = pagerState.isScrollInProgress,
+                                            isDrawerClosed = drawerState.currentValue == DrawerValue.Closed &&
+                                                drawerState.targetValue == DrawerValue.Closed,
+                                            isSubscriptionArticleOpen = subscriptionArticleOpen,
+                                        )
+                                    ) {
+                                        {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            openHomeDrawer()
+                                        }
+                                    } else null,
                                 ),
                             key = { index -> resolveHomeTopTabEntryKey(topTabEntries, index) }
                         ) { page ->
@@ -2360,8 +2375,31 @@ internal fun HomeScreen(
                                   }
                                  val onLiveClickCallback = feedNavigation.onLiveClick
                                  val onTodayWatchModeChange = remember(viewModel) { { mode: TodayWatchMode -> viewModel.switchTodayWatchMode(mode) } }
+                                 val onTodayWatchStrategyChange = remember(viewModel) {
+                                     { strategy: com.android.purebilibili.plugin.sdk.RecommendationStrategy ->
+                                         viewModel.switchTodayWatchStrategy(strategy)
+                                     }
+                                 }
                                  val onTodayWatchCollapsedChange = remember(viewModel) { { collapsed: Boolean -> viewModel.setTodayWatchCollapsed(collapsed) } }
                                  val onTodayWatchRefresh = remember(viewModel) { { viewModel.refreshTodayWatchOnly() } }
+                                 val onTodayWatchVideoDismiss: (VideoItem) -> Unit = remember(viewModel) {
+                                     { video -> viewModel.dismissTodayWatchVideo(video, blockCreator = false) }
+                                 }
+                                 val onTodayWatchCreatorDismiss: (VideoItem) -> Unit = remember(viewModel) {
+                                     { video -> viewModel.dismissTodayWatchVideo(video, blockCreator = true) }
+                                 }
+                                 val onTodayWatchUndoCreator: (Long) -> Unit = remember(viewModel) {
+                                     { mid -> viewModel.undoTodayWatchDislikedCreator(mid) }
+                                 }
+                                 val onTodayWatchUndoVideo: (String) -> Unit = remember(viewModel) {
+                                     { bvid -> viewModel.undoTodayWatchDislikedVideo(bvid) }
+                                 }
+                                 val onTodayWatchUndoKeyword: (String) -> Unit = remember(viewModel) {
+                                     { keyword -> viewModel.undoTodayWatchDislikedKeyword(keyword) }
+                                 }
+                                 val onTodayWatchClearFeedback: () -> Unit = remember(viewModel) {
+                                     { viewModel.clearTodayWatchNegativeFeedback() }
+                                 }
                                  val onTodayWatchUpClick = feedNavigation.onUpClick
                                  val onHomeFeedUpClick = feedNavigation.onUpClick
                                  val onPopularSubCategoryChange = remember(viewModel) {
@@ -2392,9 +2430,14 @@ internal fun HomeScreen(
                                  HomeTodayWatchContentHost(viewModel, category, pageWork.collectUpdates) { todayWatch ->
                                      HomeCategoryPageContent(
                                          category = category,
-                                         showGuestLoginBanner = category == HomeCategory.RECOMMEND &&
-                                             !user.isLogin &&
-                                             !guestLoginBannerDismissed,
+                                         showGuestLoginBanner = shouldShowHomeGuestLoginBanner(
+                                             category = category,
+                                             isUserLoggedIn = user.isLogin,
+                                             hasStoredSession = downloadAccount.mid != null ||
+                                                 !com.android.purebilibili.core.store.TokenManager.sessDataCache.isNullOrBlank(),
+                                             isSessionRestored = tokenSessionRestored,
+                                             dismissed = guestLoginBannerDismissed,
+                                         ),
                                          onGuestLoginClick = {
                                              onHeaderNavigate(
                                                  com.android.purebilibili.navigation3.BiliPaiNavKey.Login,
@@ -2505,6 +2548,7 @@ internal fun HomeScreen(
                                          todayWatchCollapsed = todayWatch.collapsed,
                                          todayWatchCardConfig = todayWatch.cardConfig,
                                          onTodayWatchModeChange = onTodayWatchModeChange,
+                                         onTodayWatchStrategyChange = onTodayWatchStrategyChange,
                                          onTodayWatchCollapsedChange = onTodayWatchCollapsedChange,
                                          onTodayWatchRefresh = onTodayWatchRefresh,
                                          onTodayWatchUpClick = onTodayWatchUpClick,
@@ -2512,6 +2556,12 @@ internal fun HomeScreen(
                                          onPopularSubCategoryChange = onPopularSubCategoryChange,
                                          onWeeklySeriesClick = onWeeklySeriesClick,
                                          onTodayWatchVideoClick = onTodayWatchVideoClick,
+                                         onTodayWatchVideoDismiss = onTodayWatchVideoDismiss,
+                                         onTodayWatchCreatorDismiss = onTodayWatchCreatorDismiss,
+                                         onTodayWatchUndoCreator = onTodayWatchUndoCreator,
+                                         onTodayWatchUndoVideo = onTodayWatchUndoVideo,
+                                         onTodayWatchUndoKeyword = onTodayWatchUndoKeyword,
+                                         onTodayWatchClearFeedback = onTodayWatchClearFeedback,
                                          firstGridItemModifier = Modifier,
                                          // 首屏骨架作为内容网格的首批 item 铺进去：同一个 LazyLayout、
                                          // 同一种 contentType，数据到达时原地替换 + animateItem 交叉淡入。
@@ -2644,7 +2694,7 @@ internal fun HomeScreen(
                 exitFadeDurationMillis = 160,
             ) {
             HomeUnreadBadgeUpdates(viewModel.messageUnreadCount, messageBadgeMode) { messageUnreadDisplay ->
-            val avatarTarget = when (resolveHomeAvatarAction(user.isLogin, isHomeDrawerEnabled)) {
+            val avatarTarget = when (resolveHomeAvatarAction(user.isLogin, isHomeAvatarDrawerEnabled)) {
                 HomeAvatarAction.OPEN_DRAWER -> null
                 HomeAvatarAction.OPEN_PROFILE -> com.android.purebilibili.navigation3.BiliPaiNavKey.Profile
                 HomeAvatarAction.OPEN_LOGIN -> com.android.purebilibili.navigation3.BiliPaiNavKey.Login
@@ -2665,7 +2715,7 @@ internal fun HomeScreen(
             searchTarget = searchTarget,
             onOpenDrawer = openHomeDrawer,
             onNavigate = onHeaderNavigate,
-            headerReturn = drawerHeaderReturn ?: headerReturn,
+            headerReturn = headerReturn,
             headerActive = isTopLevelActive && pageOnScreen && !drawerMounted,
             topRightUnreadCount = messageUnreadDisplay,
             topCategories = localizedTopTabLabels,
@@ -2879,6 +2929,15 @@ internal fun HomeScreen(
             onOpenEditor = { editingQuickFilterTarget = it },
             onDismissEditor = { editingQuickFilterTarget = null },
             modifier = Modifier.align(Alignment.BottomCenter),
+        )
+        val homeSnackbarBottomPadding = com.android.purebilibili.core.ui.LocalBottomBarContentPadding.current
+        com.android.purebilibili.core.ui.components.AppSnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(bottom = homeSnackbarBottomPadding),
         )
     }
 }

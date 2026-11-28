@@ -1,6 +1,7 @@
 // 文件路径: feature/search/SearchScreen.kt
 package com.android.purebilibili.feature.search
 
+import com.android.purebilibili.navigation.isTabSelectionInProgress
 import com.android.purebilibili.navigation.tabSelectedPage
 import com.android.purebilibili.navigation.tabIndicatorPosition
 import com.android.purebilibili.feature.home.effectiveGridColumnCountForWindow
@@ -764,9 +765,10 @@ fun SearchScreen(
     val showHotSection by remember(context) { SettingsManager.getSearchLandingSectionVisible(context, 0) }.collectAsStateWithLifecycle(initialValue = true)
     val showHistorySection by remember(context) { SettingsManager.getSearchLandingSectionVisible(context, 1) }.collectAsStateWithLifecycle(initialValue = true)
     val showDiscoverSection by remember(context) { SettingsManager.getSearchLandingSectionVisible(context, 2) }.collectAsStateWithLifecycle(initialValue = true)
-    val hotSearchEnabled by remember(context) { SettingsManager.getSearchHotSectionEnabled(context) }.collectAsStateWithLifecycle(initialValue = true)
+    val hotSearchEnabledPref by remember(context) { SettingsManager.getSearchHotSectionEnabled(context) }.collectAsStateWithLifecycle(initialValue = true)
     val discoverSectionEnabled by remember(context) { SettingsManager.getSearchDiscoverSectionEnabled(context) }.collectAsStateWithLifecycle(initialValue = true)
     val appThemeConfig = com.android.purebilibili.core.ui.LocalAppThemeConfig.current
+    val hotSearchEnabled = hotSearchEnabledPref && !appThemeConfig.focusViewingHideStatsEnabled
     val androidNativeLiquidGlassEnabled = appThemeConfig.liquidGlassEnabled
     val effectiveLiquidGlassEnabled = rememberAppChromeLiquidGlassEnabled(
         androidNativeEnabled = androidNativeLiquidGlassEnabled,
@@ -1228,6 +1230,7 @@ fun SearchScreen(
         // Hard-settle only when the pager is fully idle. Mid-flight corrections would snap the
         // tab indicator while animatePagerSelection is still gliding.
         if (
+            !searchPagerState.isTabSelectionInProgress &&
             !searchPagerState.isScrollInProgress &&
             kotlin.math.abs(searchPagerState.currentPageOffsetFraction) <= 0.001f &&
             searchPagerState.currentPage != targetPage
@@ -1325,9 +1328,12 @@ fun SearchScreen(
         }
     }
 
-    val resultBottomPadding = resolveBottomSafeAreaPadding(
-        navigationBarsBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
-        extraBottomPadding = 16.dp
+    val resultBottomPadding = maxOf(
+        resolveBottomSafeAreaPadding(
+            navigationBarsBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+            extraBottomPadding = 16.dp
+        ),
+        com.android.purebilibili.core.ui.LocalBottomBarContentPadding.current,
     ) + if (com.android.purebilibili.core.ui.rememberNowPlayingBarOverlayVisible()) {
         // 听视频小横条悬浮时统一上浮避让（与首页/稍后再看一致）
         com.android.purebilibili.core.ui.NowPlayingBarOverlayAvoidancePadding
@@ -1564,6 +1570,7 @@ fun SearchScreen(
                                                             animateSearchHeaderOffsetTo(0f)
                                                         } else {
                                                             scope.launch { animatePagerSelection(searchPagerState, page) }
+                                                            viewModel.setSearchType(type)
                                                         }
                                                     }
                                                 )

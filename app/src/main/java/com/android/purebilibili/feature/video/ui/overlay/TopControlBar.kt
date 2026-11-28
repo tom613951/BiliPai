@@ -72,7 +72,6 @@ import com.android.purebilibili.feature.video.ui.components.PiliPlusDanmakuSetti
 import com.android.purebilibili.feature.video.ui.components.PiliPlusDanmakuSendIcon
 import com.android.purebilibili.feature.video.ui.feedback.likeBurstAnchor
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import androidx.compose.material.icons.outlined.Home
@@ -281,6 +280,22 @@ fun TopControlBar(
                             showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.CAST)
                         ) {
                             HeaderIcon(Icons.Outlined.Cast, "投屏", onCastClick)
+                        }
+                        val nearbyHandoff = if (com.android.purebilibili.feature.nearby.NEARBY_HANDOFF_ENABLED) {
+                            com.android.purebilibili.feature.nearby.LocalNearbyHandoff.current
+                        } else null
+                        if (nearbyHandoff != null &&
+                            showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.NEARBY_HANDOFF)
+                        ) {
+                            HeaderButton(
+                                description = com.android.purebilibili.feature.nearby.NEARBY_TITLE,
+                                onClick = nearbyHandoff.openDevices,
+                            ) {
+                                com.android.purebilibili.feature.nearby.NearbyTopBarIconContent(
+                                    tint = Color.White,
+                                    iconSize = 20.dp,
+                                )
+                            }
                         }
                         if (!simplifiedPortrait && !isFileSource && showSponsorSubmitButton && onSponsorSubmitClick != null &&
                             showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.SPONSOR)
@@ -939,7 +954,10 @@ private fun HeaderButton(
     }
 }
 
-private fun formatCurrentTime(): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+private val TOP_BAR_TIME_FORMATTER: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+
+private fun formatCurrentTime(): String = java.time.LocalTime.now().format(TOP_BAR_TIME_FORMATTER)
 
 private fun resolveBatteryLevelPercent(context: Context): Int? = runCatching {
     val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))

@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.IosShare
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -81,6 +83,8 @@ private object DynamicCommentBarSpec {
     val MinimumActionPadding = AppSpacingTokens.ExtraSmall
     val ActionCountGap = AppSpacingTokens.ExtraSmall
     val DockGap = AppSpacingTokens.Small
+    val DetailGlassCommentHeight = 40.dp
+    val DetailGlassCommentInset = AppSpacingTokens.Small
     val CountWidthAllowance = 1.dp
     val OverflowIconSize = 20.dp
 }
@@ -99,6 +103,7 @@ internal fun DynamicCommentEntryBar(
     modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
     isScrollInProgressProvider: () -> Boolean = { false },
+    glassHeight: Dp = DynamicCommentBarSpec.Glass.height,
 ) {
     val dimensions = if (liquidGlassEnabled) DynamicCommentBarSpec.Glass else DynamicCommentBarSpec.Native
     val shape = resolveSharedBottomBarCapsuleShape()
@@ -117,13 +122,13 @@ internal fun DynamicCommentEntryBar(
             shape = shape,
             // The glass renderer shapes the moving shell. An outer clip would cut off
             // the shell and content when the shared press transform moves them.
-            modifier = modifier.height(dimensions.height),
+            modifier = modifier.height(glassHeight),
             backdrop = backdrop,
             reuseEnabled = true,
             materialEnabled = true,
             elasticFeedbackEnabled = true,
             drawShellLens = true,
-            shellLensIntensity = resolveFloatingDockGeometryScale(dimensions.height.value),
+            shellLensIntensity = resolveFloatingDockGeometryScale(glassHeight.value),
             isScrollInProgressProvider = isScrollInProgressProvider,
             // 内容只含文字与图标，不需要再录制玻璃外壳。
             captureShellForContent = false,
@@ -171,29 +176,38 @@ internal fun DynamicDetailCommentBar(
     backdrop: Backdrop?,
     isLiked: Boolean,
     repostEnabled: Boolean,
-    likeCount: Long?,
-    repostCount: Long?,
     onComment: () -> Unit,
     onLike: () -> Unit,
     onRepost: () -> Unit,
     onShare: () -> Unit,
+    isFavorite: Boolean?,
+    favoriteInProgress: Boolean,
+    onFavorite: () -> Unit,
     isScrollInProgressProvider: () -> Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val actions = listOf(
+    val actions = listOfNotNull(
         AppWindowAction(
             label = if (isLiked) "取消点赞" else "点赞",
             icon = if (isLiked) rememberAppLikeFilledIcon() else rememberAppLikeIcon(),
             iconTint = if (isLiked) AppContentColors.accent() else null,
             onClick = onLike,
-            summary = likeCount?.let(FormatUtils::formatStat),
         ),
+        isFavorite?.let { selected ->
+            AppWindowAction(
+                label = if (selected) "取消收藏" else "收藏",
+                icon = if (selected) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                iconTint = if (selected) AppContentColors.accent() else null,
+                enabled = !favoriteInProgress,
+                selected = selected,
+                onClick = onFavorite,
+            )
+        },
         AppWindowAction(
             label = "转发",
             icon = Icons.Outlined.IosShare,
             enabled = repostEnabled,
             onClick = onRepost,
-            summary = repostCount?.let(FormatUtils::formatStat),
         ),
         AppWindowAction(label = "分享", icon = rememberAppShareIcon(), onClick = onShare),
     )
@@ -204,31 +218,27 @@ internal fun DynamicDetailCommentBar(
     // 玻璃外壳留出折射边缘，原生操作栏使用自己的内边距。
     val preferredActionPadding = dimensions.preferredActionPadding
     val minimumActionPadding = DynamicCommentBarSpec.MinimumActionPadding
-    val actionCountGap = DynamicCommentBarSpec.ActionCountGap
     val dockGap = DynamicCommentBarSpec.DockGap
-    val countStyle = MaterialTheme.typography.labelSmall
     val commentStyle = if (liquidGlassEnabled) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall
     val textMeasurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    // Reserve the formatted width even while a count is unknown or changes digits.
-    val countWidth = with(density) {
-        maxOf(
-            textMeasurer.measure("8888", style = countStyle).size.width,
-            textMeasurer.measure("88.8亿", style = countStyle).size.width,
-        ).toDp() + DynamicCommentBarSpec.CountWidthAllowance
-    }
     val commentLabelWidth = with(density) {
         textMeasurer.measure("发评论", style = commentStyle).size.width.toDp()
     }
     val minimumCommentWidth = commentLabelWidth + dimensions.commentChromeWidth
-    val countedActionWidth = maxOf(actionHeight, actionIconSize + actionCountGap + countWidth)
-    val actionSlotsWidth = countedActionWidth * 2 + actionHeight
+    val actionSlotsWidth = actionHeight * actions.size
 
     BoxWithConstraints(modifier = modifier) {
         val availableActionWidth = maxWidth - minimumCommentWidth - dockGap
         val compact = availableActionWidth < actionSlotsWidth + minimumActionPadding * 2
         val actionPadding = ((availableActionWidth - actionSlotsWidth) / 2)
             .coerceIn(minimumActionPadding, preferredActionPadding)
+        val actionWidth = if (compact) actionHeight else actionSlotsWidth + actionPadding * 2
+        val commentInset = if (liquidGlassEnabled) {
+            (availableActionWidth - actionWidth).coerceIn(0.dp, DynamicCommentBarSpec.DetailGlassCommentInset)
+        } else {
+            0.dp
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(dockGap),
@@ -238,22 +248,22 @@ internal fun DynamicDetailCommentBar(
                 onClick = onComment,
                 liquidGlassEnabled = liquidGlassEnabled,
                 backdrop = backdrop,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = commentInset),
                 containerColor = containerColor,
                 isScrollInProgressProvider = isScrollInProgressProvider,
+                glassHeight = DynamicCommentBarSpec.DetailGlassCommentHeight,
             )
             val actionModifier = if (compact) {
                 Modifier.size(actionHeight)
             } else {
-                Modifier.width(actionSlotsWidth + actionPadding * 2).height(actionHeight)
+                Modifier.width(actionWidth).height(actionHeight)
             }
             val actionContent: @Composable () -> Unit = {
                 if (compact) {
                     AppWindowActionMenu(
-                        groups = listOf(actions.map { action ->
-                            val count = action.summary
-                            if (count == null) action else action.copy(label = "${action.label} $count", summary = null)
-                        }),
+                        groups = listOf(actions),
                         modifier = Modifier.fillMaxSize(),
                         anchorModifier = Modifier.size(actionHeight),
                     ) {
@@ -268,9 +278,6 @@ internal fun DynamicDetailCommentBar(
                         actions = actions,
                         actionHeight = actionHeight,
                         iconSize = actionIconSize,
-                        countWidth = countWidth,
-                        countStyle = countStyle,
-                        countGap = actionCountGap,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = actionPadding),
                     )
                 }
@@ -317,44 +324,21 @@ private fun DynamicDetailCommentActions(
     actions: List<AppWindowAction>,
     actionHeight: Dp,
     iconSize: Dp,
-    countWidth: Dp,
-    countStyle: TextStyle,
-    countGap: Dp,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        for ((index, action) in actions.withIndex()) {
-            val hasCountSlot = index < actions.lastIndex
+        for (action in actions) {
             val tint = action.iconTint ?: if (action.enabled) AppContentColors.primaryText() else AppContentColors.secondaryText()
             AppIconButton(
                 enabled = action.enabled,
                 onClick = { action.onClick?.invoke() },
-                modifier = (if (hasCountSlot) Modifier.weight(1f) else Modifier.width(actionHeight))
-                    .height(actionHeight),
+                modifier = Modifier.size(actionHeight),
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(countGap),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    action.icon?.let { icon ->
-                        AppIcon(icon, contentDescription = action.label, tint = tint, modifier = Modifier.size(iconSize))
-                    }
-                    val count = action.summary
-                    if (hasCountSlot && count != null) {
-                        AppText(
-                            text = count,
-                            style = countStyle,
-                            color = tint,
-                            modifier = Modifier.widthIn(max = countWidth),
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis,
-                            tapToCopyEnabled = false,
-                        )
-                    }
+                action.icon?.let { icon ->
+                    AppIcon(icon, contentDescription = action.label, tint = tint, modifier = Modifier.size(iconSize))
                 }
             }
         }

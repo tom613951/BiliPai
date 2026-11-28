@@ -378,6 +378,11 @@ internal fun TabletVideoLayout(
             )
         }
     }
+    com.android.purebilibili.core.ui.LocalNavigationBackHandler(
+        enabled = isTheaterMode,
+    ) {
+        theaterController?.toggle()
+    }
     val activity = remember(context) {
         (context as? android.app.Activity)
             ?: (context as? android.content.ContextWrapper)?.baseContext as? android.app.Activity
@@ -541,11 +546,19 @@ internal fun TabletVideoLayout(
                                 actions = VideoPlayerSectionActions(
                     resolveNextWatch = playbackActions.resolveNextWatch,
                     playNextWatch = playbackActions.playNextWatch,
+                                    onSavePostcardToNote = playbackActions.openVideoNoteWithPostcard,
                                     onJumpToLastPlayedPart = playbackActions.jumpToLastPlayedPart,
                                     onDismissPartResumeNotice = playbackActions.dismissPartResumeNotice,
                                     onToggleFullscreen = onToggleFullscreen,
                                     onQualityChange = playbackActions.changeQuality,
-                                    onBack = onBack,
+                                    onBack = if (isTheaterMode) {
+                                        {
+                                            theaterController?.toggle()
+                                            Unit
+                                        }
+                                    } else {
+                                        onBack
+                                    },
                                     onHomeClick = onHomeClick,
                                     menuActions = playbackActions.menuActions,
                                     onQuickFavorite = { engagementActions.onFavoriteAction(true) },
@@ -886,6 +899,8 @@ internal fun TabletVideoInfoPane(
         videoTags = success.videoTags,
         ownerFollowerCount = success.ownerFollowerCount,
         ownerVideoCount = success.ownerVideoCount,
+        bgmInfo = success.bgmInfo,
+        bgmInfoList = success.bgmInfoList,
         onBgmClick = onBgmClick,
         relatedVideos = if (showRelatedVideos) success.related else emptyList(),
         relatedLoadState = success.relatedLoadState,
@@ -1752,6 +1767,8 @@ private fun ScrollableVideoInfoSection(
     videoTags: List<com.android.purebilibili.data.model.response.VideoTag>,
     ownerFollowerCount: Int?,
     ownerVideoCount: Int?,
+    bgmInfo: BgmInfo? = null,
+    bgmInfoList: List<BgmInfo> = emptyList(),
     onBgmClick: (BgmInfo) -> Unit = {},
     onFollowClick: () -> Unit,
     onFavoriteClick: () -> Unit,
@@ -1840,6 +1857,11 @@ private fun ScrollableVideoInfoSection(
                         { value: Boolean -> supportingInfoExpanded = value }
                     } else null,
                     videoTags = videoTags,
+                    bgmList = com.android.purebilibili.feature.video.ui.section.resolveDisplayBgmList(
+                        bgmInfo = bgmInfo,
+                        bgmInfoList = bgmInfoList,
+                        videoTags = videoTags,
+                    ),
                     sponsorLabel = sponsorVideoLabel,
                     trailingStatsContent = {
                         VideoSupplementStatsActions(

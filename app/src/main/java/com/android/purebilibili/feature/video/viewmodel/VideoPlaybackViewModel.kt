@@ -59,6 +59,7 @@ import com.android.purebilibili.plugin.sdk.CdnLineDiagnostic
 import com.android.purebilibili.plugin.sdk.PlaybackCdnPlugin
 import com.android.purebilibili.feature.plugin.PlaybackCdnPreference
 import com.android.purebilibili.feature.plugin.applyPlaybackCdnPreference
+import com.android.purebilibili.feature.plugin.rebindAdaptiveDashSourceForCdnSelection
 import com.android.purebilibili.feature.plugin.buildPlaybackCdnCacheKeys
 import com.android.purebilibili.feature.plugin.buildCdnLineDiagnostics
 import com.android.purebilibili.feature.plugin.buildCdnTrackCacheKey
@@ -671,6 +672,8 @@ sealed class VideoPlaybackUiState {
         val aiSummary: AiSummaryData? = null,
         val aiSummaryPrompt: AiSummaryPromptState? = null,
         val videoNoteState: VideoNoteUiState = VideoNoteUiState(),
+        val bgmInfo: BgmInfo? = null,
+        val bgmInfoList: List<BgmInfo> = emptyList(),
         // [New] AI Audio Translation
         val aiAudio: AiAudioInfo? = null,
         val currentAudioLang: String? = null,
@@ -690,7 +693,8 @@ sealed class VideoPlaybackUiState {
         val ownerFollowerCount: Int? = null,
         val ownerVideoCount: Int? = null,
         // SponsorBlock 空降片段生成的标题徽标（如“赞助/恰饭”），空串表示不展示
-        val sponsorVideoLabel: String = ""
+        val sponsorVideoLabel: String = "",
+        val vipQualityIds: Set<Int> = emptySet(),
     ) : VideoPlaybackUiState() {
         val cdnCount: Int get() = allVideoUrls.size.coerceAtLeast(1)
         val currentCdnLabel: String get() = "线路${currentCdnIndex + 1}"
@@ -1642,9 +1646,9 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
             sessionBlockedCodecs = sessionBlockedCodecs
         )
         val videoSecondCodecPreference = _videoSecondCodecPreference.value
-        val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported()
+        val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext)
         val isAv1Supported = resolveEffectiveAv1Support(
-            deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+            deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext),
             sessionBlockedCodecs = sessionBlockedCodecs
         )
         val currentPlaybackSpeed = exoPlayer?.playbackParameters?.speed ?: 1.0f
@@ -1725,6 +1729,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 currentCdnIndex = 0,
                 qualityIds = result.qualityIds.ifEmpty { latest.qualityIds },
                 qualityLabels = result.qualityLabels.ifEmpty { latest.qualityLabels },
+                vipQualityIds = if (result.qualityIds.isEmpty()) latest.vipQualityIds else result.vipQualityIds,
                 switchableQualityIds = result.switchableQualityIds.ifEmpty { latest.switchableQualityIds }
             )
         }
@@ -1798,6 +1803,40 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
     // [新增] 播放完成选择对话框状态
     private val _showPlaybackEndedDialog = MutableStateFlow(false)
     val showPlaybackEndedDialog = _showPlaybackEndedDialog.asStateFlow()
+    private val _completionKeepsakePrompt = MutableStateFlow<com.android.purebilibili.feature.personal.CompletionKeepsakePrompt?>(null)
+    val completionKeepsakePrompt = _completionKeepsakePrompt.asStateFlow()
+
+    fun dismissCompletionKeepsake() {
+        val prompt = _completionKeepsakePrompt.value ?: return
+        _completionKeepsakePrompt.value = null
+        val context = appContext ?: return
+        viewModelScope.launch {
+            com.android.purebilibili.feature.personal.CompletionKeepsakeStore.markDismissed(context, prompt.id)
+        }
+    }
+
+    fun saveCompletionKeepsake(reflection: String) {
+        val prompt = _completionKeepsakePrompt.value ?: return
+        _completionKeepsakePrompt.value = null
+        val context = appContext ?: return
+        viewModelScope.launch {
+            com.android.purebilibili.feature.personal.CompletionKeepsakeStore.saveRecord(
+                context = context,
+                record = com.android.purebilibili.feature.personal.CompletionKeepsakeRecord(
+                    id = prompt.id,
+                    kind = prompt.kind,
+                    title = prompt.title,
+                    episodeCount = prompt.episodeCount,
+                    coverUrl = prompt.coverUrl,
+                    reflection = reflection,
+                    completedAtMs = System.currentTimeMillis(),
+                    bvid = prompt.bvid,
+                    seasonId = prompt.seasonId,
+                ),
+            )
+            toast("已收进完结纪念")
+        }
+    }
     
     fun dismissPlaybackEndedDialog() {
         _showPlaybackEndedDialog.value = false
@@ -2592,6 +2631,34 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 if (outcome.shouldHidePlaybackEndedDialog) {
                     // 自动播放关闭或后续无法连播：保持结束态，不弹窗打断
                     _showPlaybackEndedDialog.value = false
+                }
+                if (!hasNextPage && !hasNextSeasonEpisode) {
+                    val success = _uiState.value as? VideoPlaybackUiState.Success
+                    val info = success?.info
+                    if (info != null) {
+                        val season = info.ugc_season
+                        val seasonEpisodeBvids = season?.sections
+                            ?.flatMap { it.episodes }
+                            .orEmpty()
+                            .map { it.bvid }
+                        val keepsakePrompt = com.android.purebilibili.feature.personal.resolveVideoSeriesCompletionKeepsake(
+                            bvid = info.bvid,
+                            title = info.title,
+                            coverUrl = info.pic,
+                            cid = info.cid,
+                            pageCids = info.pages.map { it.cid },
+                            seasonId = season?.id,
+                            seasonTitle = season?.title,
+                            seasonEpisodeBvids = seasonEpisodeBvids,
+                        )
+                        if (keepsakePrompt != null) {
+                            viewModelScope.launch {
+                                if (com.android.purebilibili.feature.personal.CompletionKeepsakeStore.shouldPrompt(context, keepsakePrompt.id)) {
+                                    _completionKeepsakePrompt.value = keepsakePrompt
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3653,7 +3720,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 val (isAv1Supported, isHdrSupported, isDolbyVisionSupported) = withContext(Dispatchers.Default) {
                     Triple(
                         resolveEffectiveAv1Support(
-                            deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+                            deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(capabilityContext),
                             sessionBlockedCodecs = sessionBlockedCodecs,
                         ),
                         com.android.purebilibili.core.util.MediaUtils.isHdrSupported(capabilityContext),
@@ -3938,6 +4005,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                             adaptiveDashSource = cdnSelection.adaptiveDashSource,
                             qualityIds = result.qualityIds,
                             qualityLabels = result.qualityLabels,
+                            vipQualityIds = result.vipQualityIds,
                             switchableQualityIds = result.switchableQualityIds,
                             cachedDashVideos = result.cachedDashVideos,
                             cachedDashAudios = result.cachedDashAudios,
@@ -4294,8 +4362,8 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
 
         val videoCodecPreference = _videoCodecPreference.value
         val videoSecondCodecPreference = _videoSecondCodecPreference.value
-        val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported()
-        val isAv1Supported = com.android.purebilibili.core.util.MediaUtils.isAv1Supported()
+        val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext)
+        val isAv1Supported = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext)
         val audioQualityPreference = current.requestedAudioQuality
         val hdrPlaybackQualityMode = PlaybackQualityMode.LOCKED(125)
 
@@ -4358,6 +4426,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 audioFallbackReason = selection.audioFallbackReason,
                 qualityIds = selection.qualityIds,
                 qualityLabels = selection.qualityLabels,
+                vipQualityIds = selection.vipQualityIds,
                 switchableQualityIds = selection.switchableQualityIds,
                 wasFallback = false,
                 currentPos = currentPos,
@@ -4690,9 +4759,9 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         val fallbackCodec = resolveNextVideoCodecFallback(
             failedCodec = failedCodec,
             secondaryCodecPreference = secondaryCodecPreference,
-            isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported(),
+            isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext),
             isAv1Supported = resolveEffectiveAv1Support(
-                deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+                deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext),
                 sessionBlockedCodecs = sessionBlockedCodecs
             )
         ) ?: run {
@@ -6650,6 +6719,28 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                         }
                     }
 
+                    // 2. 处理 BGM 信息（player/wbi/v2 单曲 + 多曲 BGM 列表）
+                    data.bgmInfo?.let { loadedBgmInfo ->
+                        _uiState.update { current ->
+                            if (current is VideoPlaybackUiState.Success && current.info.bvid == bvid) {
+                                current.copy(bgmInfo = loadedBgmInfo)
+                            } else current
+                        }
+                        Logger.d("PlayerVM", "🎵 Loaded BGM: ${loadedBgmInfo.musicTitle}")
+                    }
+                    val bgmAid = (_uiState.value as? VideoPlaybackUiState.Success)?.info?.aid ?: 0L
+                    if (bgmAid > 0L) {
+                        ViewGrpcRepository.getBgmList(bgmAid, bvid, cid).onSuccess { bgmList ->
+                            if (bgmList.isNotEmpty()) {
+                                _uiState.update { current ->
+                                    if (current is VideoPlaybackUiState.Success && current.info.bvid == bvid) {
+                                        current.copy(bgmInfoList = bgmList)
+                                    } else current
+                                }
+                            }
+                        }
+                    }
+
                     // 3. 字幕信息（优先中文主字幕 + 英文副字幕）
                     if (isSubtitleFeatureEnabledForUser()) {
                         loadSubtitleTracksFromPlayerInfo(
@@ -7743,6 +7834,39 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    /** 将台词明信片的时间点、引用台词与心情短注追加进当前视频私有笔记草稿并打开编辑。 */
+    fun openVideoNoteWithPostcard(quote: String, moodNote: String, positionMs: Long) {
+        val current = _uiState.value as? VideoPlaybackUiState.Success ?: return
+        if (current.videoNoteState.forbidNoteEntrance) return
+        val noteState = current.videoNoteState
+        val baseDoc = resolveVideoNoteEditableDocument(
+            noteState = noteState,
+            defaultTitle = current.info.title
+        )
+        val pageIndex = current.info.pages.indexOfFirst { it.cid == current.info.cid }.coerceAtLeast(0)
+        val appendedBlocks = com.android.purebilibili.feature.video.postcard.buildPostcardNoteBlocks(
+            quote = quote,
+            moodNote = moodNote,
+            positionMs = positionMs,
+            cid = current.info.cid,
+            pageIndex = pageIndex,
+            cidCount = current.info.pages.size.coerceAtLeast(1),
+        )
+        val mergedDoc = baseDoc.copy(blocks = baseDoc.blocks + appendedBlocks)
+        _uiState.update { state ->
+            val success = state as? VideoPlaybackUiState.Success ?: return@update state
+            success.copy(
+                videoNoteState = success.videoNoteState.copy(
+                    editorVisible = true,
+                    editorDocument = mergedDoc,
+                    editorFromAiSummary = false,
+                    feedbackMessage = "已将台词明信片摘录加入笔记草稿",
+                    errorMessage = null,
+                )
+            )
+        }
+    }
+
     fun saveVideoNote(updatedDocument: VideoNoteEditorDocument? = null) {
         val current = _uiState.value as? VideoPlaybackUiState.Success ?: return
         val noteState = current.videoNoteState
@@ -8273,9 +8397,9 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                     sessionBlockedCodecs = sessionBlockedCodecs
                 )
                 val videoSecondCodecPreference = _videoSecondCodecPreference.value
-                val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported()
+                val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext)
                 val isAv1Supported = resolveEffectiveAv1Support(
-                    deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+                    deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext),
                     sessionBlockedCodecs = sessionBlockedCodecs
                 )
 
@@ -8344,6 +8468,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                             audioFallbackReason = result.audioFallbackReason,
                             qualityIds = result.qualityIds,
                             qualityLabels = result.qualityLabels,
+                            vipQualityIds = result.vipQualityIds,
                             switchableQualityIds = result.switchableQualityIds,
                             wasFallback = result.wasFallback,
                             currentPos = currentPos,
@@ -8470,9 +8595,9 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                         )
                     } ?: -1
                     
-                    val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported()
+                    val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext)
                     val isAv1Supported = resolveEffectiveAv1Support(
-                        deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+                        deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext),
                         sessionBlockedCodecs = sessionBlockedCodecs
                     )
                     
@@ -8551,6 +8676,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                                 adaptiveDashSource = cdnSelection.adaptiveDashSource,
                                 qualityIds = selection.qualityIds,
                                 qualityLabels = selection.qualityLabels,
+                                vipQualityIds = selection.vipQualityIds,
                                 switchableQualityIds = selection.switchableQualityIds,
                                 cachedDashVideos = selection.cachedDashVideos,
                                 cachedDashAudios = selection.cachedDashAudios,
@@ -8810,9 +8936,9 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
             } ?: AVC_CODEC_KEY
             val audioQualityPreference = current.requestedAudioQuality
 
-            val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupported()
+            val isHevcSupported = com.android.purebilibili.core.util.MediaUtils.isHevcSupportedForPlayback(appContext)
             val isAv1Supported = resolveEffectiveAv1Support(
-                deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1Supported(),
+                deviceSupportsAv1 = com.android.purebilibili.core.util.MediaUtils.isAv1SupportedForPlayback(appContext),
                 sessionBlockedCodecs = sessionBlockedCodecs
             )
 
@@ -8862,6 +8988,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                     videoDurationMs = playUrlData.timelength.coerceAtLeast(0L),
                     qualityIds = selection.qualityIds,
                     qualityLabels = selection.qualityLabels,
+                    vipQualityIds = selection.vipQualityIds,
                     switchableQualityIds = selection.switchableQualityIds,
                     cachedDashVideos = selection.cachedDashVideos,
                     cachedDashAudios = selection.cachedDashAudios,
@@ -9947,6 +10074,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         val audioFallbackReason: AudioFallbackReason? = null,
         val qualityIds: List<Int>,
         val qualityLabels: List<String>,
+        val vipQualityIds: Set<Int>,
         val switchableQualityIds: List<Int>,
         val wasFallback: Boolean = false,
         val currentPos: Long,
@@ -9992,12 +10120,25 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
         val allAudioUrls = preferredCandidates.map { it.audioUrl.orEmpty() }
         val selectedVideoUrl = allVideoUrls.firstOrNull() ?: videoUrl
         val selectedAudioUrl = allAudioUrls.firstOrNull()?.takeIf { it.isNotBlank() } ?: audioUrl
-        val selectedAdaptiveDashSource =
-            if (selectedVideoUrl == videoUrl && selectedAudioUrl == audioUrl) {
-                adaptiveDashSource
-            } else {
-                null
-            }
+        val selectedAdaptiveDashSource = rebindAdaptiveDashSourceForCdnSelection(
+            source = adaptiveDashSource,
+            originalVideoUrl = videoUrl,
+            originalAudioUrl = audioUrl,
+            selectedVideoUrl = selectedVideoUrl,
+            selectedAudioUrl = selectedAudioUrl,
+        )
+        if (CdnTransferRuntime.enabled) {
+            val extraVideoUrls = selectedAdaptiveDashSource?.videoTracks
+                ?.flatMap { listOf(it.baseUrl) + it.backupUrl.orEmpty() }
+                .orEmpty()
+            val extraAudioUrls = selectedAdaptiveDashSource?.audioTracks
+                ?.flatMap { listOf(it.baseUrl) + it.backupUrl.orEmpty() }
+                .orEmpty()
+            CdnTransferRuntime.registerAdaptiveTracks(
+                video = (listOf(selectedVideoUrl) + extraVideoUrls).distinct(),
+                audio = (listOfNotNull(selectedAudioUrl) + extraAudioUrls).distinct(),
+            )
+        }
 
         return PlaybackCdnCandidateSelection(
             playUrl = selectedVideoUrl,
@@ -10005,7 +10146,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
             adaptiveDashSource = selectedAdaptiveDashSource,
             allVideoUrls = allVideoUrls,
             allAudioUrls = allAudioUrls,
-            cdnCacheKeysByUrl = buildPlaybackCdnCacheKeys(preferredCandidates),
+            cdnCacheKeysByUrl = buildPlaybackCdnCacheKeys(preferredCandidates, selectedAdaptiveDashSource),
             candidateSources = preferredCandidates.map { it.source },
             regionLabel = cdnRewrite?.regionLabel,
             lineDiagnostics = cdnPlugin?.buildPlaybackCdnDiagnostics(
@@ -10539,6 +10680,7 @@ class VideoPlaybackViewModel(application: Application) : AndroidViewModel(applic
                 pendingPlaybackTransitionPositionMs = payload.currentPos,
                 qualityIds = payload.qualityIds.ifEmpty { latest.qualityIds },
                 qualityLabels = payload.qualityLabels.ifEmpty { latest.qualityLabels },
+                vipQualityIds = if (payload.qualityIds.isEmpty()) latest.vipQualityIds else payload.vipQualityIds,
                 switchableQualityIds = payload.switchableQualityIds
                     .ifEmpty { latest.switchableQualityIds },
                 cachedDashVideos = payload.cachedDashVideos,

@@ -99,7 +99,12 @@ fun LiveCard(
                         .background(AppContentColors.accent(), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    AppText("🔴", fontSize = MaterialTheme.typography.titleMedium.fontSize)
+                    AppIcon(
+                        imageVector = rememberAppPlayIcon(),
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(AppSpacingTokens.Large),
+                    )
                 }
                 Spacer(modifier = Modifier.width(AppSpacingTokens.Medium))
                 AppText(
@@ -172,7 +177,7 @@ private fun DynamicLiveRoomCard(
                     }
                     ImageRequest.Builder(context)
                         .data(url)
-                        .httpHeaders(NetworkHeaders.Builder().set("Referer", "https://www.bilibili.com/").build())
+                        .httpHeaders(LIVE_CARD_BILIBILI_REFERER_HEADERS)
                         .crossfade(true)
                         .build()
                 }
@@ -245,3 +250,6 @@ private fun DynamicLiveBadge(modifier: Modifier = Modifier) {
         fontWeight = FontWeight.Bold,
     )
 }
+
+private val LIVE_CARD_BILIBILI_REFERER_HEADERS: NetworkHeaders =
+    NetworkHeaders.Builder().set("Referer", "https://www.bilibili.com/").build()

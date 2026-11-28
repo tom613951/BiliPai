@@ -23,6 +23,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.android.purebilibili.core.ui.motion.AppMotionEasing
+import com.android.purebilibili.feature.video.ui.feedback.TriplePressHapticCadenceTracker
+import com.android.purebilibili.feature.video.ui.feedback.TriplePressHapticCue
+import com.android.purebilibili.feature.video.ui.feedback.performTriplePressRichHapticCue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -47,7 +50,14 @@ internal class PiliHeaderTriplePressState(private val scope: CoroutineScope) {
     private var holding = false
     private var job: Job? = null
 
-    fun start(hasTriple: Boolean, onStart: () -> Unit, onTriple: () -> Unit, onAlreadyTripled: () -> Unit) {
+    fun start(
+        hasTriple: Boolean,
+        onStart: () -> Unit,
+        onTriple: () -> Unit,
+        onAlreadyTripled: () -> Unit,
+        onChargeTick: () -> Unit = {},
+        onCompleteHaptic: (suspend () -> Unit)? = null,
+    ) {
         job?.cancel()
         holding = true
         delayed = true
@@ -58,11 +68,17 @@ internal class PiliHeaderTriplePressState(private val scope: CoroutineScope) {
             if (hasTriple) {
                 onAlreadyTripled()
             } else {
+                val cadence = TriplePressHapticCadenceTracker()
                 val startNanos = withFrameNanos { it }
                 while (progress < 1f) {
-                    progress = resolvePiliHeaderTripleProgress(withFrameNanos { it } - startNanos)
+                    val nextProgress = resolvePiliHeaderTripleProgress(withFrameNanos { it } - startNanos)
+                    progress = nextProgress
+                    if (cadence.onProgress(nextProgress) == TriplePressHapticCue.ChargeTick) {
+                        onChargeTick()
+                    }
                 }
                 progress = 0f
+                onCompleteHaptic?.let { completeHaptic -> scope.launch { completeHaptic() } }
                 onTriple()
             }
         }
@@ -113,13 +129,28 @@ internal fun piliHeaderLikeGesture(
     val latestTriple by rememberUpdatedState(onTriple)
     val context = LocalContext.current
     val haptics = com.android.purebilibili.core.ui.rememberAppHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.VIDEO_ACTIONS)
-    return Modifier.pointerInput(state, context, haptics) {
+    val richHaptics = com.android.purebilibili.core.ui.rememberRichHapticFeedback(com.android.purebilibili.core.ui.AppHapticScene.VIDEO_ACTIONS)
+    return Modifier.pointerInput(state, context, haptics, richHaptics) {
         detectTapGestures(onPress = {
             state.start(
                 hasTriple = latestHasTriple,
                 onStart = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) },
                 onTriple = { latestTriple() },
                 onAlreadyTripled = { Toast.makeText(context, "已完成三连", Toast.LENGTH_SHORT).show() },
+                onChargeTick = {
+                    performTriplePressRichHapticCue(
+                        richHaptics = richHaptics,
+                        cue = TriplePressHapticCue.ChargeTick,
+                        progress = state.progress,
+                    )
+                },
+                onCompleteHaptic = {
+                    performTriplePressRichHapticCue(
+                        richHaptics = richHaptics,
+                        cue = TriplePressHapticCue.Complete,
+                        progress = 1f,
+                    )
+                },
             )
             try {
                 state.release(tapUp = tryAwaitRelease(), onLike = { latestLike() })

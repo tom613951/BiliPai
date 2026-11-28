@@ -58,7 +58,124 @@ class UpdateHighlightPolicyTest {
     @Test
     fun stableFeatureIdsAreUniqueAndReleaseOverviewIsBounded() {
         assertEquals(updateHighlightCatalog.size, updateHighlightCatalog.map { it.id }.toSet().size)
-        val catalog = (0..5).map { UpdateHighlight("item_$it", 486, "Title", "Description") }
-        assertEquals(3, latestReleaseHighlights(486, catalog).size)
+        val catalog = (0..12).map { UpdateHighlight("item_$it", 486, "Title", "Description") }
+        assertEquals(MAX_RELEASE_HIGHLIGHTS, latestReleaseHighlights(486, catalog).size)
+    }
+
+    @Test
+    fun newerReleaseReplacesPreviousHighlightsInAutomaticAndManualPreview() {
+        val baseSettings = AppThemeSettings(uiStyle = AppUiStyle.MIUIX)
+        val currentHighlights = latestReleaseHighlights(617)
+        assertEquals(
+            listOf(
+                "donate_qr_refresh_617",
+                "cdn_parallel_chunk_617",
+                "offline_cache_refresh_617",
+                "custom_icon_zero_diff_617",
+                "listen_ambient_winddown_617",
+                "personal_recap_keepsake_617",
+                "mealtime_gacha_watchlater_617",
+                "custom_push_nearby_617",
+                "appearance_scene_recipes_617",
+            ),
+            currentHighlights.map { it.id },
+        )
+
+        val upgraded = prepareUpdateHighlights(
+            history = UpdateHighlightHistory(lastVersionCode = 616),
+            currentVersionCode = 617,
+            isExistingInstall = true,
+        )
+        val auto617 = resolveAutomaticReleaseHighlights(617, upgraded.pendingIds, baseSettings)
+        assertEquals(currentHighlights.map { it.id }, auto617.map { it.id })
+
+        val nextReleaseCatalog = updateHighlightCatalog + UpdateHighlight(
+            id = "next_release_618",
+            introducedVersionCode = 618,
+            title = "下一版本新能力",
+            description = "替换上一版本的更新要点。",
+            action = UpdateHighlightAction.OPEN_SETTINGS,
+        )
+        val upgradedNext = prepareUpdateHighlights(
+            history = upgraded,
+            currentVersionCode = 618,
+            isExistingInstall = true,
+            catalog = nextReleaseCatalog,
+        )
+        val auto618 = resolveAutomaticReleaseHighlights(618, upgradedNext.pendingIds, baseSettings, nextReleaseCatalog)
+        assertEquals(listOf("next_release_618"), auto618.map { it.id })
+    }
+
+    @Test
+    fun automaticHighlightsRecognizeNavigation3MainHostHomeTabAndRejectOtherDestinations() {
+        assertTrue(
+            isHomeRouteForAutomaticHighlights(
+                isMainHostTop = true,
+                isHomeBottomTab = true,
+                currentRoute = "main_host",
+                homeRoute = "home",
+            )
+        )
+        assertFalse(
+            isHomeRouteForAutomaticHighlights(
+                isMainHostTop = true,
+                isHomeBottomTab = false,
+                currentRoute = "main_host",
+                homeRoute = "home",
+            )
+        )
+        assertFalse(
+            isHomeRouteForAutomaticHighlights(
+                isMainHostTop = false,
+                isHomeBottomTab = true,
+                currentRoute = "settings",
+                homeRoute = "home",
+            )
+        )
+        assertTrue(
+            isHomeRouteForAutomaticHighlights(
+                isMainHostTop = false,
+                isHomeBottomTab = false,
+                currentRoute = "home",
+                homeRoute = "home",
+            )
+        )
+    }
+
+    @Test
+    fun release622HighlightsExcludePinnedDonateAndUseDistinctSemanticIcons() {
+        val highlights = latestReleaseHighlights(622)
+        assertEquals(6, highlights.size)
+        assertTrue(highlights.none { it.action == UpdateHighlightAction.OPEN_DONATE })
+        val icons = highlights.map { it.icon }
+        assertTrue(icons.all { it != null })
+        assertEquals(highlights.size, icons.toSet().size)
+    }
+
+    @Test
+    fun release623HighlightsExcludePinnedDonateAndUseDistinctSemanticIcons() {
+        val highlights = latestReleaseHighlights(623)
+        assertEquals(4, highlights.size)
+        assertTrue(highlights.none { it.action == UpdateHighlightAction.OPEN_DONATE })
+        val icons = highlights.map { it.icon }
+        assertTrue(icons.all { it != null })
+        assertEquals(highlights.size, icons.toSet().size)
+    }
+
+    @Test
+    fun release624HighlightsExcludePinnedDonateAndUseDistinctSemanticIcons() {
+        val highlights = latestReleaseHighlights(624)
+        assertEquals(6, highlights.size)
+        assertTrue(highlights.none { it.action == UpdateHighlightAction.OPEN_DONATE })
+        val icons = highlights.map { it.icon }
+        assertTrue(icons.all { it != null })
+        assertEquals(highlights.size, icons.toSet().size)
+    }
+
+    @Test
+    fun formatDisplayVersionNameStripsBuildVariantSuffix() {
+        assertEquals("0.10.6", formatDisplayVersionName("0.10.6-debug"))
+        assertEquals("0.10.6", formatDisplayVersionName("0.10.6-dev"))
+        assertEquals("0.10.6", formatDisplayVersionName("0.10.6"))
     }
 }

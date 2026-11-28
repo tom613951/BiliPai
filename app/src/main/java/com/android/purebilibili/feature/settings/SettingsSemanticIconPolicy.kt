@@ -25,7 +25,7 @@ internal enum class SettingsIconRole(
     DATA_BACKUP(R.drawable.ms_backup_24, R.drawable.ph_archive_24),
     PRIVACY_PERMISSION(R.drawable.ms_lock_24, R.drawable.ph_lock_24),
     DIAGNOSTICS(R.drawable.ms_terminal_24, R.drawable.ph_terminal_window_24),
-    ABOUT_SUPPORT(R.drawable.ms_info_24, R.drawable.ph_info_24),
+    ABOUT_SUPPORT(R.drawable.ic_settings_help_about_24),
     APPEARANCE(R.drawable.ms_palette_24, R.drawable.ph_paint_brush_broad_24),
     ABOUT_CARD_SHAPE(R.drawable.ic_settings_about_card_shape_24),
     ANIMATION(R.drawable.ms_animation_24, R.drawable.ph_film_strip_24),
@@ -36,6 +36,7 @@ internal enum class SettingsIconRole(
     SPACE_PRIVACY_HIDDEN(R.drawable.ph_eye_closed_24),
     LOGIN_ACTIVITY(R.drawable.ic_settings_login_activity_24),
     MESSAGE_NOTIFICATION(R.drawable.ms_notifications_24, R.drawable.ph_bell_24),
+    CUSTOM_PUSH(R.drawable.ms_cloud_done_24, R.drawable.ph_cloud_check_24),
     BLOCKED_LIST(R.drawable.ms_block_24, R.drawable.ph_prohibit_24),
     SETTINGS_SHARE(R.drawable.ms_share_24, R.drawable.ph_share_network_24),
     WEBDAV_BACKUP(R.drawable.ms_cloud_upload_24, R.drawable.ph_cloud_arrow_up_24),
@@ -135,6 +136,7 @@ internal enum class SettingsIconRole(
     COMMENT_GENDER(R.drawable.ms_person_24, R.drawable.ph_user_24),
     COMMENT_EXACT_TIME(R.drawable.ms_calendar_clock_24, R.drawable.ph_calendar_dots_24),
     COMMENT_AVATAR_PUSH(R.drawable.ic_settings_comment_avatar_push_24),
+    COMMENT_SEARCH_KEYWORDS(R.drawable.ms_search_24, R.drawable.ph_magnifying_glass_24),
     SUB_REPLY_PREVIEW_LIKES(R.drawable.ic_settings_sub_reply_likes_24),
     VERTICAL_RECOMMENDATIONS(R.drawable.ms_view_stream_24, R.drawable.ph_rows_24),
     COMPACT_PLAYER_CONTROLS(R.drawable.ms_collapse_content_24, R.drawable.ph_arrows_in_simple_24),
@@ -147,7 +149,9 @@ internal enum class SettingsIconRole(
     PROGRESSIVE_BLUR_RENDERER(R.drawable.ic_settings_progressive_blur_renderer_24),
     PROGRESSIVE_TOP_FADE(R.drawable.ic_settings_progressive_top_fade_24),
     KEEP_TOP_SEARCH(R.drawable.ic_settings_top_search_24),
+    BOTTOM_BAR_SEARCH_INSIDE_DOCK(R.drawable.ms_manage_search_24, R.drawable.ph_align_bottom_24),
     HOME_AVATAR_DRAWER(R.drawable.ic_settings_home_avatar_drawer_24),
+    HOME_TOP_TAB_SWIPE_DRAWER(R.drawable.ms_swipe_right_24, R.drawable.ph_hand_swipe_right_24),
     LINKED_DOCK_MERGE(R.drawable.ms_merge_24, R.drawable.ph_arrows_merge_24),
     BOTTOM_BAR_SCROLL_COMPACT(R.drawable.ic_settings_bottom_bar_compact_24),
     LIST_SCOPED_SEARCH(R.drawable.ms_find_in_page_24, R.drawable.ph_list_magnifying_glass_24),
@@ -190,6 +194,7 @@ internal enum class SettingsIconRole(
     SUBTITLE(R.drawable.ms_subtitles_24, R.drawable.ph_subtitles_24),
     COMMENT_DECORATION(R.drawable.ms_mode_comment_24, R.drawable.ph_chat_teardrop_24),
     AI_SUMMARY(R.drawable.ms_smart_toy_24, R.drawable.ph_robot_24),
+    VIDEO_DETAIL_BGM(R.drawable.ms_music_note_24, R.drawable.ph_music_note_24),
     VIDEO_NOTE(R.drawable.ms_edit_note_24, R.drawable.ph_note_pencil_24),
     LIKE_INTERACTION(R.drawable.ms_thumb_up_off_alt_24, R.drawable.ph_thumbs_up_24),
     FAVORITE_TAP_MODE(R.drawable.ms_collections_bookmark_24, R.drawable.ph_bookmarks_24),
@@ -313,6 +318,7 @@ internal enum class SettingsIconRole(
     SWIPE_SEEK(R.drawable.ic_settings_swipe_seek_24),
     SCREENSHOT_GESTURE(R.drawable.ic_settings_screenshot_gesture_24),
     APP_SCREENSHOT(R.drawable.ms_screenshot_region_24, R.drawable.ph_selection_24),
+    APP_SCREENSHOT_WATERMARK(R.drawable.ms_workspace_premium_24, R.drawable.ph_medal_24),
     CHAPTER_DISPLAY(R.drawable.ic_settings_chapter_display_24),
     BOTTOM_PROGRESS(R.drawable.ic_settings_bottom_progress_24),
     EXIT_PLAYER_MODE(R.drawable.ic_settings_exit_player_mode_24),
@@ -356,6 +362,8 @@ internal enum class SettingsIconRole(
     FILTER_HOT_VIDEOS(R.drawable.ms_local_fire_department_24, R.drawable.ph_fire_24),
     FILTER_RANKING(R.drawable.ms_leaderboard_24, R.drawable.ph_ranking_24),
     SPONSOR_MARKER(R.drawable.ic_settings_sponsor_marker_24),
+    TELEMETRY_PRIVACY(R.drawable.ms_shield_24, R.drawable.ph_shield_24),
+    COMMENT_CHECK_HISTORY(R.drawable.ic_settings_comment_check_history_24),
     SETTINGS_ICON_GLYPHS(R.drawable.ph_shapes_24),
 }
 
@@ -433,6 +441,7 @@ internal fun resolveSettingsSearchTargetIconRole(
     SettingsSearchTarget.SPACE_PRIVACY -> SettingsIconRole.SPACE_PRIVACY
     SettingsSearchTarget.LOGIN_ACTIVITY -> SettingsIconRole.LOGIN_ACTIVITY
     SettingsSearchTarget.MESSAGE_NOTIFICATION -> SettingsIconRole.MESSAGE_NOTIFICATION
+    SettingsSearchTarget.CUSTOM_PUSH -> SettingsIconRole.CUSTOM_PUSH
     SettingsSearchTarget.BLOCKED_LIST -> SettingsIconRole.BLOCKED_LIST
     SettingsSearchTarget.SETTINGS_SHARE -> SettingsIconRole.SETTINGS_SHARE
     SettingsSearchTarget.WEBDAV_BACKUP -> SettingsIconRole.WEBDAV_BACKUP

@@ -1,6 +1,12 @@
 package com.android.purebilibili.feature.video.ui.components
 
 import com.android.purebilibili.core.ui.components.appActionClickable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -9,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import com.android.purebilibili.core.store.FullscreenActionCountSettings
@@ -143,7 +150,12 @@ internal fun PlayerNativeSettingsHost(
 }
 
 @Composable
-internal fun PlayerSettingsRow(title: String, subtitle: String? = null, onClick: (() -> Unit)?) {
+internal fun PlayerSettingsRow(
+    title: String,
+    subtitle: String? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)?,
+) {
     val icon = when (title) {
         "弹幕设置" -> null
         "稍后再看（添加 / 移出）" -> Icons.Outlined.WatchLater
@@ -168,6 +180,12 @@ internal fun PlayerSettingsRow(title: String, subtitle: String? = null, onClick:
         "加载字幕" -> Icons.Outlined.FileOpen
         "播放信息" -> Icons.Outlined.Info
         "手势说明与开关" -> Icons.Outlined.TouchApp
+        "左右滑动" -> Icons.Outlined.SwapHoriz
+        "左侧上下滑动" -> Icons.Outlined.LightMode
+        "右侧上下滑动" -> Icons.Outlined.VolumeUp
+        "长按画面" -> Icons.Outlined.Speed
+        "双指缩放 / 调速" -> Icons.Outlined.Fullscreen
+        "底边上滑" -> Icons.Outlined.ExpandLess
         "举报" -> Icons.Outlined.ErrorOutline
         FullscreenActionCountSettings.TITLE -> ImageVector.vectorResource(com.android.purebilibili.R.drawable.ic_settings_action_counts_24)
         com.android.purebilibili.core.store.FullscreenTopBarSettings.TITLE -> ImageVector.vectorResource(com.android.purebilibili.R.drawable.ms_widgets_24)
@@ -177,7 +195,10 @@ internal fun PlayerSettingsRow(title: String, subtitle: String? = null, onClick:
         PLAYER_QUALITY_PLACEMENT_TITLE -> rememberAppQualityIcon()
         PLAYER_SPEED_PLACEMENT_TITLE, "播放倍速" -> rememberAppSpeedIcon()
         "返回" -> Icons.Outlined.ArrowBack
-        else -> Icons.Outlined.Settings
+        else -> when {
+            title.startsWith("长按倍速滑动调节") -> Icons.Outlined.Tune
+            else -> Icons.Outlined.Settings
+        }
     }
     val nativeMiuix = isMiuixNonGlassEnabled()
     val iconTint = if (nativeMiuix) AppContentColors.secondaryText() else MaterialTheme.colorScheme.onSurfaceVariant
@@ -196,6 +217,7 @@ internal fun PlayerSettingsRow(title: String, subtitle: String? = null, onClick:
             headlineContent = { AppText(title) },
             supportingContent = subtitle?.takeIf { it.isNotBlank() }?.let { summary -> { AppText(summary) } },
             leadingContent = leading,
+            trailingContent = trailing,
         )
         return
     }
@@ -214,6 +236,7 @@ internal fun PlayerSettingsRow(title: String, subtitle: String? = null, onClick:
                 subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        trailing?.invoke()
     }
 }
 
@@ -229,17 +252,41 @@ internal fun PlayerSettingsPopupRow(
     var expanded by remember { mutableStateOf(false) }
     // 玻璃设置面板内展开选项，不再为内部行创建第二层玻璃弹窗。
     if (LocalPlayerGlassSettingsSurface.current) {
+        val chevronRotation by animateFloatAsState(
+            targetValue = if (expanded) 180f else 0f,
+            label = "PlayerSettingsInlineChevron",
+        )
         Column(Modifier.fillMaxWidth()) {
-            PlayerSettingsRow(title, current, onClick = if (enabled) ({ expanded = !expanded }) else null)
-            if (expanded) {
-                options.forEachIndexed { index, label ->
-                    PlayerSettingsSelectionRow(
-                        title = label,
-                        selected = label == current,
-                        enabled = enabled && enabledOptions.getOrElse(index) { true },
-                        allowSelectedClick = true,
-                        onClick = { expanded = false; if (label != current) onSelected(index) },
+            PlayerSettingsRow(
+                title = title,
+                subtitle = current,
+                trailing = {
+                    Icon(
+                        imageVector = Icons.Outlined.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer { rotationZ = chevronRotation },
                     )
+                },
+                onClick = if (enabled) ({ expanded = !expanded }) else null,
+            )
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    options.forEachIndexed { index, label ->
+                        PlayerSettingsSelectionRow(
+                            title = label,
+                            selected = label == current,
+                            enabled = enabled && enabledOptions.getOrElse(index) { true },
+                            allowSelectedClick = true,
+                            onClick = { expanded = false; if (label != current) onSelected(index) },
+                        )
+                    }
                 }
             }
         }

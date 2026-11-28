@@ -19,7 +19,9 @@ import com.android.purebilibili.core.ui.components.AppHorizontalDivider
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.animation.*
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -313,7 +315,7 @@ internal fun resolveVideoContentTabSwitchAnimationSpec(
     return when (presentation) {
         AppTopTabPresentation.MOVING_CAPSULE -> VideoContentTabSwitchAnimationSpec(durationMs = 360)
         AppTopTabPresentation.MATERIAL_UNDERLINE,
-        AppTopTabPresentation.TONAL_CAPSULE -> VideoContentTabSwitchAnimationSpec(durationMs = 240)
+        AppTopTabPresentation.TONAL_CAPSULE -> VideoContentTabSwitchAnimationSpec(durationMs = 300)
     }
 }
 
@@ -326,13 +328,37 @@ internal fun rememberVideoContentTabSelectionAnimationSpec(): androidx.compose.a
         resolveVideoContentTabSwitchAnimationSpec(playerChromeProfile.tabPresentation, liquidGlassEnabled)
     }
     val componentMotionEnabled = com.android.purebilibili.core.ui.LocalComponentMotionEnabled.current
-    val tabSelectionAnimationSpec = remember(tabSwitchAnimationSpec, liquidGlassEnabled, componentMotionEnabled) {
+    val easing = remember(playerChromeProfile.tabPresentation, liquidGlassEnabled) {
+        if (liquidGlassEnabled || playerChromeProfile.tabPresentation == AppTopTabPresentation.MOVING_CAPSULE) {
+            AppMotionEasing.M1Standard
+        } else {
+            AppMotionEasing.StandardEase
+        }
+    }
+    val tabSelectionAnimationSpec = remember(tabSwitchAnimationSpec, easing, liquidGlassEnabled, componentMotionEnabled) {
         if (liquidGlassEnabled && !componentMotionEnabled) snap<Float>() else tween<Float>(
             durationMillis = tabSwitchAnimationSpec.durationMs,
-            easing = AppMotionEasing.M1Standard,
+            easing = easing,
         )
     }
     return tabSelectionAnimationSpec
+}
+
+/** 详情页手势松手回弹曲线：非玻璃下划线/胶囊模式对齐临界阻尼弹簧。 */
+@Composable
+internal fun rememberVideoContentTabSwipeSettleAnimationSpec(): androidx.compose.animation.core.AnimationSpec<Float>? {
+    val liquidGlassEnabled = LocalAppThemeConfig.current.liquidGlassEnabled
+    val playerChromeProfile = rememberAppPlayerChromeProfile()
+    return remember(playerChromeProfile.tabPresentation, liquidGlassEnabled) {
+        if (liquidGlassEnabled || playerChromeProfile.tabPresentation == AppTopTabPresentation.MOVING_CAPSULE) {
+            null
+        } else {
+            spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = 438.65f,
+            )
+        }
+    }
 }
 
 internal fun resolveVideoContentEffectiveSelectedTabIndex(
@@ -482,6 +508,8 @@ internal class VideoContentData(
     val emoteMap: Map<String, String>,
     val followingMids: Set<Long>,
     val videoTags: List<VideoTag>,
+    val bgmInfo: BgmInfo? = null,
+    val bgmInfoList: List<BgmInfo> = emptyList(),
     val relatedLoadState: VideoPlaybackUiState.RelatedLoadState = VideoPlaybackUiState.RelatedLoadState.READY,
 )
 
@@ -802,12 +830,13 @@ internal fun VideoContentSection(
         )
     }
     val tabSelectionAnimationSpec = rememberVideoContentTabSelectionAnimationSpec()
+    val tabSwipeSettleAnimationSpec = rememberVideoContentTabSwipeSettleAnimationSpec()
     val latestOnSelectedTabChange by rememberUpdatedState(onSelectedTabChange)
     var lastTabTapIndex by remember { mutableIntStateOf(-1) }
     var lastTabTapAtMs by remember { mutableLongStateOf(0L) }
 
     // 评论 Tab：「简介|评论」分段 nestedScroll 跟手折叠/展开，反向滑动立即打断。
-    // 「最热评论」标题文字不设开关、下滑必隐回顶出现，排序/搜索行由设置开关控制。
+    // 「最热评论」标题文字仅在液态玻璃开启时随下滑隐藏，关闭液态玻璃时保持常显；排序/搜索行由设置开关控制。
     val commentHeaderCollapseState = remember(commentListState) { mutableFloatStateOf(0f) }
     var commentHeaderCollapsePx by commentHeaderCollapseState
 
@@ -913,10 +942,10 @@ internal fun VideoContentSection(
     val tabBarScrollHideEnabled by SettingsManager
         .getVideoDetailChromeScrollHideEnabled(context)
         .collectAsStateWithLifecycle(initialValue = false)
-    val commentHeaderCollapseEnabled by remember(pagerState) {
+    val commentHeaderCollapseEnabled by remember(pagerState, liquidGlassEnabled, tabBarScrollHideEnabled) {
         derivedStateOf {
             shouldKeepVideoContentTabBarCollapse(
-                settingEnabled = true,
+                settingEnabled = liquidGlassEnabled || tabBarScrollHideEnabled,
                 selectedTabIndex = pagerState.currentPage,
             )
         }
@@ -935,7 +964,7 @@ internal fun VideoContentSection(
             maxCollapsePx = commentHeaderHeightProvider(),
             selectedTabIndex = pagerState.currentPage,
             listAtTop = commentListAtTop,
-            enabled = true,
+            enabled = liquidGlassEnabled,
         )
     }
     // 标签栏始终按完整测量高度占位，不再消费折叠位移。
@@ -997,6 +1026,7 @@ internal fun VideoContentSection(
                         .verticalPriorityHorizontalPagerSwipe(
                             state = pagerState,
                             dragInteractionSource = contentPagerInteractions,
+                            settleAnimationSpec = tabSwipeSettleAnimationSpec,
                         )
                         .then(
                             if (immersiveVideoContentChromeEnabled) {
@@ -1019,6 +1049,8 @@ internal fun VideoContentSection(
                             currentPageIndex = currentPageIndex,
                             followingMids = followingMids,
                             videoTags = videoTags,
+                            bgmInfo = data.bgmInfo,
+                            bgmInfoList = data.bgmInfoList,
                             isFollowing = isFollowing,
                             followStatusKnown = followStatusKnown,
                             isFavorited = isFavorited,
@@ -1207,6 +1239,7 @@ internal fun VideoContentSection(
                         ),
                         forceVerticalPriority = liquidGlassEnabled,
                         dragInteractionSource = contentPagerInteractions,
+                        settleAnimationSpec = tabSwipeSettleAnimationSpec,
                         exposePageActions = false,
                     ),
                     modifier = Modifier
@@ -1471,6 +1504,8 @@ private fun VideoIntroTab(
     aiSummaryPrompt: com.android.purebilibili.feature.video.viewmodel.AiSummaryPromptState? = null,
     onShowAiSummarySheet: () -> Unit = {},
     onShowNoteListSheet: () -> Unit = {},
+    bgmInfo: BgmInfo? = null,
+    bgmInfoList: List<BgmInfo> = emptyList(),
     onTimestampClick: ((Long) -> Unit)? = null,
     onBgmClick: (BgmInfo) -> Unit = {},
     sponsorVideoLabel: String = "",
@@ -1538,6 +1573,8 @@ private fun VideoIntroTab(
                 aiSummaryPrompt = aiSummaryPrompt,
                 onShowAiSummarySheet = onShowAiSummarySheet,
                 onShowNoteListSheet = onShowNoteListSheet,
+                bgmInfo = bgmInfo,
+                bgmInfoList = bgmInfoList,
                 relatedVideos = relatedVideos,
                 onlineCount = onlineCount,
                 showOnlineCount = showOnlineCount,
@@ -2246,6 +2283,8 @@ private fun VideoHeaderContent(
     aiSummaryPrompt: com.android.purebilibili.feature.video.viewmodel.AiSummaryPromptState? = null,
     onShowAiSummarySheet: () -> Unit = {},
     onShowNoteListSheet: () -> Unit = {},
+    bgmInfo: BgmInfo? = null,
+    bgmInfoList: List<BgmInfo> = emptyList(),
     relatedVideos: List<RelatedVideo> = emptyList(),
     onTimestampClick: ((Long) -> Unit)? = null,
     onBgmClick: (BgmInfo) -> Unit = {},
@@ -2297,6 +2336,11 @@ private fun VideoHeaderContent(
         VideoTitleWithDesc(
             info = info,
             videoTags = videoTags,
+            bgmList = com.android.purebilibili.feature.video.ui.section.resolveDisplayBgmList(
+                bgmInfo = bgmInfo,
+                bgmInfoList = bgmInfoList,
+                videoTags = videoTags,
+            ),
             sponsorLabel = sponsorVideoLabel,
             transitionEnabled = transitionEnabled,  // 🔗 传递共享元素开关
             isQuickReturnLimitedForSharedElements = isQuickReturnLimitedForSharedElements,
@@ -2394,6 +2438,7 @@ internal fun VideoContentTabBar(
     isPagerDraggingProvider: (() -> Boolean)? = null,
     pagerTargetPositionProvider: (() -> Float)? = null,
     showDanmakuActions: Boolean = true,
+    showNearbyAction: Boolean = true,
     measurementLabels: List<String>? = null,
     liquidGlassTabsOffsetX: Dp = 0.dp,
     liquidGlassAlignShellStart: Boolean = false,
@@ -2489,6 +2534,9 @@ internal fun VideoContentTabBar(
                 isPagerDraggingProvider = isPagerDraggingProvider,
                 pagerTargetPositionProvider = pagerTargetPositionProvider,
             )
+
+            // 设备接力入口已统一收敛在播放器顶栏（TopControlBar）与全屏更多菜单中，
+            // 避免与「简介 / 评论」标签栏右侧同时出现两个相同的设备接力图标。
 
             if (showDanmakuActions && shouldShowVideoContentTabBarDanmakuActions(selectedTabIndex)) {
                 Row(

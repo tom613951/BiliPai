@@ -54,6 +54,8 @@ import com.android.purebilibili.core.plugin.js.BiliPaiJsPluginInstallStore
 import com.android.purebilibili.core.plugin.js.BiliPaiJsRuntime
 import com.android.purebilibili.core.plugin.js.ExternalMediaLaunchStore
 import com.android.purebilibili.core.ui.rememberAppBackIcon
+import com.android.purebilibili.core.util.AppFoldPosture
+import com.android.purebilibili.core.util.tabletopUpperViewportLayout
 import com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo
 import com.android.purebilibili.core.util.layoutHinges
 import com.android.purebilibili.danmaku.engine.DanmakuItem
@@ -87,6 +89,7 @@ fun ExternalMediaPlayerScreen(
                 androidx.media3.exoplayer.DefaultRenderersFactory(context).withAppVideoDecoderPreference(context)
             )
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .experimentalSetDynamicSchedulingEnabled(true)
             .build().withAppVideoDecoderDiagnostics(context)
     }
 
@@ -261,10 +264,15 @@ fun ExternalMediaPlayerScreen(
                 .basicPlayerKeyboardShortcuts(player = player)
                 .background(Color.Black)
         ) {
+            val isTabletopPosture = appWindowAdaptiveInfo.posture == AppFoldPosture.Tabletop
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .tabletopUpperViewportLayout(
+                        enabled = isTabletopPosture,
+                        adaptiveInfo = appWindowAdaptiveInfo,
+                    )
             ) {
                 AndroidView(
                     modifier = Modifier

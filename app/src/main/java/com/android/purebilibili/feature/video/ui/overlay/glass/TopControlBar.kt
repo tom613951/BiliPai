@@ -78,7 +78,6 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Cast
 import androidx.compose.material.icons.outlined.Comment
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
@@ -611,6 +610,28 @@ fun TopControlBar(
                         )
                     }
 
+                    val nearbyHandoff = if (com.android.purebilibili.feature.nearby.NEARBY_HANDOFF_ENABLED) {
+                        com.android.purebilibili.feature.nearby.LocalNearbyHandoff.current
+                    } else null
+                    if (nearbyHandoff != null &&
+                        showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.NEARBY_HANDOFF)
+                    ) {
+                        PlayerControlGlassDock(
+                            enabled = isFullscreen || glassControls,
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                        ) {
+                            AppIconButton(
+                                onClick = nearbyHandoff.openDevices,
+                                modifier = Modifier.size(layoutPolicy.buttonSizeDp.dp),
+                            ) {
+                                com.android.purebilibili.feature.nearby.NearbyTopBarIconContent(
+                                    tint = Color.White,
+                                    iconSize = layoutPolicy.iconSizeDp.dp,
+                                )
+                            }
+                        }
+                    }
+
                     if (onCommentClick != null && showTopItem(com.android.purebilibili.core.store.FullscreenTopBarItem.COMMENT)) {
                         ActionIcon(
                             glassEnabled = isFullscreen || glassControls,
@@ -971,10 +992,11 @@ private fun PlayerTitleInfoDock(
     }
 }
 
-private fun formatCurrentTime(): String {
-    val formatter = SimpleDateFormat("HH:mm", Locale.getDefault())
-    return formatter.format(Date())
-}
+private val GLASS_TOP_BAR_TIME_FORMATTER: java.time.format.DateTimeFormatter =
+    java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+
+private fun formatCurrentTime(): String =
+    java.time.LocalTime.now().format(GLASS_TOP_BAR_TIME_FORMATTER)
 
 private fun resolveBatteryLevelPercent(context: Context): Int? {
     return runCatching {

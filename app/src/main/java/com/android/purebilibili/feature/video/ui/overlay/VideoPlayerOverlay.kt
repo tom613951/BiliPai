@@ -1295,6 +1295,56 @@ private fun VideoPlayerOverlayContent(
 
     // 先打开设备面板；只有用户选择搜索 DLNA 时才请求原始局域网权限。
     val onCastClickAction = { showCastDialog = true }
+    var showClipStudioSheet by remember(bvid, cid) { mutableStateOf(false) }
+    var clipStudioInitialPositionMs by remember(bvid, cid) { mutableLongStateOf(0L) }
+    var clipStudioInitialDurationMs by remember(bvid, cid) { mutableLongStateOf(0L) }
+
+    val latestCastAid by rememberUpdatedState(currentAid)
+    val latestCastCid by rememberUpdatedState(cid)
+    val latestCastQuality by rememberUpdatedState(currentQuality)
+    val latestCastVideoUrl by rememberUpdatedState(currentVideoUrl)
+    val latestCastTitle by rememberUpdatedState(videoTitle)
+    val latestCastOwnerName by rememberUpdatedState(videoOwnerName)
+    val latestCastPlayer by rememberUpdatedState(player)
+    DisposableEffect(Unit) {
+        val unregister = com.android.purebilibili.feature.cast.OutputSwitcherRouteBridge
+            .registerDlnaHandoffHandler { dlnaTarget ->
+                val resolution = resolveCastPlayUrl(
+                    context = context,
+                    currentAid = latestCastAid,
+                    cid = latestCastCid,
+                    currentQuality = latestCastQuality,
+                    currentVideoUrl = latestCastVideoUrl,
+                ) ?: return@registerDlnaHandoffHandler Result.failure(
+                    IllegalStateException("投屏地址解析失败")
+                )
+                val startPositionMs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                    latestCastPlayer.currentPosition.coerceAtLeast(0L)
+                }
+                val device = com.android.purebilibili.feature.cast.SsdpDiscovery.SsdpDevice(
+                    location = dlnaTarget.location,
+                    server = dlnaTarget.friendlyName,
+                    usn = dlnaTarget.usn,
+                    st = "urn:schemas-upnp-org:service:AVTransport:1",
+                )
+                val castResult = com.android.purebilibili.feature.cast.SsdpCastClient.cast(
+                    device = device,
+                    mediaUrl = resolution.url,
+                    title = latestCastTitle,
+                    creator = latestCastOwnerName,
+                    startPositionMs = startPositionMs,
+                    autoplay = true,
+                    contentType = resolution.contentType,
+                )
+                if (castResult.isSuccess) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                        latestCastPlayer.pause()
+                    }
+                }
+                castResult
+            }
+        onDispose(unregister)
+    }
 
     val progressSamplingActive = com.android.purebilibili.feature.video.ui.overlay
         .rememberPlayerProgressSamplingActive()
@@ -1959,7 +2009,7 @@ private fun VideoPlayerOverlayContent(
         }
 
         // --- 3.5 🔒 [新增] 屏幕锁定按钮 (仅全屏模式) ---
-        if (isFullscreen && showFullscreenLockButton && (!simplifiedPortraitChrome || isScreenLocked)) {
+        if (isFullscreen && (showFullscreenLockButton || isScreenLocked) && (!simplifiedPortraitChrome || isScreenLocked)) {
             AnimatedVisibility(
                 visible = isVisible && !danmakuComposerVisible,  // 锁定后按控制栏状态自动隐藏
                 enter = fadeIn(OverlayControlFadeSpec),
@@ -1995,6 +2045,49 @@ private fun VideoPlayerOverlayContent(
                 )
             }
         }
+
+        var softwareOverloadBannerVisible by remember(bvid, cid) { mutableStateOf(false) }
+        SoftwareDecodeOverloadOverlayHost(
+            bvid = bvid,
+            cid = cid,
+            debugInfo = debugInfo,
+            currentQuality = currentQuality,
+            qualityIds = qualityIds,
+            qualityLabels = qualityLabels,
+            switchableQualityIds = switchableQualityIds,
+            isScreenLocked = isScreenLocked,
+            suppressTransientOverlays = suppressTransientOverlaysForTransition,
+            onQualitySelected = onQualitySelected,
+            onReloadVideo = actions.onReloadVideo,
+            onVisibilityChanged = { softwareOverloadBannerVisible = it },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(
+                    top = overlayVisualPolicy.statsTopPaddingDp.dp,
+                    start = 12.dp,
+                    end = 12.dp,
+                ),
+        )
+        WeakNetworkDegradeOverlayHost(
+            player = player,
+            mediaKey = "$bvid:$cid",
+            currentQuality = currentQuality,
+            qualityIds = qualityIds,
+            qualityLabels = qualityLabels,
+            switchableQualityIds = switchableQualityIds,
+            isScreenLocked = isScreenLocked,
+            suppressTransientOverlays = suppressTransientOverlaysForTransition,
+            suppressedByHigherPriorityBanner = softwareOverloadBannerVisible,
+            isBufferingSuppressed = isSeekScrubbing || isQualitySwitching,
+            onSelectLowerQuality = { target -> onQualitySelected(target.index) },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(
+                    top = overlayVisualPolicy.statsTopPaddingDp.dp,
+                    start = 12.dp,
+                    end = 12.dp,
+                ),
+        )
 
         val showInsightHud = shouldShowPlaybackInsightHud(
             mode = insightMode,
@@ -2193,92 +2286,103 @@ private fun VideoPlayerOverlayContent(
                 player.playbackState == Player.STATE_BUFFERING || player.playbackState == Player.STATE_ENDED) &&
             !isSeekScrubbing && !endDrawerVisible && !landscapeCommentPanelVisible && !showInsightDetails
 
+        val tabletopUpperHeight = com.android.purebilibili.core.util.LocalTabletopVideoHostHeightDp.current
         CenterPlaybackControl(
             visible = showCenterPlaybackControl,
             loading = showCenterLoadingBadge,
             isPlaying = effectiveIsPlaying,
             onPlayPause = { togglePlayPause() },
             diameter = if (isFullscreen) 72.dp else 56.dp,
-            viewportTopInset = if (isFullscreen) 0.dp else statusBarBackdropHeight,
+            // 悬停态将交互式播放按钮下沉到下半屏触控区，避开水平折痕且更易单手点按。
+            modifier = if (tabletopUpperHeight != null) {
+                Modifier.padding(top = tabletopUpperHeight, bottom = 72.dp)
+            } else {
+                Modifier
+            },
+            viewportTopInset = if (isFullscreen || tabletopUpperHeight != null) 0.dp else statusBarBackdropHeight,
         )
 
-        // --- 5.4  缓冲加载指示器 ---
-        AnimatedVisibility(
-            visible = showRebufferingIndicator && !showCenterPlaybackControl,
-            modifier = Modifier.align(Alignment.Center),
-            // 首帧前整段不参与合成，出现时也硬切：淡入会让「已有画面后的再缓冲」
-            // 看起来像又一次进场闪烁。
-            enter = EnterTransition.None,
-            exit = fadeOut(OverlayControlFadeSpec)
-        ) {
-            if (loadingIndicatorsActive && !showCenterPlaybackControl) {
-                BiliTvBufferingIndicator(
-                    tint = centerLoadingVisualState.indicatorColor,
-                    bufferedProvider = { progressProvider().buffered },
-                )
-            }
+        val centerIndicatorHostModifier = if (tabletopUpperHeight != null) {
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().height(tabletopUpperHeight)
+        } else {
+            Modifier.fillMaxSize()
         }
+        Box(modifier = centerIndicatorHostModifier, contentAlignment = Alignment.Center) {
+            // --- 5.4  缓冲加载指示器 ---
+            AnimatedVisibility(
+                visible = showRebufferingIndicator && !showCenterPlaybackControl,
+                // 首帧前整段不参与合成，出现时也硬切：淡入会让「已有画面后的再缓冲」
+                // 看起来像又一次进场闪烁。
+                enter = EnterTransition.None,
+                exit = fadeOut(OverlayControlFadeSpec)
+            ) {
+                if (loadingIndicatorsActive && !showCenterPlaybackControl) {
+                    BiliTvBufferingIndicator(
+                        tint = centerLoadingVisualState.indicatorColor,
+                        bufferedProvider = { progressProvider().buffered },
+                    )
+                }
+            }
 
-        AnimatedVisibility(
-            visible = hasRenderedFirstFrame && centerLoadingUiState != null && !showCenterPlaybackControl,
-            modifier = Modifier.align(Alignment.Center),
-            enter = fadeIn(OverlayControlFadeSpec),
-            exit = fadeOut(OverlayControlFadeSpec)
-        ) {
-            if (!loadingIndicatorsActive || showCenterPlaybackControl) return@AnimatedVisibility
-            val loadingState = centerLoadingUiState ?: return@AnimatedVisibility
-            Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(
-                        horizontal = overlayVisualPolicy.qualitySwitchContentHorizontalPaddingDp.dp,
-                        vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
-                    )
-                ) {
-                    BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
-                    Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
-                    AppText(
-                        text = loadingState.primaryText,
-                        color = centerLoadingVisualState.primaryTextColor,
-                        fontSize = overlayVisualPolicy.qualitySwitchMessageFontSp.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    loadingState.secondaryText?.let { secondaryText ->
-                        Spacer(modifier = Modifier.height(6.dp))
-                        AppText(
-                            text = secondaryText,
-                            color = centerLoadingVisualState.secondaryTextColor,
-                            fontSize = (overlayVisualPolicy.qualitySwitchMessageFontSp - 1).sp,
-                            fontWeight = FontWeight.Medium
+            AnimatedVisibility(
+                visible = hasRenderedFirstFrame && centerLoadingUiState != null && !showCenterPlaybackControl,
+                enter = fadeIn(OverlayControlFadeSpec),
+                exit = fadeOut(OverlayControlFadeSpec)
+            ) {
+                if (!loadingIndicatorsActive || showCenterPlaybackControl) return@AnimatedVisibility
+                val loadingState = centerLoadingUiState ?: return@AnimatedVisibility
+                Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(
+                            horizontal = overlayVisualPolicy.qualitySwitchContentHorizontalPaddingDp.dp,
+                            vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
                         )
+                    ) {
+                        BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
+                        Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
+                        AppText(
+                            text = loadingState.primaryText,
+                            color = centerLoadingVisualState.primaryTextColor,
+                            fontSize = overlayVisualPolicy.qualitySwitchMessageFontSp.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        loadingState.secondaryText?.let { secondaryText ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            AppText(
+                                text = secondaryText,
+                                color = centerLoadingVisualState.secondaryTextColor,
+                                fontSize = (overlayVisualPolicy.qualitySwitchMessageFontSp - 1).sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // --- 5.5  清晰度切换中 Loading 指示器 ---
-        AnimatedVisibility(
-            visible = isQualitySwitching && centerLoadingUiState == null && !showCenterPlaybackControl,
-            modifier = Modifier.align(Alignment.Center),
-            enter = fadeIn(OverlayControlFadeSpec),
-            exit = fadeOut(OverlayControlFadeSpec)
-        ) {
-            Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(
-                        horizontal = overlayVisualPolicy.qualitySwitchContentHorizontalPaddingDp.dp,
-                        vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
-                    )
-                ) {
-                    BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
-                    Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
-                    AppText(
-                        text = "正在切换清晰度...",
-                        color = centerLoadingVisualState.primaryTextColor,
-                        fontSize = overlayVisualPolicy.qualitySwitchMessageFontSp.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+            // --- 5.5  清晰度切换中 Loading 指示器 ---
+            AnimatedVisibility(
+                visible = isQualitySwitching && centerLoadingUiState == null && !showCenterPlaybackControl,
+                enter = fadeIn(OverlayControlFadeSpec),
+                exit = fadeOut(OverlayControlFadeSpec)
+            ) {
+                Box(modifier = Modifier.padding(overlayVisualPolicy.qualitySwitchOuterPaddingDp.dp)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(
+                            horizontal = overlayVisualPolicy.qualitySwitchContentHorizontalPaddingDp.dp,
+                            vertical = overlayVisualPolicy.qualitySwitchContentVerticalPaddingDp.dp
+                        )
+                    ) {
+                        BiliTvAnimatedBufferingIndicator(tint = centerLoadingVisualState.indicatorColor)
+                        Spacer(modifier = Modifier.height(overlayVisualPolicy.qualitySwitchContentSpacingDp.dp))
+                        AppText(
+                            text = "正在切换清晰度...",
+                            color = centerLoadingVisualState.primaryTextColor,
+                            fontSize = overlayVisualPolicy.qualitySwitchMessageFontSp.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -2739,6 +2843,28 @@ private fun VideoPlayerOverlayContent(
                     onDownloadAudio = {
                         onDownloadAudio()
                     },
+                    onOpenClipStudio = if (currentVideoUrl.isNotBlank() || currentAudioUrl.isNotBlank()) {
+                        {
+                            clipStudioInitialPositionMs = effectiveProgressState.value.current
+                            clipStudioInitialDurationMs = effectiveProgressState.value.duration
+                            showClipStudioSheet = true
+                        }
+                    } else null,
+                    onOpenInAdjacentWindow = if (
+                        bvid.isNotBlank() &&
+                        com.android.purebilibili.core.ui.adaptive.canLaunchAdjacentMultiInstance(
+                            isLargeScreen = com.android.purebilibili.core.util.LocalWindowSizeClass.current.isTablet,
+                            isInMultiWindowMode = com.android.purebilibili.core.ui.adaptive.isActivityMultiWindowCompat(context),
+                        )
+                    ) {
+                        {
+                            com.android.purebilibili.core.ui.adaptive.launchVideoInAdjacentWindow(
+                                context = context,
+                                bvid = bvid,
+                                cid = cid,
+                            )
+                        }
+                    } else null,
                     onWatchLater = menuSession.onWatchLater,
                     onShowNotes = menuSession.onShowNotes,
                     onDownloadVideo = menuSession.onDownloadVideo,
@@ -2755,6 +2881,9 @@ private fun VideoPlayerOverlayContent(
                     playerVolume = menuSession.playerVolume,
                     onPlayerVolumeChange = menuSession.onPlayerVolumeChange,
                     playerVolumeUnavailableReason = menuSession.playerVolumeUnavailableReason,
+                    audioEffectPreset = menuSession.audioEffectPreset,
+                    onAudioEffectPresetChange = menuSession.onAudioEffectPresetChange,
+                    spatialAudioBadge = menuSession.spatialAudioBadge,
                     isBackgroundPlaybackEnabled = menuSession.isBackgroundPlaybackEnabled,
                     onBackgroundPlaybackChange = menuSession.onBackgroundPlaybackChange,
                     playbackOrderLabel = playbackCompletionBehavior.label,
@@ -2767,6 +2896,18 @@ private fun VideoPlayerOverlayContent(
                     onDismiss = { showVideoSettings = false }
                 )
             }
+        }
+
+        if (showClipStudioSheet) {
+            com.android.purebilibili.feature.video.clip.VideoClipStudioSheet(
+                videoTitle = title,
+                videoUrl = currentVideoUrl,
+                audioUrl = currentAudioUrl,
+                initialPositionMs = clipStudioInitialPositionMs,
+                totalDurationMs = clipStudioInitialDurationMs.takeIf { it > 0L }
+                    ?: effectiveProgressState.value.duration,
+                onDismiss = { showClipStudioSheet = false },
+            )
         }
 
 

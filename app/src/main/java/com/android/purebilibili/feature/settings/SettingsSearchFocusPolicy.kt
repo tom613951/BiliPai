@@ -92,6 +92,7 @@ internal fun resolveSettingsSectionFocusIndex(
             "appearance.home_up_avatars_visible",
             "appearance.home_up_badges_visible" -> HOME_LIST_CARD_ITEMS
             ContentDisplaySetting.KEEP_RECOMMEND,
+            "appearance.home_refresh_count",
             "appearance.home_refresh_tip_visible",
             "appearance.refresh_locator_duration",
             "appearance.home_refresh_undo_visible",
@@ -206,6 +207,7 @@ internal fun resolvePlaybackSettingsItemScrollIndex(
     page: PlaybackSettingsPage,
     focusId: String,
     settingId: String?,
+    includeNearbyHandoff: Boolean = com.android.purebilibili.feature.nearby.NEARBY_HANDOFF_ENABLED,
 ): Int? {
     val sections = when (page) {
         PlaybackSettingsPage.PLAYBACK -> playbackSettingsSectionKeys
@@ -227,7 +229,13 @@ internal fun resolvePlaybackSettingsItemScrollIndex(
         for (key in sections) {
             add(key + "_title")
             when (key) {
-                SettingsSearchFocusIds.PLAYBACK_MINI_PLAYER -> PlaybackMiniPlayerGroup.entries.forEach { add(it.itemKey) }
+                SettingsSearchFocusIds.PLAYBACK_MINI_PLAYER -> {
+                    PlaybackMiniPlayerGroup.entries.forEach { add(it.itemKey) }
+                    if (page == PlaybackSettingsPage.PLAYBACK && includeNearbyHandoff) {
+                        add("playback_nearby_handoff_title")
+                        add("playback_nearby_handoff")
+                    }
+                }
                 SettingsSearchFocusIds.PLAYBACK_FULLSCREEN -> PlaybackFullscreenGroup.entries.forEach { add(it.itemKey) }
                 else -> add(key)
             }
@@ -296,6 +304,7 @@ internal fun resolveSettingsSceneDetailFocus(
     SettingsSearchTarget.DATA_BACKUP,
     SettingsSearchTarget.PRIVACY_PERMISSION,
     SettingsSearchTarget.MESSAGE_NOTIFICATION,
+    SettingsSearchTarget.CUSTOM_PUSH,
     SettingsSearchTarget.ABOUT_SUPPORT,
     SettingsSearchTarget.APPEARANCE,
     SettingsSearchTarget.ANIMATION,
@@ -311,7 +320,7 @@ internal fun resolveSettingsSceneDetailFocus(
     SettingsSearchTarget.IMAGE_SAVE_PATH,
     SettingsSearchTarget.CLEAR_CACHE,
     SettingsSearchTarget.PLUGINS,
-    // 设备接力未开发完成：入口隐藏后与其他隐藏目标一样映射空焦点，恢复开关时随组生效。
+    // 设备接力从设置搜索点击时直接弹出设备面板，无需滚动焦点。
     SettingsSearchTarget.NEARBY_HANDOFF,
     SettingsSearchTarget.EXPORT_LOGS,
     SettingsSearchTarget.OPEN_SOURCE_LICENSES,

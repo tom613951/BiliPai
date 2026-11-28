@@ -512,6 +512,7 @@ private fun VideoTitleWithInlineSponsor(
 fun VideoTitleWithDesc(
     info: ViewInfo,
     videoTags: List<VideoTag> = emptyList(),  //  视频标签
+    bgmList: List<BgmInfo> = emptyList(),
     onlineCount: String = "",
     showOnlineCount: Boolean = true,
     transitionEnabled: Boolean = false,  // 🔗 共享元素过渡开关
@@ -538,6 +539,9 @@ fun VideoTitleWithDesc(
     val argueMsgShown by com.android.purebilibili.core.store.SettingsManager
         .getVideoArgueMsgShown(context)
         .collectAsStateWithLifecycle(initialValue = true)
+    val showDetailBgm by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getVideoDetailBgmVisible(context)
+    }.collectAsStateWithLifecycle(initialValue = true)
     // 展开状态改为“用户意图优先”：用户手动切换过之后，晚到的描述/标签数据不再重置它。
     // 原实现把 videoTags.size 放进 remember 的 key，标签异步回填时会重算初始值，
     // 既会覆盖用户的手动收起，也会让标签区重新播放展开动画并下推下方内容。
@@ -754,6 +758,7 @@ fun VideoTitleWithDesc(
                                 )
                             }
                         }
+                        if (!com.android.purebilibili.core.ui.LocalAppThemeConfig.current.focusViewingHideStatsEnabled) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = viewsModifier) {
                             AppIcon(
                                 imageVector = Icons.Outlined.PlayCircleOutline,
@@ -806,6 +811,7 @@ fun VideoTitleWithDesc(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AppContentColors.secondaryText()
                             )
+                        }
                         }
 
                     }
@@ -878,11 +884,6 @@ fun VideoTitleWithDesc(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                videoBadges.forEach { badge ->
-                    VideoDetailBadgeChip(
-                        text = badge,
-                    )
-                }
                 if (showDeclarationRows) {
                     if (argueMsg.isNotBlank()) {
                         VideoArgueMsgRow(argueMsg = argueMsg, modifier = Modifier.align(Alignment.CenterVertically))
@@ -894,6 +895,11 @@ fun VideoTitleWithDesc(
                         )
                     }
                 }
+                videoBadges.forEach { badge ->
+                    VideoDetailBadgeChip(
+                        text = badge,
+                    )
+                }
                 honorChips.forEach { (_, text, jumpUrl) ->
                     VideoHonorChip(
                         text = text,
@@ -903,7 +909,13 @@ fun VideoTitleWithDesc(
             }
         }
 
-        // BGM 不再单独成卡：与 PiliPlus 一致，通过标签流中的 BGM 标签进入音乐详情。
+        if (showDetailBgm && bgmList.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            InlineBgmSection(
+                bgmList = bgmList,
+                onBgmClick = onBgmClick,
+            )
+        }
 
         if (showDescriptionAndTags) {
             VideoDescriptionAndTags(
@@ -934,6 +946,12 @@ fun VideoDescriptionAndTags(
     onTagClick: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val showDetailBgm by remember(context) {
+        com.android.purebilibili.core.store.SettingsManager.getVideoDetailBgmVisible(context)
+    }.collectAsStateWithLifecycle(initialValue = true)
+    val visibleVideoTags = remember(videoTags, showDetailBgm) {
+        filterVideoDetailTags(videoTags = videoTags, showBgm = showDetailBgm)
+    }
     Column(modifier = modifier) {
         //  BV 号 - PiliPlus 同款：展开后独占一行，位于简介之前，点击复制
         androidx.compose.animation.AnimatedVisibility(
@@ -1025,7 +1043,7 @@ fun VideoDescriptionAndTags(
 
         //  Tags - 默认隐藏，展开后显示
         androidx.compose.animation.AnimatedVisibility(
-            visible = (expanded || showCollapsedPreview) && videoTags.isNotEmpty(),
+            visible = (expanded || showCollapsedPreview) && visibleVideoTags.isNotEmpty(),
             enter = if (animateLayout) {
                 folmeExpandEnterTransition(useMiuixSpring)
             } else {
@@ -1053,7 +1071,7 @@ fun VideoDescriptionAndTags(
                         horizontalArrangement = Arrangement.spacedBy(tagMetrics.itemSpacingHorizontal),
                         verticalArrangement = Arrangement.spacedBy(tagMetrics.itemSpacingVertical)
                     ) {
-                        videoTags.forEach { tag ->
+                        visibleVideoTags.forEach { tag ->
                             val bgm = remember(tag) { resolveBgmTagInfo(tag) }
                             val tagControl = com.android.purebilibili.navigation3.rememberSystemWindowNavigationControl(
                                 target = if (bgm != null) {
@@ -1342,13 +1360,15 @@ fun UpInfoSection(
 
                 if (showInlineOwnerIdentity) {
                     if (info.owner.face.isNotBlank()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(FormatUtils.fixImageUrl(
-                                    info.owner.face
-                                ))
+                        val ownerFaceContext = LocalContext.current
+                        val ownerFaceRequest = remember(ownerFaceContext, info.owner.face) {
+                            ImageRequest.Builder(ownerFaceContext)
+                                .data(FormatUtils.fixImageUrl(info.owner.face))
                                 .crossfade(false)
-                                .build(),
+                                .build()
+                        }
+                        AsyncImage(
+                            model = ownerFaceRequest,
                             contentDescription = "UP主头像",
                             modifier = Modifier
                                 .padding(horizontal = 2.dp)
@@ -1667,14 +1687,16 @@ private fun CreatorTeamMemberChip(
             modifier = memberControl.modifier,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val staffFaceContext = LocalContext.current
+            val staffFaceRequest = remember(staffFaceContext, member.face) {
+                ImageRequest.Builder(staffFaceContext)
+                    .data(FormatUtils.fixImageUrl(member.face))
+                    .crossfade(false)
+                    .build()
+            }
             Box(modifier = Modifier.size(36.dp)) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(FormatUtils.fixImageUrl(
-                            member.face
-                        ))
-                        .crossfade(false)
-                        .build(),
+                    model = staffFaceRequest,
                     contentDescription = "${member.name} 头像",
                     modifier = Modifier
                         .fillMaxSize()
@@ -1822,6 +1844,238 @@ fun DescriptionSection(desc: String) {
             }
         }
     }
+}
+
+internal fun resolveDisplayBgmList(
+    bgmInfo: BgmInfo?,
+    bgmInfoList: List<BgmInfo>,
+    videoTags: List<com.android.purebilibili.data.model.response.VideoTag> = emptyList(),
+): List<BgmInfo> {
+    val apiBgmList = bgmInfoList
+        .ifEmpty { listOfNotNull(bgmInfo) }
+        .filter { it.musicTitle.isNotBlank() || it.musicId.isNotBlank() }
+    if (apiBgmList.isNotEmpty()) return apiBgmList
+    return videoTags.mapNotNull(::resolveBgmTagInfo)
+}
+
+@Composable
+private fun InlineBgmSection(
+    bgmList: List<BgmInfo>,
+    onBgmClick: (BgmInfo) -> Unit = {},
+) {
+    if (bgmList.isEmpty()) return
+
+    var showPickerSheet by remember(bgmList.map(BgmInfo::musicId)) { mutableStateOf(false) }
+    val leadSong = bgmList.first()
+    val headerText = remember(bgmList, leadSong) {
+        buildString {
+            append("发现音乐")
+            val title = leadSong.musicTitle
+                .removePrefix("发现")
+                .trim()
+                .ifBlank { "未知音乐" }
+            append("《")
+            append(title)
+            append("》")
+            if (bgmList.size > 1) {
+                append("等")
+                append(bgmList.size)
+                append("首音乐")
+            }
+            val actor = leadSong.actor.takeIf { it.isNotBlank() && bgmList.size == 1 }
+            if (actor != null) {
+                append(" · ")
+                append(actor)
+            }
+        }
+    }
+
+    BgmInfoRow(
+        title = headerText,
+        coverUrl = leadSong.resolvedCoverUrl,
+        coverSize = 22.dp,
+        showChevron = bgmList.size > 1,
+        onClick = {
+            if (bgmList.size == 1) onBgmClick(leadSong) else showPickerSheet = true
+        },
+    )
+
+    if (showPickerSheet) {
+        BgmListPickerSheet(
+            bgmList = bgmList,
+            onDismiss = { showPickerSheet = false },
+            onBgmClick = { bgm ->
+                showPickerSheet = false
+                onBgmClick(bgm)
+            },
+        )
+    }
+}
+
+@Composable
+fun BgmInfoRow(
+    title: String,
+    subtitle: String? = null,
+    coverUrl: String = "",
+    coverSize: androidx.compose.ui.unit.Dp = 22.dp,
+    showChevron: Boolean = false,
+    onClick: () -> Unit = {},
+) {
+    val context = LocalContext.current
+    val resolvedCover = remember(coverUrl) {
+        coverUrl.trim().takeIf { it.isNotBlank() }?.let { FormatUtils.fixImageUrl(it) }.orEmpty()
+    }
+    val coverShape = RoundedCornerShape(if (coverSize >= 32.dp) 8.dp else 5.dp)
+    AppSurface(
+        color = AppContentColors.accent().copy(alpha = 0.08f),
+        shape = com.android.purebilibili.core.ui.AppShapes.container(
+            com.android.purebilibili.core.ui.ContainerLevel.Chip
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(coverSize)
+                    .clip(coverShape)
+                    .background(AppContentColors.accent().copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                AppIcon(
+                    imageVector = Icons.Outlined.MusicNote,
+                    contentDescription = "BGM",
+                    tint = AppContentColors.accent().copy(alpha = 0.85f),
+                    modifier = Modifier.size(if (coverSize >= 32.dp) 18.dp else 13.dp),
+                )
+                if (resolvedCover.isNotBlank()) {
+                    val bgmCoverRequest = remember(context, resolvedCover) {
+                        coil3.request.ImageRequest.Builder(context)
+                            .data(resolvedCover)
+                            .crossfade(true)
+                            .build()
+                    }
+                    AsyncImage(
+                        model = bgmCoverRequest,
+                        contentDescription = title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                AppText(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    color = AppContentColors.accent().copy(alpha = 0.92f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                subtitle?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    AppText(
+                        text = it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AppContentColors.secondaryText(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (showChevron) {
+                AppIcon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = AppContentColors.accent().copy(alpha = 0.72f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BgmListPickerSheet(
+    bgmList: List<BgmInfo>,
+    onDismiss: () -> Unit,
+    onBgmClick: (BgmInfo) -> Unit,
+) {
+    var resolvedCovers by remember(bgmList.map(BgmInfo::musicId)) {
+        mutableStateOf<Map<String, String>>(emptyMap())
+    }
+    LaunchedEffect(bgmList) {
+        val missingIds = bgmList
+            .filter { it.resolvedCoverUrl.isBlank() && it.musicId.isNotBlank() }
+            .map { it.musicId }
+            .distinct()
+        for (musicId in missingIds) {
+            val cover = com.android.purebilibili.data.repository.ViewGrpcRepository
+                .getBgmDetail(musicId = musicId)
+                .getOrNull()
+                ?.mvCover
+                ?.trim()
+                .orEmpty()
+            if (cover.isNotBlank()) {
+                resolvedCovers = resolvedCovers + (musicId to cover)
+            }
+        }
+    }
+    com.android.purebilibili.core.ui.AppModalBottomSheet(
+        onDismissRequest = onDismiss,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AppText(
+                text = "发现音乐（${bgmList.size}）",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = AppContentColors.primaryText(),
+            )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                itemsIndexed(
+                    items = bgmList,
+                    key = { index, bgm -> "${index}:${bgm.musicId.ifBlank { bgm.musicTitle }}" },
+                ) { _, bgm ->
+                    val displayTitle = bgm.musicTitle.removePrefix("发现").trim().ifBlank { "未知音乐" }
+                    val itemCoverUrl = bgm.resolvedCoverUrl.ifBlank { resolvedCovers[bgm.musicId].orEmpty() }
+                    BgmInfoRow(
+                        title = displayTitle,
+                        subtitle = bgm.actor.takeIf { it.isNotBlank() },
+                        coverUrl = itemCoverUrl,
+                        coverSize = 38.dp,
+                        showChevron = true,
+                        onClick = { onBgmClick(bgm) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal fun filterVideoDetailTags(
+    videoTags: List<com.android.purebilibili.data.model.response.VideoTag>,
+    showBgm: Boolean,
+): List<com.android.purebilibili.data.model.response.VideoTag> {
+    if (showBgm) return videoTags
+    return videoTags.filterNot { it.tag_type == "bgm" }
 }
 
 internal fun resolveBgmTagInfo(tag: com.android.purebilibili.data.model.response.VideoTag): BgmInfo? =

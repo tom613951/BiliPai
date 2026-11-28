@@ -45,7 +45,7 @@ enum class SettingsRootCategory(
     ),
     PLUGINS_EXTENSIONS(
         title = "插件中心",
-        subtitle = "插件、装扮和扩展工坊",
+        subtitle = "插件、装扮和已安装扩展",
         searchTarget = SettingsSearchTarget.PLUGINS,
     ),
     GAMEPAD_CONTROL(
@@ -139,7 +139,8 @@ internal fun resolveSettingsRootCategoryForSearchTarget(
     SettingsSearchTarget.SPACE_PRIVACY,
     SettingsSearchTarget.LOGIN_ACTIVITY,
     SettingsSearchTarget.BLOCKED_LIST,
-    SettingsSearchTarget.MESSAGE_NOTIFICATION -> SettingsRootCategory.PRIVACY_PERMISSION
+    SettingsSearchTarget.MESSAGE_NOTIFICATION,
+    SettingsSearchTarget.CUSTOM_PUSH -> SettingsRootCategory.PRIVACY_PERMISSION
 
     SettingsSearchTarget.ANIMATION -> SettingsRootCategory.ANIMATION_HAPTICS
 

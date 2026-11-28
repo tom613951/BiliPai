@@ -552,8 +552,13 @@ internal fun normalizeDanmakuDisplayArea(value: Float): Float {
 internal fun normalizeDanmakuFontScale(value: Float): Float =
     if (value.isFinite()) value.coerceIn(0.5f, 2.5f) else 1f
 
-/** 推荐流兜底条数；实际值由 HomeViewModel 按网格列数换算。 */
-internal const val DEFAULT_HOME_REFRESH_COUNT = 12
+internal const val DEFAULT_HOME_REFRESH_COUNT = 20
+internal const val MIN_HOME_REFRESH_COUNT = 10
+internal const val MAX_HOME_REFRESH_COUNT = 30
+
+internal fun normalizeHomeRefreshCount(count: Int): Int {
+    return count.coerceIn(MIN_HOME_REFRESH_COUNT, MAX_HOME_REFRESH_COUNT)
+}
 
 enum class HomeFeedCardWidthPreset(
     val value: Int,
@@ -699,6 +704,7 @@ data class HomeSettings(
     val hideTopTabs: Boolean = false,
     val homeTopRightAction: HomeTopRightAction = HomeTopRightAction.SETTINGS,
     val homeAvatarDrawerEnabled: Boolean = false,
+    val homeTopTabSwipeDrawerEnabled: Boolean = true,
     val homeTopLayoutOrder: HomeTopLayoutOrder = HomeTopLayoutOrder.SEARCH_THEN_TABS,
     val isHeaderBlurEnabled: Boolean = false,
     val headerBlurMode: HomeHeaderBlurMode = HomeHeaderBlurMode.ALWAYS_OFF,
@@ -709,6 +715,7 @@ data class HomeSettings(
     val bottomBarLiquidGlassPreset: BottomBarLiquidGlassPreset =
         BottomBarLiquidGlassPreset.BILIPAI_TUNED,
     val isBottomBarSearchEnabled: Boolean = false,
+    val bottomBarSearchInsideDock: Boolean = false,
     val keepHomeTopSearchWithBottomSearch: Boolean = false,
     val listScopedSearchEnabled: Boolean = false,
     val linkedDockMergeOnScrollEnabled: Boolean = true,
@@ -743,6 +750,7 @@ data class HomeSettings(
     val homeHeroCarouselEnabled: Boolean = false,
     val homeHeroCarouselAutoplayEnabled: Boolean = false,
     val homeRefreshTipVisible: Boolean = true, // 推荐流刷新后在旧内容分界处显示提示
+    val homeRefreshCount: Int = DEFAULT_HOME_REFRESH_COUNT,
     val refreshLocatorDurationSeconds: Int = 3, // 0 表示不自动收起
     val refreshLocatorPositionX: Float = 1f,
     val refreshLocatorPositionY: Float = 1f,
@@ -851,6 +859,8 @@ data class AppThemeSettings(
         AppScreenshotGestureMode.TOP_RIGHT_TWO_FINGER_LONG_PRESS,
     val appScreenshotCaptureMode: AppScreenshotCaptureMode =
         AppScreenshotCaptureMode.FULL_WINDOW,
+    val appScreenshotWatermarkEnabled: Boolean = false,
+    val globalScreenshotShareOverlayEnabled: Boolean = true,
     val appIconStyle: AppIconStyle = AppIconStyle.AUTO,
     val appLineIconColor: Int? = null,
     val appListItemStyle: AppListItemStyle = AppListItemStyle.AUTO,
@@ -1047,9 +1057,14 @@ enum class DanmakuPanelWidthMode(val value: Int, val label: String, val widthFra
     }
 }
 
-enum class PortraitDanmakuDisplayAreaMode(val value: Int, val label: String) {
-    VIDEO_VIEWPORT(0, "视频画面"),
-    SCREEN_TOP(1, "视频上方");
+enum class PortraitDanmakuDisplayAreaMode(
+    val value: Int,
+    val label: String,
+    val description: String,
+) {
+    VIDEO_VIEWPORT(0, "视频画面", "仅在视频画面内显示，按显示区域比例排布"),
+    SCREEN_TOP(1, "视频上方", "横屏视频优先铺满上方留白区，不受显示区域比例压缩"),
+    FULL_SCREEN(2, "全屏", "覆盖整个竖屏区域，按显示区域比例排布");
 
     companion object {
         fun fromValue(value: Int): PortraitDanmakuDisplayAreaMode =
@@ -1685,6 +1700,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_HIDE_TOP_TABS = booleanPreferencesKey("hide_top_tabs")
     private val KEY_HOME_TOP_RIGHT_ACTION = intPreferencesKey("home_top_right_action")
     private val KEY_HOME_AVATAR_DRAWER_ENABLED = booleanPreferencesKey("home_avatar_drawer_enabled")
+    private val KEY_HOME_TOP_TAB_SWIPE_DRAWER_ENABLED = booleanPreferencesKey("home_top_tab_swipe_drawer_enabled")
     //  [新增] 顶部标签自定义 - 顺序和可见性
     private val KEY_TOP_TAB_ORDER = stringPreferencesKey("top_tab_order")
     private val KEY_TOP_TAB_VISIBLE_TABS = stringPreferencesKey("top_tab_visible_tabs")
@@ -1693,6 +1709,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_DYNAMIC_TAB_VISIBLE_TABS = stringPreferencesKey("dynamic_tab_visible_tabs")
     private val KEY_DYNAMIC_TAB_ORDER = stringPreferencesKey("dynamic_tab_order")
     private val KEY_LOUDNESS_NORMALIZATION_ENABLED = booleanPreferencesKey("loudness_normalization_enabled")
+    private val KEY_SLEEP_TIMER_FADE_OUT_ENABLED = booleanPreferencesKey("sleep_timer_fade_out_enabled")
+    private val KEY_SLEEP_TIMER_FADE_DURATION_SEC = intPreferencesKey("sleep_timer_fade_duration_sec")
+    private val KEY_SETTINGS_RECIPE_GUIDES_ENABLED = booleanPreferencesKey("settings_recipe_guides_enabled")
+    private val KEY_FOCUS_VIEWING_HIDE_STATS_ENABLED = booleanPreferencesKey("focus_viewing_hide_stats_enabled")
     private val KEY_AUDIO_SPECTRUM_ENABLED = booleanPreferencesKey("audio_spectrum_enabled")
     private val KEY_STARTUP_AUTO_PLAY_ENABLED = booleanPreferencesKey("startup_auto_play_enabled")
     private val KEY_DYNAMIC_IMAGE_PREVIEW_TEXT_VISIBLE =
@@ -1771,6 +1791,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         booleanPreferencesKey("home_search_liquid_glass_enabled")
     private val KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED = booleanPreferencesKey("bottom_bar_liquid_glass_enabled")
     private val KEY_BOTTOM_BAR_SEARCH_ENABLED = booleanPreferencesKey("bottom_bar_search_enabled")
+    private val KEY_BOTTOM_BAR_SEARCH_INSIDE_DOCK = booleanPreferencesKey("bottom_bar_search_inside_dock")
     private val KEY_KEEP_HOME_TOP_SEARCH = booleanPreferencesKey("keep_home_top_search_with_bottom_search")
     private val KEY_BOTTOM_BAR_SCROLL_COMPACT_ENABLED = booleanPreferencesKey("bottom_bar_scroll_compact_enabled")
     private val KEY_LINKED_DOCK_MERGE_ON_SCROLL_ENABLED =
@@ -1952,6 +1973,8 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         booleanPreferencesKey("detailed_comment_time_enabled")
     private val KEY_COMMENT_REPLY_PREVIEW_VISIBLE =
         booleanPreferencesKey("comment_reply_preview_visible")
+    private val KEY_COMMENT_HIDE_SEARCH_KEYWORDS =
+        booleanPreferencesKey("comment_hide_search_keywords")
 
     /** 偏好的调用方作用域之外落盘专用；进程存续期即作用域生命期。 */
     private val commentPreferenceWriteScope =
@@ -1981,6 +2004,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_VIDEO_INFO_DEFAULT_EXPANDED = booleanPreferencesKey("video_info_default_expanded")
     private val KEY_VIDEO_ARGUE_MSG_SHOWN = booleanPreferencesKey("video_argue_msg_shown")
     private val KEY_VIDEO_TAG_SIZE_PRESET = intPreferencesKey("video_tag_size_preset")
+    private val KEY_VIDEO_DETAIL_BGM_VISIBLE = booleanPreferencesKey("video_detail_bgm_visible")
     private val KEY_VIDEO_DETAIL_CHROME_SCROLL_HIDE_ENABLED =
         booleanPreferencesKey("video_detail_chrome_scroll_hide_enabled")
     private const val VIDEO_NOTE_CACHE_PREFS = "video_note_settings"
@@ -2047,6 +2071,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 preferences[KEY_HOME_TOP_RIGHT_ACTION] ?: HomeTopRightAction.SETTINGS.value
             ),
             homeAvatarDrawerEnabled = preferences[KEY_HOME_AVATAR_DRAWER_ENABLED] ?: false,
+            homeTopTabSwipeDrawerEnabled = preferences[KEY_HOME_TOP_TAB_SWIPE_DRAWER_ENABLED] ?: true,
             homeTopLayoutOrder = HomeTopLayoutOrder.fromValue(
                 preferences[KEY_HOME_TOP_LAYOUT_ORDER] ?: HomeTopLayoutOrder.SEARCH_THEN_TABS.value
             ),
@@ -2059,6 +2084,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     ?: (preferences[KEY_TOP_BAR_LIQUID_GLASS_ENABLED] ?: false),
             isBottomBarLiquidGlassEnabled = preferences[KEY_BOTTOM_BAR_LIQUID_GLASS_ENABLED] ?: legacyLiquidGlassEnabled,
             isBottomBarSearchEnabled = preferences[KEY_BOTTOM_BAR_SEARCH_ENABLED] ?: false,
+            bottomBarSearchInsideDock = preferences[KEY_BOTTOM_BAR_SEARCH_INSIDE_DOCK] ?: false,
             keepHomeTopSearchWithBottomSearch = preferences[KEY_KEEP_HOME_TOP_SEARCH] ?: false,
             linkedDockMergeOnScrollEnabled = preferences[KEY_LINKED_DOCK_MERGE_ON_SCROLL_ENABLED] ?: true,
             bottomBarScrollCompactEnabled = preferences[KEY_BOTTOM_BAR_SCROLL_COMPACT_ENABLED] ?: true,
@@ -2110,6 +2136,9 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             homeHeroCarouselAutoplayEnabled =
                 preferences[KEY_HOME_HERO_CAROUSEL_AUTOPLAY_ENABLED] ?: false,
             homeRefreshTipVisible = preferences[KEY_HOME_REFRESH_TIP_VISIBLE] ?: true,
+            homeRefreshCount = normalizeHomeRefreshCount(
+                preferences[KEY_HOME_REFRESH_COUNT] ?: DEFAULT_HOME_REFRESH_COUNT
+            ),
             refreshLocatorDurationSeconds = preferences[KEY_REFRESH_LOCATOR_DURATION] ?: 3,
             refreshLocatorPositionX = preferences[KEY_REFRESH_LOCATOR_POSITION_X] ?: 1f,
             refreshLocatorPositionY = preferences[KEY_REFRESH_LOCATOR_POSITION_Y] ?: 1f,
@@ -2667,6 +2696,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                 preferences[KEY_APP_SCREENSHOT_CAPTURE_MODE]
                     ?: AppScreenshotCaptureMode.FULL_WINDOW.value
             ),
+            appScreenshotWatermarkEnabled =
+                preferences[KEY_APP_SCREENSHOT_WATERMARK_ENABLED] ?: false,
+            globalScreenshotShareOverlayEnabled =
+                preferences[KEY_GLOBAL_SCREENSHOT_SHARE_OVERLAY_ENABLED] ?: true,
             singleChoicePresentation = AppSingleChoicePresentation.fromStorageValue(
                 preferences[KEY_SINGLE_CHOICE_PRESENTATION]
             ),
@@ -4697,6 +4730,16 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    fun getHomeTopTabSwipeDrawerEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_HOME_TOP_TAB_SWIPE_DRAWER_ENABLED] ?: true }
+        .distinctUntilChanged()
+
+    suspend fun setHomeTopTabSwipeDrawerEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_HOME_TOP_TAB_SWIPE_DRAWER_ENABLED] = enabled
+        }
+    }
+
     fun getHomeTopLayoutOrder(context: Context): Flow<HomeTopLayoutOrder> = context.settingsDataStore.data
         .map { preferences ->
             HomeTopLayoutOrder.fromValue(
@@ -5167,6 +5210,13 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     suspend fun setBottomBarScrollCompactEnabled(context: Context, value: Boolean) {
         context.settingsDataStore.edit { it[KEY_BOTTOM_BAR_SCROLL_COMPACT_ENABLED] = value }
+    }
+
+    fun getBottomBarSearchInsideDock(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data.map { it[KEY_BOTTOM_BAR_SEARCH_INSIDE_DOCK] ?: false }
+
+    suspend fun setBottomBarSearchInsideDock(context: Context, value: Boolean) {
+        context.settingsDataStore.edit { it[KEY_BOTTOM_BAR_SEARCH_INSIDE_DOCK] = value }
     }
 
     fun getLinkedDockMergeOnScrollEnabled(context: Context): Flow<Boolean> =
@@ -6628,6 +6678,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     
     private val KEY_FEED_API_TYPE = intPreferencesKey("feed_api_type")
     private val KEY_INCREMENTAL_TIMELINE_REFRESH = booleanPreferencesKey("incremental_timeline_refresh")
+    private val KEY_HOME_REFRESH_COUNT = intPreferencesKey("home_refresh_count")
     
     /**
      *  推荐流 API 类型
@@ -6674,6 +6725,28 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_INCREMENTAL_TIMELINE_REFRESH] = value
         }
+    }
+
+    fun getHomeRefreshCount(context: Context): Flow<Int> = context.settingsDataStore.data
+        .map { preferences ->
+            normalizeHomeRefreshCount(preferences[KEY_HOME_REFRESH_COUNT] ?: DEFAULT_HOME_REFRESH_COUNT)
+        }
+
+    suspend fun setHomeRefreshCount(context: Context, count: Int) {
+        val normalized = normalizeHomeRefreshCount(count)
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_HOME_REFRESH_COUNT] = normalized
+        }
+        context.getSharedPreferences("feed_api", Context.MODE_PRIVATE)
+            .edit()
+            .putInt("home_refresh_count", normalized)
+            .apply()
+    }
+
+    fun getHomeRefreshCountSync(context: Context): Int {
+        val value = context.getSharedPreferences("feed_api", Context.MODE_PRIVATE)
+            .getInt("home_refresh_count", DEFAULT_HOME_REFRESH_COUNT)
+        return normalizeHomeRefreshCount(value)
     }
 
     // ==========  实验性功能 ==========
@@ -7253,6 +7326,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         val commentSexEnabled: Boolean = false,
         val detailedCommentTimeEnabled: Boolean = false,
         val commentReplyPreviewVisible: Boolean = true,
+        val commentHideSearchKeywords: Boolean = true,
     )
 
     val DEFAULT_INITIAL_APP_THEME_CONFIG = com.android.purebilibili.core.ui.AppThemeConfig(
@@ -7331,6 +7405,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     ),
                     liquidControlsUseThemeColor = preferences[KEY_LIQUID_CONTROLS_USE_THEME_COLOR] ?: false,
                     liquidSwitchThumbMode = thumbMode,
+                    focusViewingHideStatsEnabled = preferences[KEY_FOCUS_VIEWING_HIDE_STATS_ENABLED] ?: false,
                 ).also { lastAppThemeConfig = it }
             }
             .distinctUntilChanged()
@@ -7447,6 +7522,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
                     commentSexEnabled = preferences[KEY_COMMENT_SEX_ENABLED] ?: false,
                     detailedCommentTimeEnabled = preferences[KEY_DETAILED_COMMENT_TIME_ENABLED] ?: false,
                     commentReplyPreviewVisible = preferences[KEY_COMMENT_REPLY_PREVIEW_VISIBLE] ?: true,
+                    commentHideSearchKeywords = preferences[KEY_COMMENT_HIDE_SEARCH_KEYWORDS] ?: true,
                 )
             }
             .distinctUntilChanged()
@@ -7481,6 +7557,17 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setCommentSexEnabled(context: Context, enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_COMMENT_SEX_ENABLED] = enabled
+        }
+    }
+
+    fun getCommentHideSearchKeywords(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_COMMENT_HIDE_SEARCH_KEYWORDS] ?: true }
+            .distinctUntilChanged()
+
+    suspend fun setCommentHideSearchKeywords(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_COMMENT_HIDE_SEARCH_KEYWORDS] = enabled
         }
     }
 
@@ -7747,6 +7834,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         //  同步到 SharedPreferences，供同步读取使用 (VideoRepository 等)
         context.getSharedPreferences("privacy_mode", Context.MODE_PRIVATE)
             .edit().putBoolean("enabled", value).apply()
+        com.android.purebilibili.feature.tile.IncognitoModeTileService.requestListeningState(context)
     }
     
     // Search-only recording preference. Global privacy still overrides this choice.
@@ -7947,6 +8035,75 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             .getBoolean("loudness_normalization_enabled", false)
     }
 
+    /** 定时关闭结束前平滑渐弱淡出音量（默认开启）。 */
+    fun getSleepTimerFadeOutEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data.map { preferences ->
+            preferences[KEY_SLEEP_TIMER_FADE_OUT_ENABLED] ?: true
+        }
+
+    suspend fun setSleepTimerFadeOutEnabled(context: Context, value: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_SLEEP_TIMER_FADE_OUT_ENABLED] = value
+        }
+        context.getSharedPreferences("mini_player", Context.MODE_PRIVATE)
+            .edit().putBoolean("sleep_timer_fade_out_enabled", value).apply()
+    }
+
+    fun getSleepTimerFadeOutEnabledSync(context: Context): Boolean {
+        return context.getSharedPreferences("mini_player", Context.MODE_PRIVATE)
+            .getBoolean("sleep_timer_fade_out_enabled", true)
+    }
+
+    /** 定时关闭渐弱淡出时长（秒），范围 3..120，默认 12 秒。 */
+    fun getSleepTimerFadeDurationSec(context: Context): Flow<Int> =
+        context.settingsDataStore.data.map { preferences ->
+            val raw = preferences[KEY_SLEEP_TIMER_FADE_DURATION_SEC]
+                ?: com.android.purebilibili.feature.audio.player.SLEEP_TIMER_FADE_DURATION_DEFAULT_SEC
+            com.android.purebilibili.feature.audio.player.normalizeSleepTimerFadeDurationSec(raw)
+        }
+
+    suspend fun setSleepTimerFadeDurationSec(context: Context, seconds: Int) {
+        val safe = com.android.purebilibili.feature.audio.player.normalizeSleepTimerFadeDurationSec(seconds)
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_SLEEP_TIMER_FADE_DURATION_SEC] = safe
+        }
+        context.getSharedPreferences("mini_player", Context.MODE_PRIVATE)
+            .edit().putInt("sleep_timer_fade_duration_sec", safe).apply()
+    }
+
+    fun getSleepTimerFadeDurationSecSync(context: Context): Int {
+        val raw = context.getSharedPreferences("mini_player", Context.MODE_PRIVATE)
+            .getInt(
+                "sleep_timer_fade_duration_sec",
+                com.android.purebilibili.feature.audio.player.SLEEP_TIMER_FADE_DURATION_DEFAULT_SEC,
+            )
+        return com.android.purebilibili.feature.audio.player.normalizeSleepTimerFadeDurationSec(raw)
+    }
+
+    /** 设置页场景配方与隐藏手感引导卡片总开关（默认开启）。 */
+    fun getSettingsRecipeGuidesEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data.map { preferences ->
+            preferences[KEY_SETTINGS_RECIPE_GUIDES_ENABLED] ?: true
+        }
+
+    suspend fun setSettingsRecipeGuidesEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_SETTINGS_RECIPE_GUIDES_ENABLED] = enabled
+        }
+    }
+
+    /** 专注观赏模式：隐藏播放量、弹幕数与互动数字（默认关闭）。 */
+    fun getFocusViewingHideStatsEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data.map { preferences ->
+            preferences[KEY_FOCUS_VIEWING_HIDE_STATS_ENABLED] ?: false
+        }
+
+    suspend fun setFocusViewingHideStatsEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_FOCUS_VIEWING_HIDE_STATS_ENABLED] = enabled
+        }
+    }
+
     /**
      * 「听视频」封面律动。数据取自音频输出链路的 PCM（无录音权限），
      * 默认关闭；公共 AudioSink 按缓冲读取开关，已有 PCM 播放会话内即可生效。
@@ -8112,6 +8269,15 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         }
     }
 
+    fun getVideoDetailBgmVisible(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences -> preferences[KEY_VIDEO_DETAIL_BGM_VISIBLE] ?: true }
+
+    suspend fun setVideoDetailBgmVisible(context: Context, visible: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_VIDEO_DETAIL_BGM_VISIBLE] = visible
+        }
+    }
+
     fun getVideoNoteEnabled(context: Context): Flow<Boolean> = context.settingsDataStore.data
         .map { preferences -> preferences[KEY_VIDEO_NOTE_ENABLED] ?: true }
 
@@ -8226,6 +8392,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     private val KEY_DOWNLOAD_PATH = stringPreferencesKey("download_path")
     private val KEY_DOWNLOAD_EXPORT_TREE_URI = stringPreferencesKey("download_export_tree_uri")
     private val KEY_DOWNLOAD_LIST_SORT_ORDER = stringPreferencesKey("download_list_sort_order")
+    private val KEY_DOWNLOAD_LIST_GROUP_MULTIPART = booleanPreferencesKey("download_list_group_multipart")
     private val KEY_IMAGE_SAVE_TREE_URI = stringPreferencesKey("image_save_tree_uri")
     
     /**
@@ -8264,6 +8431,17 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setDownloadListSortOrder(context: Context, sortOrderKey: String) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_DOWNLOAD_LIST_SORT_ORDER] = sortOrderKey
+        }
+    }
+
+    fun getDownloadListGroupMultiPart(context: Context): Flow<Boolean> = context.settingsDataStore.data
+        .map { preferences ->
+            preferences[KEY_DOWNLOAD_LIST_GROUP_MULTIPART] ?: true
+        }
+
+    suspend fun setDownloadListGroupMultiPart(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_DOWNLOAD_LIST_GROUP_MULTIPART] = enabled
         }
     }
 
@@ -8494,6 +8672,10 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
         intPreferencesKey("app_screenshot_gesture_mode")
     private val KEY_APP_SCREENSHOT_CAPTURE_MODE =
         intPreferencesKey("app_screenshot_capture_mode")
+    private val KEY_APP_SCREENSHOT_WATERMARK_ENABLED =
+        booleanPreferencesKey("app_screenshot_watermark_enabled")
+    private val KEY_GLOBAL_SCREENSHOT_SHARE_OVERLAY_ENABLED =
+        booleanPreferencesKey("global_screenshot_share_overlay_enabled")
     private val KEY_SHOW_FULLSCREEN_BATTERY_LEVEL = booleanPreferencesKey("show_fullscreen_battery_level")
     private val KEY_SHOW_FULLSCREEN_TIME = booleanPreferencesKey("show_fullscreen_time")
     private val KEY_SHOW_FULLSCREEN_ACTION_ITEMS = booleanPreferencesKey("show_fullscreen_action_items")
@@ -8894,6 +9076,26 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
     suspend fun setAppScreenshotCaptureMode(context: Context, mode: AppScreenshotCaptureMode) {
         context.settingsDataStore.edit { preferences ->
             preferences[KEY_APP_SCREENSHOT_CAPTURE_MODE] = mode.value
+        }
+    }
+
+    fun getAppScreenshotWatermarkEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_APP_SCREENSHOT_WATERMARK_ENABLED] ?: false }
+
+    suspend fun setAppScreenshotWatermarkEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_APP_SCREENSHOT_WATERMARK_ENABLED] = enabled
+        }
+    }
+
+    fun getGlobalScreenshotShareOverlayEnabled(context: Context): Flow<Boolean> =
+        context.settingsDataStore.data
+            .map { preferences -> preferences[KEY_GLOBAL_SCREENSHOT_SHARE_OVERLAY_ENABLED] ?: true }
+
+    suspend fun setGlobalScreenshotShareOverlayEnabled(context: Context, enabled: Boolean) {
+        context.settingsDataStore.edit { preferences ->
+            preferences[KEY_GLOBAL_SCREENSHOT_SHARE_OVERLAY_ENABLED] = enabled
         }
     }
 
@@ -9301,6 +9503,12 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
 
     suspend fun setVideoCompanionEnabled(context: Context, enabled: Boolean) =
         NavigationSettingsStore.setVideoCompanionEnabled(context, enabled)
+
+    fun getVideoCompanionSplitFraction(context: Context): Flow<Float?> =
+        NavigationSettingsStore.getVideoCompanionSplitFraction(context)
+
+    suspend fun setVideoCompanionSplitFraction(context: Context, fraction: Float) =
+        NavigationSettingsStore.setVideoCompanionSplitFraction(context, fraction)
     private val KEY_SIDEBAR_EXPANDED = booleanPreferencesKey("sidebar_expanded")
     private val KEY_SIDEBAR_ACCOUNT_SWITCHER_ENABLED =
         booleanPreferencesKey("sidebar_account_switcher_enabled")
@@ -9707,6 +9915,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             BooleanShareablePreferenceDefinition(KEY_HIDE_TOP_TABS, SettingsShareSection.APPEARANCE),
             IntShareablePreferenceDefinition(KEY_HOME_TOP_RIGHT_ACTION, SettingsShareSection.APPEARANCE),
             BooleanShareablePreferenceDefinition(KEY_HOME_AVATAR_DRAWER_ENABLED, SettingsShareSection.APPEARANCE),
+            BooleanShareablePreferenceDefinition(KEY_HOME_TOP_TAB_SWIPE_DRAWER_ENABLED, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_TOP_TAB_ORDER, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_TOP_TAB_VISIBLE_TABS, SettingsShareSection.APPEARANCE),
             StringShareablePreferenceDefinition(KEY_DYNAMIC_TAB_VISIBLE_TABS, SettingsShareSection.APPEARANCE),
@@ -10045,6 +10254,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             ),
             BooleanShareablePreferenceDefinition(KEY_HEADER_COLLAPSE_ENABLED, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(KEY_BOTTOM_BAR_SCROLL_COMPACT_ENABLED, SettingsShareSection.NAVIGATION),
+            BooleanShareablePreferenceDefinition(KEY_BOTTOM_BAR_SEARCH_INSIDE_DOCK, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(KEY_SHOW_PGC_TIMELINE, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(KEY_TABLET_NAVIGATION_MODE, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(KEY_VIDEO_COMPANION_ENABLED, SettingsShareSection.NAVIGATION),
@@ -10055,6 +10265,7 @@ private val KEY_APP_FONT_WEIGHT = intPreferencesKey("app_font_weight")
             ),
             IntShareablePreferenceDefinition(KEY_DYNAMIC_PAGE_LAYOUT_DIRECTION, SettingsShareSection.NAVIGATION),
             IntShareablePreferenceDefinition(KEY_FEED_API_TYPE, SettingsShareSection.NAVIGATION),
+            IntShareablePreferenceDefinition(KEY_HOME_REFRESH_COUNT, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(KEY_INCREMENTAL_TIMELINE_REFRESH, SettingsShareSection.NAVIGATION),
             BooleanShareablePreferenceDefinition(
                 KEY_DYNAMIC_IMAGE_PREVIEW_TEXT_VISIBLE,

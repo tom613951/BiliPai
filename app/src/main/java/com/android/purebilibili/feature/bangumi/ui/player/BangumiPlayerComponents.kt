@@ -78,6 +78,8 @@ import com.android.purebilibili.feature.anime4k.isAnime4KGles3Available
 import com.android.purebilibili.feature.anime4k.resolveInitialVideoEnhancementEnabled
 import com.android.purebilibili.feature.anime4k.resolveAnime4KOutputDecision
 import com.android.purebilibili.feature.video.danmaku.DanmakuManager
+import com.android.purebilibili.feature.video.danmaku.rememberPlayerDanmakuTargetFrameRateHz
+import com.android.purebilibili.feature.video.danmaku.shouldUseIndependentDanmakuSurface
 import com.android.purebilibili.danmaku.engine.DanmakuRenderView
 import com.android.purebilibili.core.ui.rememberAppPlayerChromeProfile
 import com.android.purebilibili.core.ui.components.AppSurface
@@ -88,6 +90,9 @@ import com.android.purebilibili.feature.video.ui.components.resolveVideoViewport
 import com.android.purebilibili.feature.video.ui.components.toAnime4KDisplayScaleMode
 import com.android.purebilibili.feature.video.ui.gesture.GestureLevelOverlayContent
 import com.android.purebilibili.feature.video.ui.gesture.GestureLevelOverlayHost
+import com.android.purebilibili.core.util.AppFoldPosture
+import com.android.purebilibili.core.util.LocalAppWindowAdaptiveInfo
+import com.android.purebilibili.core.util.tabletopUpperViewportLayout
 import com.android.purebilibili.feature.video.ui.gesture.detectEdgeSafeDragGestures
 import com.android.purebilibili.feature.video.ui.gesture.resolveGestureLevelKind
 import com.android.purebilibili.feature.video.ui.gesture.resolveGestureLevelOverlaySpec
@@ -659,8 +664,15 @@ fun BangumiPlayerView(
                 }
             )
     ) {
+        val bangumiAdaptiveInfo = LocalAppWindowAdaptiveInfo.current
+        val bangumiTabletopFullscreen = isFullscreen && !features.isInPipMode &&
+            bangumiAdaptiveInfo.posture == AppFoldPosture.Tabletop
+        val bangumiTabletopUpperModifier = Modifier.tabletopUpperViewportLayout(
+            enabled = bangumiTabletopFullscreen,
+            adaptiveInfo = bangumiAdaptiveInfo,
+        )
         BoxWithConstraints(
-            modifier = Modifier
+            modifier = bangumiTabletopUpperModifier
                 .fillMaxSize()
                 .then(if (capturePlayerPage) playerPageBackdrop.video.modifier else Modifier)
                 .clipToBounds(),
@@ -798,18 +810,40 @@ fun BangumiPlayerView(
             )
         }
         if (danmakuEnabled && !features.isAudioOnly && !features.isInPipMode && sharedSurfaceVisible) {
-            key(danmakuManager) {
+            val useIndependentDanmakuSurface = shouldUseIndependentDanmakuSurface(
+                useTextureVideoSurface = useTextureSurface,
+                anime4kActive = shouldRenderAnime4kPipeline,
+                capturePlayerPage = capturePlayerPage,
+                isInPipMode = features.isInPipMode,
+            )
+            val danmakuTargetFrameRateHz = rememberPlayerDanmakuTargetFrameRateHz(
+                player = exoPlayer,
+                isPlaying = isPlaying && sharedSurfaceVisible && !features.isAudioOnly,
+            )
+            key(danmakuManager, useIndependentDanmakuSurface) {
+                val lastTargetFrameRateRef = remember { floatArrayOf(0f) }
                 AndroidView(
                     factory = { ctx ->
-                        DanmakuRenderView(ctx).apply {
+                        DanmakuRenderView(
+                            context = ctx,
+                            usesIndependentSurface = useIndependentDanmakuSurface,
+                        ).apply {
                             danmakuManager.useFullscreenTextSize = isFullscreen
                             setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            android.util.Log.w("BangumiPlayer", "🎯 DanmakuView factory: creating new view")
+                            setSurfaceOverlayVisible(sharedSurfaceVisible)
+                            engine.setTargetFrameRateHz(danmakuTargetFrameRateHz)
+                            lastTargetFrameRateRef[0] = danmakuTargetFrameRateHz
+                            android.util.Log.w("BangumiPlayer", "🎯 DanmakuView factory: creating new view (surface=$useIndependentDanmakuSurface)")
                             danmakuManager.attachView(this)
                         }
                     },
                     update = { view ->
                         danmakuManager.useFullscreenTextSize = isFullscreen
+                        view.setSurfaceOverlayVisible(sharedSurfaceVisible)
+                        if (lastTargetFrameRateRef[0] != danmakuTargetFrameRateHz) {
+                            view.engine.setTargetFrameRateHz(danmakuTargetFrameRateHz)
+                            lastTargetFrameRateRef[0] = danmakuTargetFrameRateHz
+                        }
                         if (view.width > 0 && view.height > 0) {
                             val sizeTag = "${view.width}x${view.height}"
                             if (view.tag != sizeTag) {
@@ -819,8 +853,14 @@ fun BangumiPlayerView(
                             }
                         }
                     },
-                    onRelease = { view -> danmakuManager.detachView(view) },
-                    modifier = Modifier
+                    onRelease = { view ->
+                        if (lastTargetFrameRateRef[0] != 0f) {
+                            view.engine.setTargetFrameRateHz(0f)
+                            lastTargetFrameRateRef[0] = 0f
+                        }
+                        danmakuManager.detachView(view)
+                    },
+                    modifier = bangumiTabletopUpperModifier
                         .fillMaxSize()
                         .then(if (capturePlayerPage) playerPageBackdrop.danmaku.modifier else Modifier)
                         .padding(top = danmakuTopInset)
@@ -829,18 +869,20 @@ fun BangumiPlayerView(
             }
         }
 
-        // 详情页与全屏都显示当前手势反馈。
+        // 详情页与全屏都显示当前手势反馈；悬停态锚定在上半屏避免压在水平折痕上。
         val showGestureIndicator = gestureMode != BangumiGestureMode.None
-        GestureLevelOverlayHost(
-            visible = gestureMode == BangumiGestureMode.Brightness || gestureMode == BangumiGestureMode.Volume,
-            mode = if (gestureMode == BangumiGestureMode.Brightness) VideoGestureMode.Brightness else VideoGestureMode.Volume,
-            percent = if (gestureMode == BangumiGestureMode.Brightness) currentBrightness else gestureValue,
-            compact = !isFullscreen,
-            glassBackdrop = playerPageBackdrop.backdrop.takeIf {
-                capturePlayerPage && playerPageBackdrop.video.isReady &&
-                    playerViewRef?.videoSurfaceView is android.view.TextureView
-            },
-        )
+        Box(modifier = bangumiTabletopUpperModifier.fillMaxSize()) {
+            GestureLevelOverlayHost(
+                visible = gestureMode == BangumiGestureMode.Brightness || gestureMode == BangumiGestureMode.Volume,
+                mode = if (gestureMode == BangumiGestureMode.Brightness) VideoGestureMode.Brightness else VideoGestureMode.Volume,
+                percent = if (gestureMode == BangumiGestureMode.Brightness) currentBrightness else gestureValue,
+                compact = !isFullscreen || bangumiTabletopFullscreen,
+                glassBackdrop = playerPageBackdrop.backdrop.takeIf {
+                    capturePlayerPage && playerPageBackdrop.video.isReady &&
+                        playerViewRef?.videoSurfaceView is android.view.TextureView
+                },
+            )
+        }
         if (showGestureIndicator && gestureMode == BangumiGestureMode.Seek) {
             // 与普通视频一致：预览气泡展示目标时间与相对起点的时间增量；
             // 无缩略图时使用简版气泡，同样带增量文本。
@@ -1018,6 +1060,60 @@ fun BangumiPlayerView(
             },
             onShowMessage = onShowMessage
         )
+
+        if (!features.isInPipMode) {
+            val decoderState by remember(exoPlayer) {
+                com.android.purebilibili.core.player.VideoDecoderDiagnostics.observe(exoPlayer)
+            }.collectAsStateWithLifecycle()
+            val effectiveBangumiDebugInfo = remember(debugInfo, decoderState) {
+                debugInfo.copy(
+                    videoDecoder = decoderState.decoderName.ifBlank { debugInfo.videoDecoder },
+                    videoDecoderType = decoderState.kind.label,
+                    videoDecoderPreference = decoderState.preference,
+                    videoDecoderFallbackReason = decoderState.fallbackReason,
+                    videoDecoderDropWarning = decoderState.dropRateWarning,
+                )
+            }
+            var bangumiSoftwareOverloadVisible by remember(seasonId, epId, cid) { mutableStateOf(false) }
+            val bangumiBannerTopPadding = if (isFullscreen) 56.dp else 44.dp
+            val bangumiUseGlass = com.android.purebilibili.core.ui.LocalAppThemeConfig.current.playerGlassEnabled &&
+                com.android.purebilibili.feature.video.ui.overlay.LocalPlayerPageBackdrop.current != null
+            com.android.purebilibili.feature.video.ui.overlay.SoftwareDecodeOverloadOverlayHost(
+                bvid = bvid.ifBlank { "bangumi:$seasonId:$epId" },
+                cid = cid.takeIf { it > 0L } ?: epId,
+                debugInfo = effectiveBangumiDebugInfo,
+                currentQuality = currentQuality,
+                qualityIds = acceptQuality,
+                qualityLabels = acceptDescription,
+                switchableQualityIds = emptyList(),
+                isScreenLocked = isScreenLocked,
+                suppressTransientOverlays = false,
+                onQualitySelected = { index ->
+                    acceptQuality.getOrNull(index)?.let(onQualityChange)
+                },
+                onReloadVideo = onReloadVideo,
+                useGlass = bangumiUseGlass,
+                onVisibilityChanged = { bangumiSoftwareOverloadVisible = it },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = bangumiBannerTopPadding, start = 12.dp, end = 12.dp),
+            )
+            com.android.purebilibili.feature.video.ui.overlay.WeakNetworkDegradeOverlayHost(
+                player = exoPlayer,
+                mediaKey = "bangumi:$seasonId:$epId:$cid",
+                currentQuality = currentQuality,
+                qualityIds = acceptQuality,
+                qualityLabels = acceptDescription,
+                isScreenLocked = isScreenLocked,
+                suppressedByHigherPriorityBanner = bangumiSoftwareOverloadVisible,
+                isBufferingSuppressed = gestureMode == BangumiGestureMode.Seek,
+                onSelectLowerQuality = { target -> onQualityChange(target.qualityId) },
+                useGlass = bangumiUseGlass,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(top = bangumiBannerTopPadding, start = 12.dp, end = 12.dp),
+            )
+        }
 
         }
         // 空降助手跳过按钮 (位置调整到进度条上方)

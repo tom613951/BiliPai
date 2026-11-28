@@ -151,6 +151,14 @@ open class VideoActivity : FragmentActivity() {
         }
         enableEdgeToEdge()
         AppWindowSystemUiController.configureEdgeToEdgeHost(this)
+        com.android.purebilibili.core.ui.adaptive.installExternalDropTarget(this) { droppedLink ->
+            val forward = Intent(this, com.android.purebilibili.MainActivity::class.java)
+                .setAction(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, droppedLink)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            startActivity(forward)
+        }
         val entryDisplayContext = resolveAppDisplayContext()
         val entryIsInMultiWindowOrFloatingMode = isActivityInMultiWindowOrFloatingMode(
             activity = this,
@@ -255,6 +263,7 @@ open class VideoActivity : FragmentActivity() {
             val commentSexEnabled = commentDisplaySettings.commentSexEnabled
             val commentReplyPreviewVisible = commentDisplaySettings.commentReplyPreviewVisible
             val detailedCommentTimeEnabled = commentDisplaySettings.detailedCommentTimeEnabled
+            val commentHideSearchKeywords = commentDisplaySettings.commentHideSearchKeywords
             val liquidGlassEnabled = appThemeConfig.liquidGlassEnabled
             val uiEntranceAnimationEnabled = appThemeConfig.uiEntranceAnimationEnabled
             com.android.purebilibili.core.theme.ThemeSwitchSnapshotHost(
@@ -311,6 +320,7 @@ open class VideoActivity : FragmentActivity() {
                     com.android.purebilibili.core.ui.LocalCommentSexEnabled provides commentSexEnabled,
                     com.android.purebilibili.core.ui.LocalCommentReplyPreviewVisible provides commentReplyPreviewVisible,
                     com.android.purebilibili.core.ui.LocalDetailedCommentTimeEnabled provides detailedCommentTimeEnabled,
+                    com.android.purebilibili.core.ui.LocalCommentHideSearchKeywords provides commentHideSearchKeywords,
                     com.android.purebilibili.feature.aicu.LocalAicuNavigation provides { uid: Long? ->
                         startActivity(android.content.Intent(this@VideoActivity, com.android.purebilibili.MainActivity::class.java).apply {
                             putExtra(com.android.purebilibili.EXTRA_PENDING_NAVIGATION_ROUTE,
@@ -351,11 +361,22 @@ open class VideoActivity : FragmentActivity() {
                 com.android.purebilibili.feature.nearby.NearbyHandoffHost(
                     miniPlayer = MiniPlayerManager.getInstance(this@VideoActivity),
                     onOpenVideo = { nearby ->
-                        lifecycleScope.launch {
-                            VideoActivityLauncher.open(
-                                this@VideoActivity,
-                                VideoOpenRequest(nearby.bvid, nearby.cid, nearby.cover, resumePositionMs = nearby.positionMs),
-                            )
+                        if (nearby.isVideo && !nearby.audioOnly) {
+                            lifecycleScope.launch {
+                                VideoActivityLauncher.open(
+                                    this@VideoActivity,
+                                    VideoOpenRequest(nearby.bvid, nearby.cid, nearby.cover, resumePositionMs = nearby.positionMs),
+                                )
+                            }
+                        } else {
+                            startActivity(Intent(this@VideoActivity, com.android.purebilibili.MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                putExtra(
+                                    com.android.purebilibili.EXTRA_PENDING_NAVIGATION_ROUTE,
+                                    com.android.purebilibili.feature.nearby.NearbyPlaybackBridge.toNavigationRoute(nearby),
+                                )
+                            })
+                            finish()
                         }
                     },
                 ) {

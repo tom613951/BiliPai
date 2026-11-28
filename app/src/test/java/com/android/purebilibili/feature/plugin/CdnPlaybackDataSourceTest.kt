@@ -15,12 +15,19 @@ import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.BufferedSource
 import okio.Timeout
+import okio.buffer
+import okio.source
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
+import okhttp3.MediaType
+import okhttp3.ResponseBody
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 import org.junit.Test
@@ -103,6 +110,398 @@ class CdnPlaybackDataSourceTest {
         }
     }
 
+    @Test
+    fun `canceling delegate transport interrupts enqueued OkHttpDataSource while waiting for headers`() {
+        val callEnqueued = CountDownLatch(1)
+        val canceledCount = AtomicInteger(0)
+        val cancelableFactory = com.android.purebilibili.core.player.CancelableCallFactory(
+            Call.Factory { request ->
+                FakeCall(
+                    request = request,
+                    responder = null,
+                    queued = callEnqueued,
+                    onCancel = { canceledCount.incrementAndGet() },
+                )
+            }
+        )
+        val okHttpSource = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(cancelableFactory)
+            .createDataSource()
+        val source = CdnPlaybackDataSource(
+            upstream = okHttpSource,
+            background = true,
+            onCancelDelegate = cancelableFactory::cancelAll,
+        )
+        val finished = CountDownLatch(1)
+        val openThread = thread(isDaemon = true) {
+            try {
+                source.open(DataSpec.Builder().setUri(Uri.parse(url)).setLength(128_000L).build())
+            } catch (_: IOException) {
+                // Expected cancellation while OkHttpDataSource.open() waits for response headers.
+            } finally {
+                finished.countDown()
+            }
+        }
+        try {
+            assertTrue(callEnqueued.await(2, TimeUnit.SECONDS))
+            source.cancelPendingRequests()
+            assertTrue(finished.await(2, TimeUnit.SECONDS))
+            assertEquals(1, canceledCount.get())
+        } finally {
+            source.close()
+            openThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `canceling delegate transport interrupts enqueued OkHttpDataSource while body read is stalled`() {
+        val bodyReadStarted = CountDownLatch(1)
+        val bodyCanceled = CountDownLatch(1)
+        val canceledCount = AtomicInteger(0)
+        val stalledBody = object : ResponseBody() {
+            override fun contentType(): MediaType? = null
+            override fun contentLength(): Long = 128_000L
+            override fun source(): BufferedSource = object : okio.Source {
+                override fun read(sink: okio.Buffer, byteCount: Long): Long {
+                    bodyReadStarted.countDown()
+                    assertTrue(bodyCanceled.await(2, TimeUnit.SECONDS))
+                    throw IOException("Canceled during body read")
+                }
+                override fun timeout(): Timeout = Timeout.NONE
+                override fun close() {
+                    bodyCanceled.countDown()
+                }
+            }.buffer()
+        }
+        val cancelableFactory = com.android.purebilibili.core.player.CancelableCallFactory(
+            Call.Factory { request ->
+                FakeCall(
+                    request = request,
+                    responder = { req ->
+                        Response.Builder()
+                            .request(req)
+                            .protocol(Protocol.HTTP_1_1)
+                            .code(200)
+                            .message("OK")
+                            .body(stalledBody)
+                            .build()
+                    },
+                    onCancel = {
+                        canceledCount.incrementAndGet()
+                        bodyCanceled.countDown()
+                    },
+                )
+            }
+        )
+        val okHttpSource = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(cancelableFactory)
+            .createDataSource()
+        val source = CdnPlaybackDataSource(
+            upstream = okHttpSource,
+            background = true,
+            onCancelDelegate = cancelableFactory::cancelAll,
+        )
+        val finished = CountDownLatch(1)
+        val readThread = thread(isDaemon = true) {
+            try {
+                source.open(DataSpec.Builder().setUri(Uri.parse(url)).setLength(128_000L).build())
+                source.read(ByteArray(4_096), 0, 4_096)
+            } catch (_: IOException) {
+                // Expected cancellation while reading stalled response body after onResponse().
+            } finally {
+                finished.countDown()
+            }
+        }
+        try {
+            assertTrue(bodyReadStarted.await(2, TimeUnit.SECONDS))
+            source.cancelPendingRequests()
+            assertTrue(finished.await(2, TimeUnit.SECONDS))
+            assertEquals(1, canceledCount.get())
+        } finally {
+            source.close()
+            readThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `cancelable call factory cancels safely under concurrent registration and removal`() {
+        val canceledCalls = AtomicInteger(0)
+        val cancelableFactory = com.android.purebilibili.core.player.CancelableCallFactory(
+            Call.Factory { request ->
+                FakeCall(
+                    request = request,
+                    responder = null,
+                    onCancel = { canceledCalls.incrementAndGet() },
+                )
+            }
+        )
+        val request = Request.Builder().url(url).build()
+        val first = cancelableFactory.newCall(request)
+        // 并发移除单个元素后再 cancelAll，验证不会触发 toList() 的 NoSuchElementException。
+        first.cancel()
+        cancelableFactory.cancelAll()
+        assertEquals(1, canceledCalls.get())
+
+        // cancelAll 之后新注册的 Call 仍会被立即取消，不漏取消。
+        val late = cancelableFactory.newCall(request)
+        assertTrue(late.isCanceled())
+        assertEquals(2, canceledCalls.get())
+    }
+
+    @Test
+    fun `streaming delivery returns head piece before trailing piece finishes`() {
+        val trailingGate = CountDownLatch(1)
+        val uri = Uri.parse(url)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers {
+            val request = firstArg<Request>()
+            val start = request.header("Range")!!.substringAfter("bytes=").substringBefore('-').toLong()
+            if (start > 137L) {
+                DelayedFakeCall(request, trailingGate) { successful(request) }
+            } else {
+                FakeCall(request, ::successful)
+            }
+        }
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.SAFE_SIGNED,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+            )
+        )
+        CdnTransferRuntime.register(listOf(url), emptyList())
+        CdnTransferRuntime.playback(0, 0)
+        val upstream = MemorySource()
+        val source = CdnPlaybackDataSource(upstream, client = client, isWifi = { true })
+        try {
+            source.open(DataSpec.Builder().setUri(uri).setPosition(137).setLength(700_000).build())
+            val firstBuf = ByteArray(4_096)
+            val n = source.read(firstBuf, 0, firstBuf.size)
+            assertEquals(4_096, n)
+            assertContentEquals(bytes.copyOfRange(137, 137 + 4_096), firstBuf)
+            trailingGate.countDown()
+            val rest = ByteArrayOutputStream().apply { write(firstBuf) }
+            rest.write(readAll(source))
+            assertContentEquals(bytes.copyOfRange(137, 700_137), rest.toByteArray())
+            assertEquals(0, upstream.opens)
+        } finally {
+            trailingGate.countDown()
+            source.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
+    @Test
+    fun `mainland mirror mode fans out single akamai portable url across multiple upos hosts`() {
+        val akamaiUrl = "https://upos-hz-mirrorakam.akamaized.net/upgcxcode/1/2/video.m4s?sig=a"
+        val requestedHosts = CopyOnWriteArrayList<String>()
+        val uri = Uri.parse(akamaiUrl)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers {
+            val request = firstArg<Request>()
+            requestedHosts += request.url.host
+            FakeCall(request, ::successful)
+        }
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.MAINLAND_UPOS,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_16,
+            )
+        )
+        CdnTransferRuntime.register(listOf(akamaiUrl), emptyList())
+        CdnTransferRuntime.playback(0, 0)
+        val upstream = MemorySource()
+        val source = CdnPlaybackDataSource(upstream, client = client, isWifi = { true })
+        try {
+            source.open(DataSpec.Builder().setUri(uri).setPosition(0).setLength(bytes.size.toLong()).build())
+            assertContentEquals(bytes, readAll(source))
+            assertEquals(0, upstream.opens)
+            val distinctMainland = requestedHosts.distinct().filter { it in BTR_MAINLAND_UPOS_HOSTS }
+            assertTrue(distinctMainland.size >= 3, "Expected fan-out across mainland hosts, saw $requestedHosts")
+            assertEquals(16, CdnTransferRuntime.permits.availablePermits())
+        } finally {
+            source.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
+    @Test
+    fun `stalled primary triggers hedge rescue with partial prefix resume`() {
+        val primaryUrl = "https://upos-sz-mirrorali.bilivideo.com/upgcxcode/1/2/hedge.m4s?sig=a"
+        val requestedRangesByHost = CopyOnWriteArrayList<Pair<String, String>>()
+        val stalledReleased = CountDownLatch(1)
+        val stallAttemptCount = AtomicInteger(0)
+        val uri = Uri.parse(primaryUrl)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers {
+            val request = firstArg<Request>()
+            val rangeHeader = request.header("Range").orEmpty()
+            val host = request.url.host
+            requestedRangesByHost += host to rangeHeader
+            val parsed = rangeHeader.substringAfter("bytes=").split('-').map { it.toInt() }
+            if (parsed[0] == 0 && stallAttemptCount.getAndIncrement() == 0) {
+                StallingPrefixFakeCall(
+                    request = request,
+                    prefixBytes = bytes.copyOfRange(0, 40_960),
+                    totalSize = bytes.size,
+                    end = parsed[1],
+                    releaseGate = stalledReleased,
+                )
+            } else {
+                FakeCall(request, ::successful)
+            }
+        }
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.MAINLAND_UPOS,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+            )
+        )
+        CdnTransferRuntime.register(listOf(primaryUrl), emptyList())
+        CdnTransferRuntime.playback(5_000L, 0L)
+        val upstream = MemorySource()
+        val source = CdnPlaybackDataSource(upstream, client = client, isWifi = { true })
+        try {
+            source.open(DataSpec.Builder().setUri(uri).setPosition(0).setLength(600_000).build())
+            assertContentEquals(bytes.copyOfRange(0, 600_000), readAll(source))
+            assertEquals(0, upstream.opens)
+            assertTrue(CdnTransferRuntime.state.value.rescueCount > 0)
+            assertTrue(CdnTransferRuntime.state.value.resumedCount >= 0)
+            assertTrue(
+                requestedRangesByHost.any { (_, range) -> range.startsWith("bytes=40960-") },
+                "Expected hedge rescue starting at partial prefix 40960, saw $requestedRangesByHost"
+            )
+            assertEquals(8, CdnTransferRuntime.permits.availablePermits())
+        } finally {
+            stalledReleased.countDown()
+            source.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
+    @Test
+    fun `open ended head probe falls back to upstream on http 200`() {
+        val portableUrl = "https://upos-sz-mirrorali.bilivideo.com/upgcxcode/1/2/norange.m4s?sig=a"
+        val uri = Uri.parse(portableUrl)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers {
+            val request = firstArg<Request>()
+            FakeCall(request, { response(request, 200, "", ByteArray(0)) })
+        }
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.MAINLAND_UPOS,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+            )
+        )
+        CdnTransferRuntime.register(listOf(portableUrl), emptyList())
+        CdnTransferRuntime.playback(0, 0)
+        val upstream = MemorySource()
+        val source = CdnPlaybackDataSource(upstream, client = client, isWifi = { true })
+        try {
+            source.open(
+                DataSpec.Builder().setUri(uri).setPosition(200).setLength(C.LENGTH_UNSET.toLong()).build()
+            )
+            assertContentEquals(bytes.copyOfRange(200, bytes.size), readAll(source))
+            assertEquals(1, upstream.opens)
+            assertEquals(200L, upstream.openPosition)
+            assertEquals(8, CdnTransferRuntime.permits.availablePermits())
+        } finally {
+            source.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
+    @Test
+    fun `open ended stream probes head and streams full length in enhanced mode`() {
+        val portableUrl = "https://upos-sz-mirrorali.bilivideo.com/upgcxcode/1/2/prog.m4s?sig=a"
+        val uri = Uri.parse(portableUrl)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers { FakeCall(firstArg(), ::successful) }
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.MAINLAND_UPOS,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+            )
+        )
+        CdnTransferRuntime.register(listOf(portableUrl), emptyList())
+        CdnTransferRuntime.playback(0, 0)
+        val upstream = MemorySource()
+        val source = CdnPlaybackDataSource(upstream, client = client, isWifi = { true })
+        try {
+            val openedLength = source.open(
+                DataSpec.Builder().setUri(uri).setPosition(100).setLength(C.LENGTH_UNSET.toLong()).build()
+            )
+            assertEquals((bytes.size - 100).toLong(), openedLength)
+            assertContentEquals(bytes.copyOfRange(100, bytes.size), readAll(source))
+            assertEquals(0, upstream.opens)
+        } finally {
+            source.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
+    @Test
+    fun `cellular gate disables parallel unless allowCellular is enabled`() {
+        val uri = Uri.parse(url)
+        val client = mockk<OkHttpClient>()
+        every { client.newCall(any()) } answers { FakeCall(firstArg(), ::successful) }
+
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.SAFE_SIGNED,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+                allowCellular = false,
+            )
+        )
+        CdnTransferRuntime.register(listOf(url), emptyList())
+        val blockedUpstream = MemorySource()
+        val blockedSource = CdnPlaybackDataSource(blockedUpstream, client = client, isWifi = { false })
+        try {
+            blockedSource.open(DataSpec.Builder().setUri(uri).setPosition(0).setLength(600_000).build())
+            assertContentEquals(bytes.copyOfRange(0, 600_000), readAll(blockedSource))
+            assertEquals(1, blockedUpstream.opens)
+        } finally {
+            blockedSource.close()
+        }
+
+        CdnTransferRuntime.configure(
+            CdnParallelConfig(
+                active = true,
+                parallel = true,
+                mirrorMode = CdnParallelMirrorMode.SAFE_SIGNED,
+                concurrencyPreset = CdnConcurrencyPreset.THREADS_8,
+                allowCellular = true,
+            )
+        )
+        CdnTransferRuntime.register(listOf(url), emptyList())
+        val allowedUpstream = MemorySource()
+        val allowedSource = CdnPlaybackDataSource(allowedUpstream, client = client, isWifi = { false })
+        try {
+            allowedSource.open(DataSpec.Builder().setUri(uri).setPosition(0).setLength(600_000).build())
+            assertContentEquals(bytes.copyOfRange(0, 600_000), readAll(allowedSource))
+            assertEquals(0, allowedUpstream.opens)
+        } finally {
+            allowedSource.close()
+            CdnTransferRuntime.configure(false, false)
+        }
+        assertEquals(CDN_MAX_CONNECTIONS, CdnTransferRuntime.permits.availablePermits())
+    }
+
     private fun withSource(responder: (Request) -> Response): Fixture {
         val uri = Uri.parse(url)
         val client = mockk<OkHttpClient>()
@@ -167,6 +566,42 @@ class CdnPlaybackDataSourceTest {
         override fun close() { source.close(); CdnTransferRuntime.configure(false, false) }
     }
 
+    private class DelayedFakeCall(
+        private val request: Request,
+        private val gate: CountDownLatch,
+        private val responder: (Request) -> Response,
+    ) : Call {
+        private var callback: Callback? = null
+        @Volatile private var canceled = false
+        private val computedTags = ConcurrentHashMap<Class<*>, Any>()
+        override fun addEventListener(eventListener: okhttp3.EventListener) = Unit
+        override fun request(): Request = request
+        override fun execute(): Response = error("Only asynchronous transport is supported")
+        override fun enqueue(responseCallback: Callback) {
+            callback = responseCallback
+            thread(isDaemon = true) {
+                gate.await(3, TimeUnit.SECONDS)
+                if (canceled) responseCallback.onFailure(this, IOException("canceled"))
+                else responseCallback.onResponse(this, responder(request))
+            }
+        }
+        override fun cancel() {
+            canceled = true
+        }
+        override fun isExecuted(): Boolean = callback != null
+        override fun isCanceled(): Boolean = canceled
+        override fun timeout(): Timeout = Timeout()
+        override fun <T : Any> tag(type: KClass<T>): T? = tag(type.java)
+        override fun <T> tag(type: Class<out T>): T? = type.cast(computedTags[type] ?: request.tag(type))
+        override fun <T : Any> tag(type: KClass<T>, computeIfAbsent: () -> T): T = tag(type.java, computeIfAbsent)
+        override fun <T : Any> tag(type: Class<T>, computeIfAbsent: () -> T): T {
+            tag(type)?.let { return it }
+            val computed = computeIfAbsent()
+            return requireNotNull(type.cast(computedTags.putIfAbsent(type, computed) ?: computed))
+        }
+        override fun clone(): Call = DelayedFakeCall(request, gate, responder)
+    }
+
     private class FakeCall(
         private val request: Request,
         private val responder: ((Request) -> Response)?,
@@ -213,5 +648,75 @@ class CdnPlaybackDataSourceTest {
             return requireNotNull(type.cast(computedTags.putIfAbsent(type, computed) ?: computed))
         }
         override fun clone(): Call = FakeCall(request, responder, queued, onCancel)
+    }
+
+    private class StallingPrefixFakeCall(
+        private val request: Request,
+        private val prefixBytes: ByteArray,
+        private val totalSize: Int,
+        private val end: Int,
+        private val releaseGate: CountDownLatch,
+    ) : Call {
+        private var callback: Callback? = null
+        @Volatile private var canceled = false
+        private val computedTags = ConcurrentHashMap<Class<*>, Any>()
+        override fun addEventListener(eventListener: okhttp3.EventListener) = Unit
+        override fun request(): Request = request
+        override fun execute(): Response = error("Only asynchronous transport is supported")
+        override fun enqueue(responseCallback: Callback) {
+            callback = responseCallback
+            thread(isDaemon = true) {
+                val stream = object : InputStream() {
+                    private var offset = 0
+                    override fun read(): Int {
+                        val b = ByteArray(1)
+                        val n = read(b, 0, 1)
+                        return if (n < 0) -1 else b[0].toInt() and 0xff
+                    }
+                    override fun read(b: ByteArray, off: Int, len: Int): Int {
+                        if (canceled) throw IOException("canceled")
+                        if (offset < prefixBytes.size) {
+                            val n = minOf(len, prefixBytes.size - offset)
+                            prefixBytes.copyInto(b, off, offset, offset + n)
+                            offset += n
+                            return n
+                        }
+                        releaseGate.await(5, TimeUnit.SECONDS)
+                        throw IOException("stalled")
+                    }
+                }
+                val source = stream.source().buffer()
+                val body = object : ResponseBody() {
+                    override fun contentType(): MediaType? = null
+                    override fun contentLength(): Long = (end + 1).toLong()
+                    override fun source(): BufferedSource = source
+                }
+                val response = Response.Builder()
+                    .request(request)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(206)
+                    .message("Partial")
+                    .header("Content-Range", "bytes 0-$end/$totalSize")
+                    .body(body)
+                    .build()
+                responseCallback.onResponse(this, response)
+            }
+        }
+        override fun cancel() {
+            canceled = true
+            releaseGate.countDown()
+        }
+        override fun isExecuted(): Boolean = callback != null
+        override fun isCanceled(): Boolean = canceled
+        override fun timeout(): Timeout = Timeout()
+        override fun <T : Any> tag(type: KClass<T>): T? = tag(type.java)
+        override fun <T> tag(type: Class<out T>): T? = type.cast(computedTags[type] ?: request.tag(type))
+        override fun <T : Any> tag(type: KClass<T>, computeIfAbsent: () -> T): T = tag(type.java, computeIfAbsent)
+        override fun <T : Any> tag(type: Class<T>, computeIfAbsent: () -> T): T {
+            tag(type)?.let { return it }
+            val computed = computeIfAbsent()
+            return requireNotNull(type.cast(computedTags.putIfAbsent(type, computed) ?: computed))
+        }
+        override fun clone(): Call = StallingPrefixFakeCall(request, prefixBytes, totalSize, end, releaseGate)
     }
 }

@@ -2,6 +2,12 @@ package com.android.purebilibili.feature.search
 
 import com.android.purebilibili.core.ui.AppContentColors
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import com.android.purebilibili.core.ui.components.appActionClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +26,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.unit.sp
 import com.android.purebilibili.core.ui.components.AppLazyColumn as LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -27,6 +35,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.ClearAll
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.SwapVert
@@ -41,11 +50,16 @@ import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalDensity
@@ -288,11 +302,14 @@ fun SearchLandingContent(
         showTrendingAction = false,
     )
     val historyRows = remember(historyList, historyColumns) { historyList.chunked(historyColumns) }
+    var historyExpanded by rememberSaveable { mutableStateOf(true) }
 
     fun LazyListScope.historySection() {
         item(key = SearchLandingSection.HISTORY.name) {
             SearchHistoryHeader(
                 hasHistory = historyRows.isNotEmpty(),
+                expanded = historyExpanded,
+                onToggleExpanded = { historyExpanded = !historyExpanded },
                 recordSearchHistory = recordSearchHistory,
                 globalPrivacyMode = globalPrivacyMode,
                 onToggleHistoryRecording = onToggleHistoryRecording,
@@ -300,14 +317,38 @@ fun SearchLandingContent(
                 onClear = onClearHistory,
             )
         }
-        items(historyRows, key = { row -> "history:${row.first().keyword}" }) { row ->
-            SearchHistoryRow(
-                rowItems = row,
-                columns = historyColumns,
-                onItemClick = onKeywordClick,
-                onDelete = onDeleteHistory,
-                modifier = Modifier.fillMaxWidth(),
-            )
+        if (historyRows.isNotEmpty()) {
+            item(key = "history:content") {
+                AnimatedVisibility(
+                    visible = historyExpanded,
+                    enter = expandVertically(
+                        animationSpec = com.android.purebilibili.core.ui.motion.AppMotionTokens.emphasizedSpec(),
+                        expandFrom = Alignment.Top,
+                    ) + fadeIn(
+                        animationSpec = com.android.purebilibili.core.ui.motion.AppMotionTokens.standardSpec(),
+                    ),
+                    exit = shrinkVertically(
+                        animationSpec = com.android.purebilibili.core.ui.motion.AppMotionTokens.emphasizedSpec(),
+                        shrinkTowards = Alignment.Top,
+                    ) + fadeOut(
+                        animationSpec = com.android.purebilibili.core.ui.motion.AppMotionTokens.standardSpec(),
+                    ),
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        historyRows.forEach { row ->
+                            key("history:${row.first().keyword}") {
+                                SearchHistoryRow(
+                                    rowItems = row,
+                                    columns = historyColumns,
+                                    onItemClick = onKeywordClick,
+                                    onDelete = onDeleteHistory,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -788,10 +829,11 @@ private fun SearchKeywordCell(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val hasTrailing = item.iconUrl != null || item.showLiveBadge || !item.subtitle.isNullOrBlank()
     Row(
         modifier = modifier
             .appActionClickable(onClick = onClick)
-            .padding(vertical = 5.dp, horizontal = 2.dp),
+            .padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AppText(
@@ -799,27 +841,30 @@ private fun SearchKeywordCell(
             modifier = Modifier.weight(1f, fill = false),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp)
         )
-        Spacer(modifier = Modifier.width(AppSpacingTokens.ExtraSmall))
-        when {
-            item.iconUrl != null -> AsyncImage(
-                model = item.iconUrl,
-                contentDescription = null,
-                modifier = Modifier.size(width = 20.dp, height = 15.dp)
-            )
-            item.showLiveBadge -> SearchKeywordBadge(
-                text = "直播中",
-                containerColor = AppContentColors.error(),
-                contentColor = MaterialTheme.colorScheme.onError
-            )
-            !item.subtitle.isNullOrBlank() -> AppText(
-                text = item.subtitle,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.outline,
-                style = MaterialTheme.typography.bodyMedium
-            )
+        if (hasTrailing) {
+            Spacer(modifier = Modifier.width(3.dp))
+            when {
+                item.iconUrl != null -> AsyncImage(
+                    model = item.iconUrl,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier.height(14.dp).widthIn(max = 20.dp)
+                )
+                item.showLiveBadge -> SearchKeywordBadge(
+                    text = "直播中",
+                    containerColor = AppContentColors.error(),
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+                !item.subtitle.isNullOrBlank() -> AppText(
+                    text = item.subtitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp)
+                )
+            }
         }
     }
 }
@@ -852,6 +897,8 @@ internal fun SearchKeywordBadge(
 @Composable
 private fun SearchHistoryHeader(
     hasHistory: Boolean,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     recordSearchHistory: Boolean,
     globalPrivacyMode: Boolean,
     onToggleHistoryRecording: () -> Unit,
@@ -859,6 +906,11 @@ private fun SearchHistoryHeader(
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val expandArrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 0f else 180f,
+        animationSpec = com.android.purebilibili.core.ui.motion.AppMotionTokens.standardSpec(),
+        label = "searchHistoryExpandArrow",
+    )
     Column(modifier) {
         FlowRow(
             modifier = Modifier.fillMaxWidth(),
@@ -913,6 +965,15 @@ private fun SearchHistoryHeader(
                         )
                         Spacer(modifier = Modifier.width(2.dp))
                         AppText(text = "清空", style = MaterialTheme.typography.labelLarge)
+                    }
+                    AppIconButton(onClick = onToggleExpanded) {
+                        AppIcon(
+                            imageVector = Icons.Rounded.KeyboardArrowUp,
+                            contentDescription = if (expanded) "收起搜索历史" else "展开搜索历史",
+                            modifier = Modifier
+                                .size(20.dp)
+                                .graphicsLayer { rotationZ = expandArrowRotation },
+                        )
                     }
                 }
             }

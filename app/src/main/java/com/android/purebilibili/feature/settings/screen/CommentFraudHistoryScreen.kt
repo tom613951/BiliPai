@@ -1,5 +1,7 @@
 package com.android.purebilibili.feature.settings.screen
 
+import com.android.purebilibili.core.util.toUserFriendlyMessage
+
 import com.android.purebilibili.R
 import com.android.purebilibili.core.ui.AppContentColors
 
@@ -36,6 +38,8 @@ import com.android.purebilibili.core.ui.animation.entrance
 import com.android.purebilibili.core.ui.components.*
 import com.android.purebilibili.data.model.CommentFraudStatus
 import com.android.purebilibili.data.repository.CommentFraudRepository
+import com.android.purebilibili.feature.settings.SettingsIconRole
+import com.android.purebilibili.feature.settings.rememberSettingsSemanticIcon
 import com.android.purebilibili.feature.settings.rememberSettingsVector
 import com.android.purebilibili.feature.settings.ui.SettingsPageScaffold
 import com.android.purebilibili.feature.settings.ui.settingsScrollContentPadding
@@ -106,7 +110,7 @@ fun CommentFraudHistoryScreen(
                         result.onSuccess { count ->
                             Toast.makeText(context, "已导入 $count 条记录", Toast.LENGTH_SHORT).show()
                         }.onFailure {
-                            Toast.makeText(context, "导入失败：${it.message}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "导入失败：${it.toUserFriendlyMessage("文件格式无效")}", Toast.LENGTH_SHORT).show()
                         }
                     }
                 } catch (e: CancellationException) {
@@ -134,7 +138,7 @@ fun CommentFraudHistoryScreen(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "导出失败：${e.toUserFriendlyMessage("无法写入文件")}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -169,13 +173,21 @@ fun CommentFraudHistoryScreen(
                 if (archiveMode) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                         AppText("自动保存本机成功发送的评论；不补拉历史评论。", style = MaterialTheme.typography.bodySmall)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            AppTextButton(onClick = { showAllAccounts = false }) {
-                                AppText(if (!showAllAccounts) "✓ 当前账号" else "当前账号")
-                            }
-                            AppTextButton(onClick = { showAllAccounts = true }) {
-                                AppText(if (showAllAccounts) "✓ 全部本地" else "全部本地")
-                            }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(vertical = 8.dp),
+                        ) {
+                            AppFilterChip(
+                                selected = !showAllAccounts,
+                                onClick = { showAllAccounts = false },
+                                label = { AppText("当前账号") },
+                            )
+                            AppFilterChip(
+                                selected = showAllAccounts,
+                                onClick = { showAllAccounts = true },
+                                label = { AppText("全部本地") },
+                            )
                         }
                         AppOutlinedTextField(
                             value = query, onValueChange = { query = it },
@@ -186,7 +198,7 @@ fun CommentFraudHistoryScreen(
                     }
                 }
                 if (loadedRecords == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AppText("正在读取评论…") }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AppCircularProgressIndicator() }
                 } else if (records.isEmpty()) {
                     Box(
                         modifier = Modifier.fillMaxSize().padding(top = 120.dp),
@@ -194,7 +206,7 @@ fun CommentFraudHistoryScreen(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             AppIcon(
-                                rememberSettingsVector(R.drawable.ph_shield_24, R.drawable.ms_shield_24),
+                                rememberSettingsSemanticIcon(SettingsIconRole.COMMENT_CHECK_HISTORY),
                                 contentDescription = null,
                                 modifier = Modifier.size(64.dp),
                                 tint = AppContentColors.secondaryText().copy(alpha = 0.4f)
@@ -232,7 +244,7 @@ fun CommentFraudHistoryScreen(
                                             res.onSuccess { status ->
                                                 Toast.makeText(context, "检查完成：$status", Toast.LENGTH_SHORT).show()
                                             }.onFailure {
-                                                Toast.makeText(context, "检查失败：${it.message}", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, "检查失败：${it.toUserFriendlyMessage("请稍后重试")}", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     },
@@ -324,7 +336,7 @@ fun CommentFraudHistoryScreen(
                             res.onSuccess {
                                 Toast.makeText(context, "评论已删除", Toast.LENGTH_SHORT).show()
                             }.onFailure {
-                                Toast.makeText(context, "删除失败：${it.message}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "删除失败：${it.toUserFriendlyMessage("请稍后重试")}", Toast.LENGTH_SHORT).show()
                             }
                         }
                         recordToDeleteOnBili = null
